@@ -4,14 +4,14 @@ using ColossalFramework.Plugins;
 using ICities;
 using UnityEngine;
 
-namespace MyRoadMod
+namespace RealisticRoads
 {
     // This class is what makes CS1 recognise the DLL as a mod.
     // Its Name/Description show up in Content Manager > Mods.
     public class Mod : IUserMod
     {
-        public string Name => "My Road Mod";
-        public string Description => "Starter mod for custom road tools.";
+        public string Name => "Realistic Roads";
+        public string Description => "CS2-style smooth curves and flyovers with pillars on the road below.";
 
         // Called when you tick the mod's checkbox in Content Manager
         public void OnEnabled()
@@ -30,22 +30,22 @@ namespace MyRoadMod
         // Adds a settings page under Options > Mod Settings
         public void OnSettingsUI(UIHelperBase helper)
         {
-            var group = helper.AddGroup("My Road Mod");
+            var group = helper.AddGroup("Realistic Roads");
             group.AddButton("Say hello", () => Log("Hello from the settings page!"));
         }
 
         public static void Log(string msg)
         {
             // Goes to output_log.txt
-            Debug.Log("[MyRoadMod] " + msg);
+            Debug.Log("[RealisticRoads] " + msg);
             // Shows in the in-game debug panel (press F7 in game)
-            AddPanelMessage(PluginManager.MessageType.Message, "[MyRoadMod] " + msg);
+            AddPanelMessage(PluginManager.MessageType.Message, "[RealisticRoads] " + msg);
         }
 
         public static void LogError(string msg, Exception e)
         {
-            Debug.LogError("[MyRoadMod] " + msg + "\n" + e);
-            AddPanelMessage(PluginManager.MessageType.Error, "[MyRoadMod] " + msg + ": " + e.Message);
+            Debug.LogError("[RealisticRoads] " + msg + "\n" + e);
+            AddPanelMessage(PluginManager.MessageType.Error, "[RealisticRoads] " + msg + ": " + e.Message);
         }
 
         private static void AddPanelMessage(PluginManager.MessageType type, string msg)

@@ -26,11 +26,11 @@ Constraints the mod must respect:
 
 ## Current state
 
-A starter project exists (`MyRoadMod/`) and has not yet been compiled against the game.
+A starter project exists (`RealisticRoads/`) and has not yet been compiled against the game.
 
 | File | What it does |
 |---|---|
-| `MyRoadMod.csproj` | SDK-style project targeting `net35`. References `Assembly-CSharp`, `ColossalManaged`, `ICities`, `UnityEngine` from `Cities_Data\Managed` (not copied). Uses NuGet `CitiesHarmony.API` 2.2.0. A post-build step copies the DLLs to `%LOCALAPPDATA%\Colossal Order\Cities_Skylines\Addons\Mods\MyRoadMod`. |
+| `RealisticRoads.csproj` | SDK-style project targeting `net35`. References `Assembly-CSharp`, `ColossalManaged`, `ICities`, `UnityEngine` from `Cities_Data\Managed` (not copied). Uses NuGet `CitiesHarmony.API` 2.2.0. A post-build step copies the DLLs to `%LOCALAPPDATA%\Colossal Order\Cities_Skylines\Addons\Mods\RealisticRoads`. |
 | `Mod.cs` | `IUserMod` entry point (name, description, settings page with a test button). Applies Harmony patches on enable via `HarmonyHelper.DoOnHarmonyReady`. `Loading : LoadingExtensionBase` logs when a city loads. `Mod.Log()` writes to `output_log.txt` and the F7 debug panel. |
 | `Patcher.cs` | Applies and removes all Harmony patches. Example Postfix on `NetManager.CreateSegment` logs every new segment. |
 | `README.md` | Build and in-game test steps. |
@@ -118,7 +118,7 @@ Build in this order; each milestone must work in game before the next starts.
 
 1. Close the game, run `dotnet build` (or Ctrl+Shift+B in Visual Studio). The DLL is copied to the local Mods folder.
 2. Start CS1, enable the mod in Content Manager, load a test city (a flat map with a few straight and curved roads).
-3. Watch F7 and `Cities_Data\output_log.txt` (search `[MyRoadMod]`).
+3. Watch F7 and `Cities_Data\output_log.txt` (search `[RealisticRoads]`).
 4. Put `CurveMath` in a separate test project (xUnit/NUnit, can target a newer .NET) so the curve maths is tested without the game.
 5. Before each milestone sign-off: save, quit, reload the city and confirm the networks and pillars survive.
 

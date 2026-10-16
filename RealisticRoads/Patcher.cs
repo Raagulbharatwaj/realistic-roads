@@ -3,12 +3,12 @@ using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 
-namespace MyRoadMod
+namespace RealisticRoads
 {
     // Harmony lets you run your own code before/after the game's methods.
     public static class Patcher
     {
-        private const string HarmonyId = "com.raagul.myroadmod";
+        private const string HarmonyId = "com.raagul.realisticroads";
         private static bool patched;
 
         public static void PatchAll()

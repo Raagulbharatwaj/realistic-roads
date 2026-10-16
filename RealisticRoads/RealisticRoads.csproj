@@ -3,8 +3,8 @@
   <PropertyGroup>
     <!-- CS1 runs on Unity's Mono, which needs .NET Framework 3.5 -->
     <TargetFramework>net35</TargetFramework>
-    <AssemblyName>MyRoadMod</AssemblyName>
-    <RootNamespace>MyRoadMod</RootNamespace>
+    <AssemblyName>RealisticRoads</AssemblyName>
+    <RootNamespace>RealisticRoads</RootNamespace>
     <LangVersion>latest</LangVersion>
     <Deterministic>false</Deterministic>
     <AssemblyVersion>0.1.*</AssemblyVersion>
