@@ -136,5 +136,6 @@ From far away the vanilla junction is still drawn. If drawing fails, the log say
 `Drawing CS2-style junctions failed` and the junctions show as vanilla.
 
 ## 8. What's next
-See [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md) for the current plan (R1-R4) and
+See [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md) for the current plan (R1-R4),
+[docs/R3_ROAD_BUILDER.md](docs/R3_ROAD_BUILDER.md) for the road builder design and
 [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) for the original brief.
