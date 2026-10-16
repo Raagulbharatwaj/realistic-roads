@@ -32,7 +32,7 @@ namespace RealisticRoads
         private const float MinTrunkOpposite = 135f; // trunk must come in from the other side
         // The branches start this far past the trunk end, so the vanilla
         // junction piece between them shrinks to a thin, invisible strip.
-        private const float BranchGap = 0.5f;
+        private const float BranchGap = 0.1f;
         private const float MovedTolerance = 2f;     // node moved/replaced => forget it
 
         // Written on the main thread, read from any thread. A node only counts
@@ -234,11 +234,16 @@ namespace RealisticRoads
                 return true;
             }
 
+            // The two inner sidewalks overlap by half their width each, so the
+            // nose between the branches is one sidewalk wide instead of two.
+            Vector3 across = CurveMath.FlatNormal(rightEdge - leftEdge);
+            float leftPavement = segments[shape.LeftBranch].Info.m_pavementWidth;
+            float rightPavement = segments[shape.RightBranch].Info.m_pavementWidth;
             Vector3 gap = f * BranchGap;
             if (segment == shape.LeftBranch)
-                position = (leftSide ? leftEdge : split) + gap;
+                position = (leftSide ? leftEdge : split + across * (rightPavement * 0.5f)) + gap;
             else if (segment == shape.RightBranch)
-                position = (leftSide ? split : rightEdge) + gap;
+                position = (leftSide ? split - across * (leftPavement * 0.5f) : rightEdge) + gap;
             else
                 return false;
             direction = f;

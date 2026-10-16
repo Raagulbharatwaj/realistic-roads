@@ -27,6 +27,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Crossing-tool icons, drawn by Icons/make_icons.py -->
+    <EmbeddedResource Include="Icons\*.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="Assembly-CSharp">
       <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>

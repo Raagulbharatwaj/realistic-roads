@@ -79,7 +79,11 @@ Agreed with the player (Oct 16):
   DN = underpass: the existing line's segment at the crossing is replaced by its short bridge version and the new one
   is lowered into an open cutting (not a tunnel).
 - Passing an existing flyover: UP/DN choose over or under it.
-- Controls: on-screen UP/DN buttons next to each crossing in the preview.
+- Revised after the first test: five choices per crossing as icons (junction/level crossing, bridge = ours over,
+  overpass = existing lowered and ours over at ground, underpass = existing bridged and ours lowered, tunnel = ours
+  under), +/- height per bridge and per water crossing, real bridge models with ~90 m spans over water.
+- Later: merge lanes - where a new road joins an existing one at a shallow angle, widen the existing road for a stretch
+  with a wider road type and let the new lane merge in (like a highway on-ramp) instead of making a junction node.
 - Going down: check clearance (water, nearby underground networks, room to ramp) and show depth/warnings in the panel.
 
 ### C. Settings page

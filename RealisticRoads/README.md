@@ -55,15 +55,19 @@ Tip: launch with `-noWorkshop` in Steam launch options to test with only local m
    **Splits:** on the end of a road at least ~1.3x wider than the road you are drawing, the snap circle jumps to the
    **left or right half** under your cursor. The new road starts from that half, runs parallel for a short way, then
    curves off. Attach a second branch to the other half and the smooth split is applied automatically.
-   **Crossings:** where the curve crosses an existing road or track, the preview puts a ring on the crossing and
-   **UP / DN** buttons next to it:
-   - same type (road x road, rail x rail): **junction** by default; UP = **flyover** (9 m above), DN = **tunnel** (12 m below);
-   - different type (road x rail): **level crossing** by default; UP = **overpass**; DN = **underpass**: the existing
-     line gets a short bridge and the new road is dug 8 m down into an open cutting under it;
-   - an existing flyover: by default you pass under it; UP takes you over it.
-   The panel lists each crossing with its height/depth. Going down is checked: water, other tunnels or pipes nearby,
-   and room to ramp at 6 %; problems are listed with "!" and the curve won't build until they are fixed.
-   Preview colours: green ground, blue raised, orange lowered, red too sharp.
+   **Crossings:** where the curve crosses an existing road or track, a ring marks the crossing and a row of
+   **icons** above it picks what happens (selected one is green; our road is yellow in the icons):
+   - **junction** (default): junction, or level crossing for road x rail; passes over/under an elevated or
+     underground road;
+   - **bridge**: our road goes over on a flyover (9 m clearance), the existing one is untouched. **+/-** sets the height;
+   - **overpass**: the existing road is lowered 8 m into a cutting (ramping down along it at 6 %), ours crosses at
+     ground level on a bridge deck. Needs ~140 m of plain road (no junction) on each side of the crossing;
+   - **underpass**: the existing road gets a short bridge, ours is dug 8 m down into a cutting under it;
+   - **tunnel**: ours goes 12 m under through a tunnel with proper portals.
+   Over water the preview shows **+/-** at the middle of the river: the bridge deck is 10 m above the water by
+   default, 5 m per click (up to +60 m) so ships fit. Bridges over water use ~90 m spans.
+   The panel lists each crossing and water bridge with its height/depth; problems are listed with "!" and the
+   curve won't build until they are fixed. Preview colours: green ground, blue raised, orange lowered, red too sharp.
 4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
    bridge, 10 m above the water, with elevated ramps (pillars) on land at a gentle 6 % slope.
 5. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.

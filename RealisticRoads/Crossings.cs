@@ -4,11 +4,13 @@ using UnityEngine;
 namespace RealisticRoads
 {
     // How the new road meets an existing one where they cross.
-    public enum CrossingLevel
+    public enum CrossingType
     {
-        Under = -1,  // same type: tunnel; different type: underpass in an open cutting (existing goes on a short bridge)
-        Same = 0,    // at ground: junction / level crossing; otherwise just pass at our own height
-        Over = 1,    // flyover / overpass on a bridge
+        Junction,   // at ground: junction / level crossing; otherwise pass at our own height
+        Bridge,     // ours goes over on a bridge/flyover, existing untouched
+        Overpass,   // existing is lowered into a cutting, ours crosses on a bridge at ground level
+        Underpass,  // existing gets a short bridge, ours is lowered into a cutting under it
+        Tunnel,     // ours goes through a tunnel under the existing one
     }
 
     // One place where the new road crosses an existing segment.
@@ -22,23 +24,45 @@ namespace RealisticRoads
         public float ExistingElevation; // existing height above the ground there
         public float ExistingHalfWidth;
         public string ExistingName;
-        public CrossingLevel Level;
+        public CrossingType Type;
+        public float ExtraHeight;       // player's +/- on a Bridge crossing
 
         public bool ExistingAtGround => Mathf.Abs(ExistingElevation) < 2f;
 
         // Junction or level crossing: the new road connects to the existing one.
-        public bool Connects => Level == CrossingLevel.Same && ExistingAtGround;
+        public bool Connects => Type == CrossingType.Junction && ExistingAtGround;
+
+        // Which types make sense here. Lowering or bridging the existing
+        // road only works where it is on the ground.
+        public bool Allows(CrossingType type)
+        {
+            switch (type)
+            {
+                case CrossingType.Overpass:
+                case CrossingType.Underpass:
+                    return ExistingAtGround;
+                case CrossingType.Tunnel:
+                    return ExistingElevation > -2f;
+                default:
+                    return true;
+            }
+        }
 
         public string Describe()
         {
-            switch (Level)
+            return Describe(Type);
+        }
+
+        public string Describe(CrossingType type)
+        {
+            switch (type)
             {
-                case CrossingLevel.Over: return SameType ? "flyover" : "overpass";
-                case CrossingLevel.Under:
-                    if (!ExistingAtGround && ExistingElevation > 0f) return "under the " + ExistingName;
-                    return SameType ? "tunnel" : "underpass (cutting, " + ExistingName + " on a bridge)";
+                case CrossingType.Bridge: return SameType ? "flyover" : "bridge over the " + ExistingName;
+                case CrossingType.Overpass: return "overpass (" + ExistingName + " lowered under us)";
+                case CrossingType.Underpass: return "underpass (" + ExistingName + " on a short bridge)";
+                case CrossingType.Tunnel: return "tunnel";
                 default:
-                    if (Connects) return SameType ? "junction" : "level crossing";
+                    if (ExistingAtGround) return SameType ? "junction" : "level crossing";
                     return ExistingElevation > 0f ? "passes under it" : "passes over it";
             }
         }
