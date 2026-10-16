@@ -27,6 +27,17 @@ The build copies `MyRoadMod.dll` + `CitiesHarmony.API.dll` to:
 4. Draw a road. You should see `[MyRoadMod] Road segment created: #1234`.
 5. Options > Mod Settings > My Road Mod > "Say hello" also logs a message.
 
+What the log should contain (milestone 1 sign-off):
+
+    [MyRoadMod] Enabled, version 0.1.x.x
+    [MyRoadMod] Patching NetManager.CreateSegment(UInt16& segment, ...)
+    [MyRoadMod] Harmony patches applied
+    [MyRoadMod] City loaded, mode = LoadGame
+    [MyRoadMod] Road segment created: #1234
+
+If any line is missing, or you see `Applying Harmony patches failed`, paste every
+`[MyRoadMod]` line (plus any exception under it) from `output_log.txt` back into the issue/chat.
+
 Full log: `C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\output_log.txt`
 (search for `[MyRoadMod]`).
 

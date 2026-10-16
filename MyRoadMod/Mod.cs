@@ -1,3 +1,4 @@
+using System;
 using CitiesHarmony.API;
 using ColossalFramework.Plugins;
 using ICities;
@@ -15,8 +16,8 @@ namespace MyRoadMod
         // Called when you tick the mod's checkbox in Content Manager
         public void OnEnabled()
         {
+            Log("Enabled, version " + typeof(Mod).Assembly.GetName().Version);
             HarmonyHelper.DoOnHarmonyReady(Patcher.PatchAll);
-            Log("Enabled");
         }
 
         // Called when you untick it (or the game closes)
@@ -38,7 +39,20 @@ namespace MyRoadMod
             // Goes to output_log.txt
             Debug.Log("[MyRoadMod] " + msg);
             // Shows in the in-game debug panel (press F7 in game)
-            DebugOutputPanel.AddMessage(PluginManager.MessageType.Message, "[MyRoadMod] " + msg);
+            AddPanelMessage(PluginManager.MessageType.Message, "[MyRoadMod] " + msg);
+        }
+
+        public static void LogError(string msg, Exception e)
+        {
+            Debug.LogError("[MyRoadMod] " + msg + "\n" + e);
+            AddPanelMessage(PluginManager.MessageType.Error, "[MyRoadMod] " + msg + ": " + e.Message);
+        }
+
+        private static void AddPanelMessage(PluginManager.MessageType type, string msg)
+        {
+            // The panel may not exist yet very early in startup; never let logging throw.
+            try { DebugOutputPanel.AddMessage(type, msg); }
+            catch { }
         }
     }
 
@@ -49,6 +63,11 @@ namespace MyRoadMod
         {
             Mod.Log("City loaded, mode = " + mode);
             // Later: this is where you'll add your road-tool button / tool.
+        }
+
+        public override void OnLevelUnloading()
+        {
+            Mod.Log("City unloading");
         }
     }
 }
