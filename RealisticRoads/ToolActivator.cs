@@ -60,7 +60,11 @@ namespace RealisticRoads
                     : null;
                 if (current != null && (current == curveTool || current == splitTool))
                     ToolsModifierControl.SetTool<DefaultTool>();
-                if (curveTool != null) UnityEngine.Object.Destroy(curveTool);
+                if (curveTool != null)
+                {
+                    curveTool.DestroyButtons();
+                    UnityEngine.Object.Destroy(curveTool);
+                }
                 if (splitTool != null) UnityEngine.Object.Destroy(splitTool);
                 if (curveButton != null) UnityEngine.Object.Destroy(curveButton.gameObject);
                 if (splitButton != null) UnityEngine.Object.Destroy(splitButton.gameObject);

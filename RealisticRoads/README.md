@@ -52,13 +52,27 @@ Tip: launch with `-noWorkshop` in Steam launch options to test with only local m
 3. Clicking on (or near the end of) an existing road snaps to it (yellow circle) so the new road connects there,
    at the start or the end of the curve. Where it can, the curve continues that road smoothly ("continues the road"
    in the panel); otherwise it meets it at an angle like a normal junction.
+   **Splits:** on the end of a road at least ~1.3x wider than the road you are drawing, the snap circle jumps to the
+   **left or right half** under your cursor. The new road starts from that half, runs parallel for a short way, then
+   curves off. Attach a second branch to the other half and the smooth split is applied automatically.
+   **Crossings:** where the curve crosses an existing road or track, the preview puts a ring on the crossing and
+   **UP / DN** buttons next to it:
+   - same type (road x road, rail x rail): **junction** by default; UP = **flyover** (9 m above), DN = **tunnel** (12 m below);
+   - different type (road x rail): **level crossing** by default; UP = **overpass**; DN = **underpass**: the existing
+     line gets a short bridge and the new road is dug 8 m down into an open cutting under it;
+   - an existing flyover: by default you pass under it; UP takes you over it.
+   The panel lists each crossing with its height/depth. Going down is checked: water, other tunnels or pipes nearby,
+   and room to ramp at 6 %; problems are listed with "!" and the curve won't build until they are fixed.
+   Preview colours: green ground, blue raised, orange lowered, red too sharp.
 4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
    bridge, 10 m above the water, with elevated ramps (pillars) on land at a gentle 6 % slope.
 5. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.
 6. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
 
 Notes for this version: it does not charge money yet and does not bulldoze trees/buildings in the way.
-Bridges are new and untested: check pillars and the ramps. Long curves are cut into ~40 m segments (shorter in tight bends).
+Bridges work; flyovers, tunnels, cuttings and level crossings are new: check them and send screenshots.
+Ctrl+Z undoes a curve including any junctions/bridges it put into existing roads (those segments are rebuilt, so
+TM:PE settings or custom names on them are lost). Long curves are cut into ~40 m segments (shorter in tight bends).
 
 ## 6. Test smooth splits (milestone S1)
 1. Load a city with a road that splits in two (e.g. a one-way road splitting into two one-way roads).

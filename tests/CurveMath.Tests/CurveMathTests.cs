@@ -134,5 +134,84 @@ public class CurveMathTests
         var line = CurveMath.SampleSpline(shaped);
         Assert.InRange(CurveMath.Length(line), 99.5f, 100.5f);
     }
+
+    // --- polylines ---
+
+    [Fact]
+    public void SliceAndPointAt_FollowThePolyline()
+    {
+        var line = CurveMath.SampleSpline(new[] { V(0, 0), V(100, 0), V(200, 100) });
+        float total = CurveMath.Length(line);
+        CurveMath.PointAt(line, 50f, out var p, out var t);
+        var head = CurveMath.Slice(line, 0f, 50f);
+        Assert.InRange(CurveMath.Length(head), 49.5f, 50.5f);
+        Assert.Equal(p, head.Last());
+        Assert.True(CurveMath.BendAngle(t, V(1, 0)) < 15f, "tangent " + t);
+
+        var slice = CurveMath.Slice(line, 50f, total - 20f);
+        Assert.InRange(CurveMath.Length(slice), total - 70.5f, total - 69.5f);
+        Assert.Equal(p, slice.First());
+    }
+
+    [Fact]
+    public void Intersect_FindsCrossingsOnlyInsideBothPieces()
+    {
+        Assert.True(CurveMath.Intersect(V(0, 0), V(10, 0), V(5, -5), V(5, 5), out float ta, out float tc));
+        Assert.Equal(0.5f, ta, 3);
+        Assert.Equal(0.5f, tc, 3);
+        Assert.False(CurveMath.Intersect(V(0, 0), V(10, 0), V(15, -5), V(15, 5), out _, out _));
+        Assert.False(CurveMath.Intersect(V(0, 0), V(10, 0), V(0, 1), V(10, 1), out _, out _));
+    }
+
+    // --- heights ---
+
+    private static float[] Spaced(int n, float step) => Enumerable.Range(0, n).Select(i => i * step).ToArray();
+    private static float[] Fill(int n, float v) => Enumerable.Repeat(v, n).ToArray();
+
+    [Fact]
+    public void Heights_FollowGroundWithoutLimits()
+    {
+        var d = Spaced(6, 40f);
+        var ground = new float[] { 0, 5, 12, 8, 3, 0 };   // hilly
+        Assert.True(CurveMath.SolveHeights(d, ground, Fill(6, -1000), Fill(6, 1000), new bool[6], 0.06f, out var h));
+        Assert.Equal(ground, h);
+    }
+
+    [Fact]
+    public void Heights_FlyoverRampsUpAndDownAtTheGrade()
+    {
+        int n = 21;
+        var d = Spaced(n, 40f);                              // 800 m flat road
+        var min = Fill(n, -1000); min[10] = 10f;              // 10 m over something at the middle
+        Assert.True(CurveMath.SolveHeights(d, Fill(n, 0), min, Fill(n, 1000), new bool[n], 0.06f, out var h));
+        Assert.Equal(10f, h[10], 2);
+        Assert.Equal(10f - 0.06f * 40f, h[9], 2);
+        Assert.Equal(10f - 0.06f * 80f, h[12], 2);
+        Assert.Equal(0f, h[0], 2);
+        for (int i = 1; i < n; i++) Assert.True(Mathf.Abs(h[i] - h[i - 1]) <= 0.06f * 40f + 0.01f);
+    }
+
+    [Fact]
+    public void Heights_UnderpassRampsDown()
+    {
+        int n = 21;
+        var d = Spaced(n, 40f);
+        var max = Fill(n, 1000); max[10] = -8f;
+        Assert.True(CurveMath.SolveHeights(d, Fill(n, 0), Fill(n, -1000), max, new bool[n], 0.06f, out var h));
+        Assert.Equal(-8f, h[10], 2);
+        Assert.Equal(-8f + 2.4f, h[9], 2);
+        Assert.Equal(0f, h[0], 2);
+    }
+
+    [Fact]
+    public void Heights_TooCloseToAFixedEnd_IsRejected()
+    {
+        var d = Spaced(3, 40f);
+        var min = Fill(3, -1000); var max = Fill(3, 1000);
+        min[0] = max[0] = 0f;                                 // snapped to an existing road at ground level
+        min[1] = 10f;                                         // flyover 40 m away needs 25 % slope
+        var isFixed = new[] { true, false, false };
+        Assert.False(CurveMath.SolveHeights(d, Fill(3, 0), min, max, isFixed, 0.06f, out _));
+    }
 }
 
