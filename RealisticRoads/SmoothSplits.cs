@@ -74,6 +74,21 @@ namespace RealisticRoads
             return true;
         }
 
+        // Turns the smooth shape on if 'node' is a split; used automatically
+        // when the curve tool attaches a second branch to a trunk end. Safe on
+        // the simulation thread.
+        public static void EnableIfSplit(ushort node)
+        {
+            if (IsEnabled(node)) return;
+            SplitShape shape;
+            string reason;
+            if (!TryAnalyze(node, out shape, out reason)) return;
+            positions[node] = NetManager.instance.m_nodes.m_buffer[node].m_position;
+            enabled[node] = true;
+            Mod.Log("Smooth split applied automatically at node #" + node + ": " + Describe(shape));
+            RefreshNode(node);
+        }
+
         // Asks the game to rebuild the node and its roads, on the simulation thread.
         public static void RefreshNode(ushort node)
         {
@@ -298,10 +313,9 @@ namespace RealisticRoads
             return FlatNormal(nodes[other].m_position - nodes[node].m_position);
         }
 
-        // The left-hand direction when facing 'd' (matches the game's leftSide).
         private static Vector3 Left(Vector3 d)
         {
-            return new Vector3(-d.z, 0f, d.x);
+            return CurveMath.Left(d);
         }
 
         private static Vector3 FlatNormal(Vector3 v)

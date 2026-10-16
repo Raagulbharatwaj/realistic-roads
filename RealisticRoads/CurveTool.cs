@@ -7,7 +7,10 @@ namespace RealisticRoads
 {
     // CS2-style curve tool.
     //   Left-click        add a control point (snaps to an existing road end/junction;
-    //                     the curve then continues that road smoothly)
+    //                     the curve then continues that road smoothly). On the end
+    //                     of a wider road it snaps to the half under the cursor: the
+    //                     new road starts there, runs parallel, then curves away,
+    //                     and a second branch on the other half makes a smooth split.
     //   Right-click       remove the last point
     //   Enter/double-click build the curve with the road picked in the Roads menu
     //   Ctrl+Z            undo the last curve built
@@ -31,9 +34,13 @@ namespace RealisticRoads
         private static readonly Color BadColor = new Color(1f, 0.2f, 0.15f, 0.6f);
         private static readonly Color BridgeColor = new Color(0.25f, 0.6f, 1f, 0.55f);
 
-        // Clicked control points and, for each, the existing node it snapped to (or 0).
+        // Clicked control points and, for each, the existing node it snapped to
+        // (or 0), the half of that road end it attaches to (+1 left, -1 right,
+        // 0 = the node itself) and where to draw it.
         private readonly List<Vector3> points = new List<Vector3>();
         private readonly List<ushort> pointNodes = new List<ushort>();
+        private readonly List<int> pointSides = new List<int>();
+        private readonly List<Vector3> pointMarkers = new List<Vector3>();
 
         // Written on the main thread in OnToolUpdate, read by SimulationStep.
         private Ray mouseRay;
@@ -44,6 +51,8 @@ namespace RealisticRoads
         private Vector3 hoverPosition;
         private volatile bool hoverValid;
         private volatile ushort hoverNode;
+        private volatile int hoverSide;
+        private Vector3 hoverMarker;
 
         // Preview, recomputed on the main thread every frame.
         private Division preview;
@@ -63,6 +72,8 @@ namespace RealisticRoads
             public bool Ok;
             public bool Continues;       // follows an existing road at the start or end
             public List<bool> OverWater; // per piece: will be a bridge
+            public ushort StartSplit;    // trunk end the start is half-snapped to (or 0)
+            public ushort EndSplit;      // trunk end the end is half-snapped to (or 0)
         }
 
         protected override void OnEnable()
@@ -99,12 +110,14 @@ namespace RealisticRoads
             // Live preview: the clicked points plus the mouse position.
             var live = new List<Vector3>(points);
             var liveNodes = new List<ushort>(pointNodes);
+            var liveSides = new List<int>(pointSides);
             if (hoverValid && mouseRayValid)
             {
                 live.Add(hoverPosition);
                 liveNodes.Add(hoverNode);
+                liveSides.Add(hoverSide);
             }
-            preview = Divide(live, liveNodes);
+            preview = Divide(live, liveNodes, liveSides);
             ToolActivator.SetInfo(InfoText());
         }
 
@@ -116,22 +129,32 @@ namespace RealisticRoads
             {
                 hoverValid = false;
                 hoverNode = 0;
+                hoverSide = 0;
                 return;
             }
+
+            Vector3 ground;
+            bool onGround = GroundUnderMouse(out ground);
 
             ushort node = FindSnapNode();
             if (node != 0)
             {
-                hoverPosition = NetManager.instance.m_nodes.m_buffer[node].m_position;
+                Vector3 position = NetManager.instance.m_nodes.m_buffer[node].m_position;
+                NetworkBuilder.HalfSnap half;
+                bool isHalf = NetworkBuilder.TryHalfSnap(node, SelectedNetwork, onGround ? ground : position, 0, out half);
+                hoverMarker = isHalf ? NetworkBuilder.HalfSnapMarker(node, half) : position;
+                hoverPosition = position;
+                hoverSide = isHalf ? half.Side : 0;
                 hoverNode = node;
                 hoverValid = true;
                 return;
             }
 
-            Vector3 ground;
-            hoverValid = GroundUnderMouse(out ground);
+            hoverValid = onGround;
             hoverPosition = ground;
+            hoverMarker = ground;
             hoverNode = 0;
+            hoverSide = 0;
         }
 
         // Simulation thread. A node under the mouse, or the end of the road
@@ -242,15 +265,21 @@ namespace RealisticRoads
                     BuildCurrent();
                     return;
                 }
+                int side = hoverSide;
                 points.Add(p);
                 pointNodes.Add(hoverNode);
-                Mod.Log("Point " + points.Count + " at " + Format(p) + (hoverNode != 0 ? " (on node #" + hoverNode + ")" : ""));
+                pointSides.Add(side);
+                pointMarkers.Add(hoverMarker);
+                Mod.Log("Point " + points.Count + " at " + Format(p) +
+                        (hoverNode != 0 ? " (on node #" + hoverNode + (side > 0 ? ", left half" : side < 0 ? ", right half" : "") + ")" : ""));
             }
             else if (e.button == 1 && points.Count > 0)
             {
                 e.Use();
                 points.RemoveAt(points.Count - 1);
                 pointNodes.RemoveAt(pointNodes.Count - 1);
+                pointSides.RemoveAt(pointSides.Count - 1);
+                pointMarkers.RemoveAt(pointMarkers.Count - 1);
                 Mod.Log("Removed last point, " + points.Count + " left");
             }
         }
@@ -275,10 +304,10 @@ namespace RealisticRoads
             }
 
             for (int i = 0; i < points.Count; i++)
-                overlay.DrawCircle(cameraInfo, pointNodes[i] != 0 ? SnapColor : PointColor, points[i], PointSize, -1f, 1280f, false, true);
+                overlay.DrawCircle(cameraInfo, pointNodes[i] != 0 ? SnapColor : PointColor, pointMarkers[i], PointSize, -1f, 1280f, false, true);
 
             if (hoverValid && mouseRayValid)
-                overlay.DrawCircle(cameraInfo, hoverNode != 0 ? SnapColor : HoverColor, hoverPosition, HoverSize, -1f, 1280f, false, true);
+                overlay.DrawCircle(cameraInfo, hoverNode != 0 ? SnapColor : HoverColor, hoverMarker, HoverSize, -1f, 1280f, false, true);
         }
 
         private void BuildCurrent()
@@ -294,7 +323,7 @@ namespace RealisticRoads
                 return;
             }
 
-            var division = Divide(points, pointNodes);
+            var division = Divide(points, pointNodes, pointSides);
             if (!division.Ok)
             {
                 Mod.Log("Not built: a bend is too sharp (over " + MaxBend + " degrees per segment). Spread the points out.");
@@ -305,28 +334,59 @@ namespace RealisticRoads
             ushort endNode = pointNodes[pointNodes.Count - 1];
             Mod.Log("Building " + SelectedNetwork.name + ": " + division.Length.ToString("F0") + " m in " +
                     (division.Points.Count - 1) + " segment(s)");
-            NetworkBuilder.BuildCurve(SelectedNetwork, division.Points, division.Tangents, startNode, endNode);
+            NetworkBuilder.BuildCurve(SelectedNetwork, division.Points, division.Tangents, startNode, endNode,
+                division.StartSplit, division.EndSplit);
             ClearPoints();
         }
 
         // Cuts the curve through 'controls' into buildable pieces. Where an end
         // is snapped to an existing road, the curve continues that road
         // smoothly; if that would bend too much it meets the road at an angle
-        // instead (like a normal junction).
-        private static Division Divide(List<Vector3> controls, List<ushort> nodes)
+        // instead (like a normal junction). Where an end is half-snapped to a
+        // wider road, the curve runs parallel from that half first.
+        private Division Divide(List<Vector3> controls, List<ushort> nodes, List<int> sides)
         {
             if (controls.Count < 2) return new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>(), OverWater = new List<bool>() };
 
             int n = controls.Count - 1;
-            Vector3 startDir = NetworkBuilder.ContinuationDirection(nodes[0], controls[1] - controls[0], true);
-            Vector3 endDir = NetworkBuilder.ContinuationDirection(nodes[n], controls[n] - controls[n - 1], false);
+            var shaped = new List<Vector3>(controls);
+            var startHalf = default(NetworkBuilder.HalfSnap);
+            var endHalf = default(NetworkBuilder.HalfSnap);
+            bool halfStart = sides[0] != 0 && NetworkBuilder.TryHalfSnap(nodes[0], SelectedNetwork, Vector3.zero, sides[0], out startHalf);
+            bool halfEnd = sides[n] != 0 && NetworkBuilder.TryHalfSnap(nodes[n], SelectedNetwork, Vector3.zero, sides[n], out endHalf);
+            if (halfStart) shaped[0] = NetworkBuilder.HalfSnapRunIn(nodes[0], startHalf);
+            if (halfEnd) shaped[n] = NetworkBuilder.HalfSnapRunIn(nodes[n], endHalf);
 
-            var division = DivideShaped(controls, startDir, endDir);
-            division.Continues = startDir != Vector3.zero || endDir != Vector3.zero;
+            Vector3 startDir = halfStart ? startHalf.Forward
+                : NetworkBuilder.ContinuationDirection(nodes[0], shaped[1] - shaped[0], true);
+            Vector3 endDir = halfEnd ? -endHalf.Forward
+                : NetworkBuilder.ContinuationDirection(nodes[n], shaped[n] - shaped[n - 1], false);
+
+            var division = DivideShaped(shaped, startDir, endDir);
+            division.Continues = (!halfStart && startDir != Vector3.zero) || (!halfEnd && endDir != Vector3.zero);
             if (!division.Ok && division.Continues)
             {
-                var plain = DivideShaped(controls, Vector3.zero, Vector3.zero);
-                if (plain.Ok) division = plain;
+                // Drop only the optional continuations; half-snapped ends must stay parallel.
+                var plain = DivideShaped(shaped, halfStart ? startDir : Vector3.zero, halfEnd ? endDir : Vector3.zero);
+                if (plain.Ok)
+                {
+                    division = plain;
+                    division.Continues = false;
+                }
+            }
+
+            // Half-snapped ends: add the short parallel piece from the trunk end.
+            if (halfStart && division.Points.Count > 0)
+            {
+                division.Points.Insert(0, controls[0]);
+                division.Tangents.Insert(0, startHalf.Forward);
+                division.StartSplit = nodes[0];
+            }
+            if (halfEnd && division.Points.Count > 0)
+            {
+                division.Points.Add(controls[n]);
+                division.Tangents.Add(-endHalf.Forward);
+                division.EndSplit = nodes[n];
             }
 
             division.OverWater = new List<bool>();
@@ -376,6 +436,7 @@ namespace RealisticRoads
                    "\n" + division.Length.ToString("F0") + " m, " + (division.Points.Count - 1) + " segment(s)" +
                    (bridges > 0 ? ", bridge over water" : "") +
                    (division.Continues ? ", continues the road" : "") +
+                   (division.StartSplit != 0 || division.EndSplit != 0 ? ", branches off a road half" : "") +
                    (division.Ok ? "" : "  -  TOO SHARP") +
                    "\nEnter / double-click: build   Ctrl+Z: undo   Esc: clear";
         }
@@ -384,6 +445,8 @@ namespace RealisticRoads
         {
             points.Clear();
             pointNodes.Clear();
+            pointSides.Clear();
+            pointMarkers.Clear();
             preview = null;
         }
 

@@ -180,6 +180,13 @@ namespace RealisticRoads
             return max;
         }
 
+        // The left-hand direction on the ground when facing 'd' (same side the
+        // game calls leftSide for a segment going away from a node).
+        public static Vector3 Left(Vector3 d)
+        {
+            return new Vector3(-d.z, 0f, d.x);
+        }
+
         public static Vector3 FlatNormal(Vector3 v)
         {
             v.y = 0f;

@@ -28,12 +28,20 @@ namespace RealisticRoads
 
         // points/tangents: one entry per node (see CurveMath.Divide).
         // startNode/endNode: existing nodes to connect to, or 0 for new ones.
-        public static void BuildCurve(NetInfo info, List<Vector3> points, List<Vector3> tangents, ushort startNode, ushort endNode)
+        // splitNodes: half-snapped trunk ends; if one becomes a split (two
+        // branches on a trunk end) it is smoothed automatically.
+        public static void BuildCurve(NetInfo info, List<Vector3> points, List<Vector3> tangents, ushort startNode, ushort endNode,
+            params ushort[] splitNodes)
         {
             // Copy: the tool keeps changing its lists on the main thread.
             var p = new List<Vector3>(points);
             var t = new List<Vector3>(tangents);
-            SimulationManager.instance.AddAction(() => BuildNow(info, p, t, startNode, endNode));
+            SimulationManager.instance.AddAction(() =>
+            {
+                if (!BuildNow(info, p, t, startNode, endNode)) return;
+                foreach (var node in splitNodes)
+                    if (node != 0) SmoothSplits.EnableIfSplit(node);
+            });
         }
 
         public static void UndoLast()
@@ -46,7 +54,7 @@ namespace RealisticRoads
             SimulationManager.instance.AddAction(() => undoStack.Clear());
         }
 
-        private static void BuildNow(NetInfo info, List<Vector3> points, List<Vector3> tangents, ushort startNode, ushort endNode)
+        private static bool BuildNow(NetInfo info, List<Vector3> points, List<Vector3> tangents, ushort startNode, ushort endNode)
         {
             var build = new Build();
             try
@@ -109,11 +117,13 @@ namespace RealisticRoads
                         " (" + build.Nodes.Count + " new nodes" +
                         (startNode != 0 ? ", connected at start" : "") +
                         (endNode != 0 ? ", connected at end" : "") + "). Ctrl+Z in the tool undoes it.");
+                return true;
             }
             catch (Exception e)
             {
                 Mod.LogError("Building the curve failed; removing the part that was built", e);
                 Remove(build);
+                return false;
             }
         }
 
@@ -208,6 +218,97 @@ namespace RealisticRoads
                 if (Vector3.Dot(away, direction) > limit) return false;
             }
             return true;
+        }
+
+        // --- half snapping: attach a branch to one half of a wide road's end ---
+
+        // Where a narrower road attaches to one half of a wide road's end.
+        public struct HalfSnap
+        {
+            public int Side;          // +1 = left half, -1 = right half (seen from the trunk looking out)
+            public Vector3 Forward;   // trunk direction at its end, pointing out of the trunk
+            public float Offset;      // sideways distance of the branch centre line from the trunk's
+            public float RunIn;       // how far the branch runs parallel before it may curve away
+        }
+
+        private const float MinHalfRunIn = 16f;
+
+        // Can a 'branch' road attach to a half of the road ending at 'node'?
+        // True for a dead end of a road at least ~1.33x as wide as the branch,
+        // or such a road end with one branch already on a half (the new one
+        // then gets the other half). 'cursor' picks the half; 'forcedSide' (if
+        // not 0) overrides it.
+        public static bool TryHalfSnap(ushort node, NetInfo branch, Vector3 cursor, int forcedSide, out HalfSnap snap)
+        {
+            snap = default(HalfSnap);
+            if (branch == null || !NodeExists(node)) return false;
+            var nodes = NetManager.instance.m_nodes.m_buffer;
+            var segments = NetManager.instance.m_segments.m_buffer;
+
+            // Trunk = the widest road at the node.
+            ushort trunk = 0, other = 0;
+            int count = 0;
+            for (int i = 0; i < 8; i++)
+            {
+                ushort s = nodes[node].GetSegment(i);
+                if (s == 0) continue;
+                count++;
+                if (trunk == 0 || segments[s].Info.m_halfWidth > segments[trunk].Info.m_halfWidth)
+                {
+                    other = trunk;
+                    trunk = s;
+                }
+                else
+                {
+                    other = s;
+                }
+            }
+            if (count < 1 || count > 2) return false;
+
+            float trunkHalf = segments[trunk].Info.m_halfWidth;
+            float branchHalf = branch.m_halfWidth;
+            if (branchHalf > trunkHalf * 0.75f) return false;
+
+            Vector3 position = nodes[node].m_position;
+            Vector3 forward = -CurveMath.FlatNormal(DirectionAway(trunk, node));
+            Vector3 left = CurveMath.Left(forward);
+            int side = forcedSide != 0 ? forcedSide : (Vector3.Dot(cursor - position, left) >= 0f ? 1 : -1);
+
+            if (count == 2)
+            {
+                // The other road must be a branch already leaving this end.
+                if (Vector3.Dot(CurveMath.FlatNormal(DirectionAway(other, node)), forward) < Mathf.Cos(45f * Mathf.Deg2Rad))
+                    return false;
+                ushort far = segments[other].m_startNode == node ? segments[other].m_endNode : segments[other].m_startNode;
+                int taken = Vector3.Dot(nodes[far].m_position - position, left) >= 0f ? 1 : -1;
+                side = -taken;
+            }
+
+            snap.Side = side;
+            snap.Forward = forward;
+            // Branches side by side without overlapping; outer edge at least at the trunk's edge.
+            snap.Offset = Mathf.Max(branchHalf, trunkHalf - branchHalf);
+            snap.RunIn = Mathf.Max(MinHalfRunIn, snap.Offset * 4f);
+            return true;
+        }
+
+        // Point on the trunk end where the branch attaches (shown under the cursor).
+        public static Vector3 HalfSnapMarker(ushort node, HalfSnap snap)
+        {
+            Vector3 position = NetManager.instance.m_nodes.m_buffer[node].m_position;
+            return position + CurveMath.Left(snap.Forward) * (snap.Side * snap.Offset);
+        }
+
+        // End of the parallel run-in, where the branch's own curve begins.
+        public static Vector3 HalfSnapRunIn(ushort node, HalfSnap snap)
+        {
+            return HalfSnapMarker(node, snap) + snap.Forward * snap.RunIn;
+        }
+
+        private static Vector3 DirectionAway(ushort segment, ushort node)
+        {
+            var s = NetManager.instance.m_segments.m_buffer[segment];
+            return s.m_startNode == node ? s.m_startDirection : s.m_endDirection;
         }
 
         // Is the ground under this point covered by water?

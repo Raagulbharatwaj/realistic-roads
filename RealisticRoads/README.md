@@ -52,6 +52,9 @@ Tip: launch with `-noWorkshop` in Steam launch options to test with only local m
 3. Clicking on (or near the end of) an existing road snaps to it (yellow circle) so the new road connects there,
    at the start or the end of the curve. Where it can, the curve continues that road smoothly ("continues the road"
    in the panel); otherwise it meets it at an angle like a normal junction.
+   **Splits:** on the end of a road at least ~1.3x wider than the road you are drawing, the snap circle jumps to the
+   **left or right half** under your cursor. The new road starts from that half, runs parallel for a short way, then
+   curves off. Attach a second branch to the other half and the smooth split is applied automatically.
 4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
    bridge, 10 m above the water, with elevated ramps (pillars) on land at a gentle 6 % slope.
 5. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.
