@@ -193,15 +193,6 @@ namespace RealisticRoads
                     build.Segments.Add(segment);
                 }
 
-                if (plan.StripHalfWidth > 0f)
-                {
-                    foreach (ushort segment in build.Segments) LaneBundles.AddStrip(segment, plan.StripHalfWidth);
-                    foreach (ushort node in plan.LaneNodes) LaneBundles.AddLaneNode(node);
-                    foreach (ushort node in build.Nodes) net.UpdateNode(node, 0, -1);
-                    foreach (ushort node in plan.LaneNodes) net.UpdateNode(node, 0, -1);
-                    Mod.Log("  Lane road: " + build.Segments.Count + " segment(s) " + (plan.StripHalfWidth * 2f).ToString("F1") +
-                            " m wide, on " + plan.LaneNodes.Count + " lane node(s)");
-                }
                 int middles = 0;
                 if (plan.Middle != null) foreach (bool m in plan.Middle) if (m) middles++;
                 if (middles > 0) Mod.Log("  Suspension bridge: towers on every other node, " + middles + " middle node(s)");
