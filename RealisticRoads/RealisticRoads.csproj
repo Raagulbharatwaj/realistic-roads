@@ -3,11 +3,13 @@
   <PropertyGroup>
     <!-- CS1 runs on Unity's Mono, which needs .NET Framework 3.5 -->
     <TargetFramework>net35</TargetFramework>
-    <AssemblyName>MyRoadMod</AssemblyName>
-    <RootNamespace>MyRoadMod</RootNamespace>
+    <AssemblyName>RealisticRoads</AssemblyName>
+    <RootNamespace>RealisticRoads</RootNamespace>
     <LangVersion>latest</LangVersion>
     <Deterministic>false</Deterministic>
     <AssemblyVersion>0.1.*</AssemblyVersion>
+    <!-- File versions cannot use wildcards; keeps the build warning-free -->
+    <FileVersion>0.1.0.0</FileVersion>
 
     <!-- CHANGE THIS if your game is installed somewhere else -->
     <GameDir>C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines</GameDir>
