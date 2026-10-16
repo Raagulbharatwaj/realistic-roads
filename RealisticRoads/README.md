@@ -44,9 +44,24 @@ Full log: `C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_
 Tip: launch with `-noWorkshop` in Steam launch options to test with only local mods
 (remove it afterwards, or Harmony from the Workshop won't load).
 
-## 5. Next steps toward a curve tool
-- Make a class that inherits `ToolBase`, and activate it from a button in `OnLevelLoaded`.
-- In `OnToolUpdate`, raycast the mouse to the terrain to pick points.
-- Turn your curve into short pieces and create each with
-  `NetManager.instance.CreateNode(...)` then `CreateSegment(...)`.
-- Study **Network Multitool** source on GitHub, it does exactly this.
+## 5. Test the curve tool (milestone 2)
+1. Load a city. A small **RR** button appears near the top-left (right-drag it to move it).
+2. Optionally pick a road in the vanilla Roads menu first; the log shows which network the tool will use.
+3. Click **RR** or press **Ctrl+Shift+C**. A white circle follows the mouse over the ground.
+4. Left-click a few times: each click leaves a blue circle and logs `Point N at (x, y, z)`.
+5. Right-click removes the last point (`Removed last point, N left`).
+6. Press **Esc**, or click **RR** / press Ctrl+Shift+C again: the circles disappear and the normal tool is back.
+
+Expected log lines:
+
+    [RealisticRoads] Curve tool ready: click the RR button or press Ctrl+Shift+C
+    [RealisticRoads] Curve tool on, network = Basic Road
+    [RealisticRoads] Point 1 at (123.4, 60.2, -456.7)
+    [RealisticRoads] Removed last point, 0 left
+    [RealisticRoads] Esc pressed, back to the vanilla tool
+
+Nothing is built yet; that comes in milestone 4.
+
+## 6. What's next
+See the milestones in [docs/PROJECT_BRIEF.md](../docs/PROJECT_BRIEF.md). Next up is milestone 3:
+a live spline/arc preview between the points, showing length and turning red where a bend is too sharp.
