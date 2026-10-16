@@ -99,12 +99,13 @@ namespace RealisticRoads
         public override void OnLevelLoaded(LoadMode mode)
         {
             Mod.Log("City loaded, mode = " + mode);
-            // Later: this is where you'll add your road-tool button / tool.
+            ToolActivator.Create(mode);
         }
 
         public override void OnLevelUnloading()
         {
             Mod.Log("City unloading");
+            ToolActivator.Destroy();
         }
     }
 
