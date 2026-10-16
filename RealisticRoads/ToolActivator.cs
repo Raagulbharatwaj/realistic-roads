@@ -5,34 +5,44 @@ using UnityEngine;
 
 namespace RealisticRoads
 {
-    // Creates the curve tool and its on-screen button when a city loads,
-    // removes them when it unloads, and switches the tool on and off.
+    // Creates the mod's tools and their on-screen buttons when a city loads,
+    // removes them when it unloads, and switches the tools on and off.
     // Everything here runs on the main thread.
     public static class ToolActivator
     {
-        private static CurveTool tool;
-        private static UIButton button;
+        private static CurveTool curveTool;
+        private static SplitTool splitTool;
+        private static UIButton curveButton;
+        private static UIButton splitButton;
 
         public static void Create(LoadMode mode)
         {
             if (mode == LoadMode.NewAsset || mode == LoadMode.LoadAsset ||
                 mode == LoadMode.NewTheme || mode == LoadMode.LoadTheme)
             {
-                Mod.Log("Curve tool not available in the asset/theme editor");
+                Mod.Log("Tools not available in the asset/theme editor");
                 return;
             }
 
             try
             {
                 var controller = ToolsModifierControl.toolController;
-                tool = controller.gameObject.AddComponent<CurveTool>();
-                tool.enabled = false;
-                CreateButton();
-                Mod.Log("Curve tool ready: click the RR button or press Ctrl+Shift+C");
+                curveTool = controller.gameObject.AddComponent<CurveTool>();
+                curveTool.enabled = false;
+                splitTool = controller.gameObject.AddComponent<SplitTool>();
+                splitTool.enabled = false;
+
+                curveButton = CreateButton("RealisticRoadsCurveButton", "RR",
+                    "Realistic Roads curve tool (Ctrl+Shift+C)", 120f, ToggleCurveTool);
+                splitButton = CreateButton("RealisticRoadsSplitButton", "SPL",
+                    "Realistic Roads smooth split tool (Ctrl+Shift+J)\nClick a junction where a road splits in two", 172f, ToggleSplitTool);
+
+                Mod.Log("Tools ready: RR / Ctrl+Shift+C = curve tool, SPL / Ctrl+Shift+J = smooth split tool");
+                SmoothSplits.RefreshAll();
             }
             catch (Exception e)
             {
-                Mod.LogError("Creating the curve tool failed", e);
+                Mod.LogError("Creating the tools failed", e);
                 Destroy();
             }
         }
@@ -41,27 +51,32 @@ namespace RealisticRoads
         {
             try
             {
-                if (tool != null)
-                {
-                    if (tool.IsActive) ToolsModifierControl.SetTool<DefaultTool>();
-                    UnityEngine.Object.Destroy(tool);
-                }
-                if (button != null) UnityEngine.Object.Destroy(button.gameObject);
+                var current = ToolsModifierControl.toolController != null
+                    ? ToolsModifierControl.toolController.CurrentTool
+                    : null;
+                if (current != null && (current == curveTool || current == splitTool))
+                    ToolsModifierControl.SetTool<DefaultTool>();
+                if (curveTool != null) UnityEngine.Object.Destroy(curveTool);
+                if (splitTool != null) UnityEngine.Object.Destroy(splitTool);
+                if (curveButton != null) UnityEngine.Object.Destroy(curveButton.gameObject);
+                if (splitButton != null) UnityEngine.Object.Destroy(splitButton.gameObject);
             }
             catch (Exception e)
             {
-                Mod.LogError("Removing the curve tool failed", e);
+                Mod.LogError("Removing the tools failed", e);
             }
-            tool = null;
-            button = null;
+            curveTool = null;
+            splitTool = null;
+            curveButton = null;
+            splitButton = null;
         }
 
-        public static void Toggle()
+        public static void ToggleCurveTool()
         {
-            if (tool == null) return;
+            if (curveTool == null) return;
             try
             {
-                if (tool.IsActive)
+                if (curveTool.IsActive)
                 {
                     ToolsModifierControl.SetTool<DefaultTool>();
                     Mod.Log("Curve tool off");
@@ -69,10 +84,10 @@ namespace RealisticRoads
                 }
 
                 var netTool = ToolsModifierControl.GetTool<NetTool>();
-                tool.SelectedNetwork = netTool != null ? netTool.m_prefab : null;
-                ToolsModifierControl.toolController.CurrentTool = tool;
+                curveTool.SelectedNetwork = netTool != null ? netTool.m_prefab : null;
+                ToolsModifierControl.toolController.CurrentTool = curveTool;
                 Mod.Log("Curve tool on, network = " +
-                        (tool.SelectedNetwork != null ? tool.SelectedNetwork.name : "none selected"));
+                        (curveTool.SelectedNetwork != null ? curveTool.SelectedNetwork.name : "none selected"));
             }
             catch (Exception e)
             {
@@ -80,24 +95,44 @@ namespace RealisticRoads
             }
         }
 
-        private static void CreateButton()
+        public static void ToggleSplitTool()
+        {
+            if (splitTool == null) return;
+            try
+            {
+                if (splitTool.IsActive)
+                {
+                    ToolsModifierControl.SetTool<DefaultTool>();
+                    Mod.Log("Smooth split tool off");
+                    return;
+                }
+                ToolsModifierControl.toolController.CurrentTool = splitTool;
+                Mod.Log("Smooth split tool on: green = smoothed, yellow = can smooth, red = not a split");
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Switching the smooth split tool failed", e);
+            }
+        }
+
+        private static UIButton CreateButton(string name, string text, string tooltip, float y, Action onClick)
         {
             var view = UIView.GetAView();
-            button = (UIButton)view.AddUIComponent(typeof(UIButton));
-            button.name = "RealisticRoadsButton";
-            button.text = "RR";
-            button.tooltip = "Realistic Roads curve tool (Ctrl+Shift+C)\nRight-drag to move this button";
+            var button = (UIButton)view.AddUIComponent(typeof(UIButton));
+            button.name = name;
+            button.text = text;
+            button.tooltip = tooltip + "\nRight-drag to move this button";
             button.size = new Vector2(46f, 46f);
-            button.relativePosition = new Vector3(10f, 120f);
+            button.relativePosition = new Vector3(10f, y);
             button.normalBgSprite = "ButtonMenu";
             button.hoveredBgSprite = "ButtonMenuHovered";
             button.pressedBgSprite = "ButtonMenuPressed";
             button.focusedBgSprite = "ButtonMenu";
-            button.textScale = 1.1f;
+            button.textScale = text.Length > 2 ? 0.9f : 1.1f;
 
             button.eventClick += (component, param) =>
             {
-                if ((param.buttons & UIMouseButton.Left) != 0) Toggle();
+                if ((param.buttons & UIMouseButton.Left) != 0) onClick();
             };
 
             // Right-drag moves the button, so it can be put out of the way.
@@ -110,19 +145,24 @@ namespace RealisticRoads
                     component.position.y + param.moveDelta.y * ratio,
                     component.position.z);
             };
+            return button;
         }
     }
 
-    // Ctrl+Shift+C toggles the curve tool. OnUpdate runs on the main thread.
+    // Ctrl+Shift+C toggles the curve tool, Ctrl+Shift+J the smooth split tool.
+    // OnUpdate runs on the main thread.
     public class HotkeyHandler : ThreadingExtensionBase
     {
         public override void OnUpdate(float realTimeDelta, float simulationTimeDelta)
         {
-            if (!Input.GetKeyDown(KeyCode.C)) return;
+            bool c = Input.GetKeyDown(KeyCode.C);
+            bool j = Input.GetKeyDown(KeyCode.J);
+            if (!c && !j) return;
             var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             var shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
             if (!ctrl || !shift || UIView.HasInputFocus()) return;
-            ToolActivator.Toggle();
+            if (c) ToolActivator.ToggleCurveTool();
+            else ToolActivator.ToggleSplitTool();
         }
     }
 }

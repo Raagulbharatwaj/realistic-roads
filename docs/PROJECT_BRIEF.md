@@ -61,6 +61,16 @@ Runtime dependency: the Harmony 2 Steam Workshop item must be subscribed.
 - Traffic below keeps working: pillars must not block lanes. On roads without a median, pillars go on the centre line and the mod warns the player if lanes would be covered. No collision between the pillars and the road below.
 - Ramps: optional on/off ramps from the flyover down to the ground road using the curve tool (Feature A).
 
+### D. Smooth splits and merges (CS2-style)
+
+Where a road splits in two (or two roads merge), vanilla CS1 draws a normal junction: a blunt block of pavement with crosswalks and a hard corner. Real splits (and CS2) taper: the trunk keeps its width, the branches peel off, and a pointed gore separates them.
+
+- **S1 – Smooth existing splits (prototype).** A split tool (button `SPL`, hotkey Ctrl+Shift+J): hover a junction to see whether it is a split (3 roads, the two branches within 75° of each other, the trunk opposite them); click to turn the smooth shape on/off. The mod moves the corners of the three road ends so the trunk ends at the node and the branches start where their inner edges have separated; the game's junction surface and lanes then form the taper. Saved per node in the city; if the mod is removed the node is a vanilla junction again.
+- **S2 – Tidy the junction.** Hide crosswalks and junction markings at smoothed splits, set lane connections so each lane flows straight into its branch (TM:PE API when installed), and handle splits of one-way roads into more than two branches.
+- **S3 – Automatic.** After milestone 4, the curve tool applies the smooth shape automatically when it joins a new road to an existing one at a shallow angle.
+
+Technical notes: implemented as a `[HarmonyPriority(Priority.Last)]` postfix on `NetSegment.CalculateCorner` that only changes nodes the player marked, so it coexists with Node Controller Renewal (NCR wins on every other node; on marked nodes this mod wins). Geometry follows each segment's Bézier curve. Must be thread-safe: corners are calculated from the simulation and render threads.
+
 ### C. Settings page
 
 - Segment spacing, pillar spacing, default heights, default pillar style, hotkeys, show/hide preview info, debug logging on/off.
@@ -105,9 +115,12 @@ Build in this order; each milestone must work in game before the next starts.
 |---|---|---|
 | 1 | Starter mod builds and loads | Mod appears in Content Manager, F7 shows the segment log when a road is drawn, no errors in `output_log.txt`. |
 | 2 | Tool skeleton | Button/hotkey activates `CurveTool`; clicks place control points shown as circles; Esc returns to the vanilla tool. |
+| S1 | Smooth existing splits (prototype) | Clicking a split junction turns it into a taper with a gore; vehicles still use all lanes; works on one-way and two-way roads; survives save/reload; clicking again restores the vanilla junction. **Done before milestone 3 at the player's request.** |
+| S2 | Tidy smooth splits | No crosswalks or junction markings at smoothed splits; lanes flow straight into their branch; works with TM:PE and NCR installed. |
 | 3 | Curve preview | Spline and arc previews follow the mouse, show length, turn red where the bend is too sharp. |
 | 4 | Build the curve | Enter builds the curve with the selected road; vehicles drive it end to end; it connects to existing roads at snapped ends. |
 | 5 | Undo, slopes, settings | One undo removes a whole curve; start/end heights work; settings save and reload. |
+| S3 | Automatic smooth splits | The curve tool smooths a split automatically when it joins a road at a shallow angle. |
 | 6 | Flyover follow mode | Elevated road/monorail built over 500 m of an existing curved road, matching its path. |
 | 7 | Pillars on the road | Pillars stand on the centre line/median of the road below at the set spacing, no vanilla pillars, ground traffic unaffected, save reloads with pillars intact. |
 | 8 | Polish and release | Works alongside Move It, Network Anarchy, TM:PE, Node Controller Renewal; Workshop page, preview image, README. |
