@@ -48,8 +48,6 @@ namespace RealisticRoads
         public List<WaterRun> WaterRuns = new List<WaterRun>();
         public List<string> Problems = new List<string>();
         public ushort StartNode, EndNode;
-        public float StripHalfWidth;          // lane roads: squeeze to this half width (0 = a normal road)
-        public List<ushort> LaneNodes = new List<ushort>();  // road ends the lane road starts/ends on
         public bool Ok => Problems.Count == 0;
     }
 
@@ -67,6 +65,10 @@ namespace RealisticRoads
         // between the two is the slope version, which has the portal.
         public const float TunnelMinDepth = 8f;
         private const float Unlimited = 100000f;
+        private const float RunTolerance = 3f;        // node distances are chords, water runs follow the curve
+        private const float DefaultMaxSlope = 0.25f;  // roads without their own limit
+        private const float RimReach = 400f;          // how far a gorge's other side may be
+        private const int ProbesPerPiece = 4;         // underground check points per lowered piece
         private static string lastLoweringFailure;
 
         public static Plan Make(NetInfo info, List<Vector3> points, List<Vector3> tangents,
@@ -109,6 +111,19 @@ namespace RealisticRoads
                 water[i] = surface - ground[i] > 0.5f;
                 minH[i] = water[i] && hasBridge ? surface + BridgeClearance + WaterExtra(waterRuns, distance[i]) : -Unlimited;
                 maxH[i] = Unlimited;
+
+                // The nodes either side of a river narrower than the node spacing
+                // stand on the banks, dry: the traced water run says they span water.
+                var run = RunAt(waterRuns, distance[i], RunTolerance);
+                if (run != null && !water[i])
+                {
+                    water[i] = true;
+                    if (hasBridge)
+                    {
+                        float runSurface = terrain.SampleRawHeightSmoothWithWater(run.Middle, false, 0f);
+                        minH[i] = Mathf.Max(minH[i], runSurface + BridgeClearance + run.Extra);
+                    }
+                }
             }
 
             if (NetworkBuilder.NodeExists(startNode)) Fix(0, nodes[startNode].m_position.y, minH, maxH, isFixed);
@@ -127,30 +142,47 @@ namespace RealisticRoads
                         if (crossing.ExistingAtGround) Fix(k, crossing.Point.y, minH, maxH, isFixed);
                         break;
                     case CrossingType.Bridge:
-                        Limit(distance, k, window, crossing.Point.y + OverClearance + crossing.ExtraHeight, true, minH);
+                        Limit(distance, k, window, crossing.Point.y + OverClearance + crossing.ExtraHeight, true, minH, false);
                         break;
                     case CrossingType.Overpass:
                         // We stay at ground level on a bridge deck; the existing road goes down.
                         Fix(k, crossing.Point.y, minH, maxH, isFixed);
-                        Mark(distance, k, window, forceBridge);
+                        Mark(distance, k, window, forceBridge, false);
                         string problem;
                         var lowering = PlanLowering(crossing, info.m_halfWidth, plan.Tangents[k], out problem);
                         if (lowering != null) plan.Lowerings[c] = lowering;
                         else plan.Problems.Add(problem);
                         break;
                     case CrossingType.Underpass:
-                        Limit(distance, k, window, crossing.Point.y - CutDepth, false, maxH);
-                        Mark(distance, k, window * 4f, cutting);
+                        Limit(distance, k, window, crossing.Point.y - CutDepth, false, maxH, false);
+                        Mark(distance, k, window * 4f, cutting, true);
                         break;
                     case CrossingType.Tunnel:
                         bool underElevated = crossing.ExistingElevation > UnderClearance;
-                        Limit(distance, k, window, crossing.Point.y - (underElevated ? UnderClearance : TunnelDepth), false, maxH);
+                        // A tunnel must reach past both sides of the road above, so the
+                        // nodes either side are kept down too (not only the window).
+                        Limit(distance, k, window, crossing.Point.y - (underElevated ? UnderClearance : TunnelDepth), false, maxH, true);
                         break;
                 }
             }
 
+            CheckLoweringsApart(plan);
+            CheckRepeatedCrossings(plan);
+
             float[] heights;
             bool solved = CurveMath.SolveHeights(distance, ground, minH, maxH, isFixed, MaxGrade, out heights);
+            // Dry gorges: a viaduct from rim to rim instead of a road down the cliff.
+            float maxSlope = info.m_maxSlope > 0.01f ? info.m_maxSlope : DefaultMaxSlope;
+            var valleys = (float[])minH.Clone();
+            if (solved && CurveMath.LiftValleys(distance, heights, isFixed, maxSlope, MaxGrade, RimReach, valleys))
+            {
+                float[] lifted;
+                if (CurveMath.SolveHeights(distance, ground, valleys, maxH, isFixed, MaxGrade, out lifted))
+                {
+                    heights = lifted;
+                    minH = valleys;
+                }
+            }
             // Level the bridges between their banks, then solve again with that.
             var levelled = (float[])minH.Clone();
             if (CurveMath.LevelSpans(distance, ground, heights, isFixed, levelled))
@@ -165,6 +197,8 @@ namespace RealisticRoads
             }
             if (!solved)
                 plan.Problems.Add("Not enough room to ramp up/down at " + MaxGrade * 100f + "% slope: spread the points out or move the crossing away from the ends");
+            else
+                CheckSteepGround(plan, distance, ground, heights, maxSlope);
 
             for (int i = 0; i < n; i++)
             {
@@ -230,7 +264,7 @@ namespace RealisticRoads
         {
             var bridge = Variant(info, "m_bridgeInfo");
             if (bridge == null || bridge.m_netAI == null) return false;
-            var f = bridge.m_netAI.GetType().GetField("m_doubleLength", BindingFlags.Public | BindingFlags.Instance);
+            var f = Field(bridge.m_netAI.GetType(), "m_doubleLength");
             return f != null && f.FieldType == typeof(bool) && (bool)f.GetValue(bridge.m_netAI);
         }
 
@@ -254,8 +288,27 @@ namespace RealisticRoads
         public static NetInfo Variant(NetInfo info, string field)
         {
             if (info == null || info.m_netAI == null) return null;
-            var f = info.m_netAI.GetType().GetField(field, BindingFlags.Public | BindingFlags.Instance);
+            var f = Field(info.m_netAI.GetType(), field);
             return f != null ? f.GetValue(info.m_netAI) as NetInfo : null;
+        }
+
+        // Field lookups by AI type, cached: the preview plans every frame.
+        // Locked because the builder asks from the simulation thread.
+        private static readonly Dictionary<string, FieldInfo> fields = new Dictionary<string, FieldInfo>();
+
+        private static FieldInfo Field(System.Type type, string name)
+        {
+            string key = type.FullName + "." + name;
+            lock (fields)
+            {
+                FieldInfo field;
+                if (!fields.TryGetValue(key, out field))
+                {
+                    field = type.GetField(name, BindingFlags.Public | BindingFlags.Instance);
+                    fields[key] = field;
+                }
+                return field;
+            }
         }
 
         private static float WaterExtra(List<WaterRun> runs, float at)
@@ -298,9 +351,11 @@ namespace RealisticRoads
             float low = crossing.Point.y - CutDepth;
 
             // Existing nodes along the road on both sides, until the ramp fits.
-            var back = WalkChain(crossing.Segment, segment.m_startNode, crossing.ExistingT * length, ramp, out problem);
+            // Both walks share one visited set: on a ring road they would meet.
+            var visited = new HashSet<ushort>();
+            var back = WalkChain(crossing.Segment, segment.m_startNode, crossing.ExistingT * length, ramp, visited, out problem);
             if (back == null) { problem = problem + " on the " + crossing.ExistingName; return null; }
-            var forward = WalkChain(crossing.Segment, segment.m_endNode, (1f - crossing.ExistingT) * length, ramp, out problem);
+            var forward = WalkChain(crossing.Segment, segment.m_endNode, (1f - crossing.ExistingT) * length, ramp, visited, out problem);
             if (forward == null) { problem = problem + " on the " + crossing.ExistingName; return null; }
 
             // One line of nodes: far back ... start, split points, end ... far forward.
@@ -337,7 +392,10 @@ namespace RealisticRoads
             for (int i = 0; i < m; i++)
             {
                 minH[i] = -Unlimited;
-                maxH[i] = i >= firstSplit && i < firstSplit + 3 ? low : Unlimited;
+                // Under our deck: the split points, and any existing node that close
+                // to the crossing (a node near the segment's end can be under it too).
+                bool underDeck = (i >= firstSplit && i < firstSplit + 3) || Mathf.Abs(along[i]) <= span;
+                maxH[i] = underDeck ? low : Unlimited;
                 if (fixedEnd[i]) { minH[i] = maxH[i] = current[i]; isFixed[i] = true; }
             }
             float[] heights;
@@ -387,13 +445,19 @@ namespace RealisticRoads
         // Nodes along an existing road from 'node' (reached by 'segment',
         // 'distance' metres from the crossing) until 'reach' metres. Each entry:
         // node id and its distance. Null if a junction comes first.
-        private static List<KeyValuePair<ushort, float>> WalkChain(ushort segment, ushort node, float distance, float reach, out string problem)
+        private static List<KeyValuePair<ushort, float>> WalkChain(ushort segment, ushort node, float distance, float reach,
+            HashSet<ushort> visited, out string problem)
         {
             problem = null;
             var net = NetManager.instance;
             var chain = new List<KeyValuePair<ushort, float>>();
             for (int guard = 0; guard < 64; guard++)
             {
+                if (!visited.Add(node))
+                {
+                    problem = "The road loops back on itself too close to the crossing";
+                    return null;
+                }
                 chain.Add(new KeyValuePair<ushort, float>(node, distance));
                 if (distance >= reach) return chain;
                 int count = NetworkBuilder.SegmentCount(node);
@@ -443,25 +507,101 @@ namespace RealisticRoads
             isFixed[i] = true;
         }
 
-        // Applies a height limit to every node within 'window' metres of node k.
-        private static void Limit(float[] distance, int k, float window, float height, bool isMin, float[] limits)
+        // Applies a height limit to every node within 'window' metres of node k
+        // (k sits exactly on the crossing). The limit gets a margin of the
+        // ramp's slope over the window, so the road still clears where the
+        // other road's edge is even while ramping away from k. 'neighbours'
+        // also holds the nodes either side of k (tunnels must reach past the
+        // road above); otherwise they are free to ramp.
+        private static void Limit(float[] distance, int k, float window, float height, bool isMin, float[] limits, bool neighbours)
         {
+            float margin = MaxGrade * window;
+            float limit = isMin ? height + margin : height - margin;
             for (int i = 0; i < distance.Length; i++)
             {
-                if (i != k && Mathf.Abs(distance[i] - distance[k]) > window) continue;
-                limits[i] = isMin ? Mathf.Max(limits[i], height) : Mathf.Min(limits[i], height);
+                bool near = i == k || Mathf.Abs(distance[i] - distance[k]) <= window ||
+                            (neighbours && Mathf.Abs(i - k) == 1);
+                if (!near) continue;
+                limits[i] = isMin ? Mathf.Max(limits[i], limit) : Mathf.Min(limits[i], limit);
             }
-            // The pieces on both sides of the crossing must be level over it too.
-            if (k > 0) limits[k - 1] = isMin ? Mathf.Max(limits[k - 1], height) : Mathf.Min(limits[k - 1], height);
-            if (k < limits.Length - 1) limits[k + 1] = isMin ? Mathf.Max(limits[k + 1], height) : Mathf.Min(limits[k + 1], height);
         }
 
-        private static void Mark(float[] distance, int k, float window, bool[] marks)
+        private static void Mark(float[] distance, int k, float window, bool[] marks, bool neighbours)
         {
             for (int i = 0; i < distance.Length; i++)
-                if (Mathf.Abs(distance[i] - distance[k]) <= window) marks[i] = true;
-            if (k > 0) marks[k - 1] = true;
-            if (k < marks.Length - 1) marks[k + 1] = true;
+                if (Mathf.Abs(distance[i] - distance[k]) <= window || (neighbours && Mathf.Abs(i - k) == 1)) marks[i] = true;
+        }
+
+        private static WaterRun RunAt(List<WaterRun> runs, float at, float tolerance)
+        {
+            if (runs == null) return null;
+            foreach (var run in runs)
+                if (at >= run.From - tolerance && at <= run.To + tolerance) return run;
+            return null;
+        }
+
+        // Plain ground steeper than the road allows (the vanilla tool refuses those too).
+        private static void CheckSteepGround(Plan plan, float[] distance, float[] ground, float[] heights, float maxSlope)
+        {
+            for (int i = 1; i < heights.Length; i++)
+            {
+                bool onGround = Mathf.Abs(heights[i] - ground[i]) <= 0.5f && Mathf.Abs(heights[i - 1] - ground[i - 1]) <= 0.5f;
+                float run = Mathf.Max(distance[i] - distance[i - 1], 0.01f);
+                float grade = Mathf.Abs(heights[i] - heights[i - 1]) / run;
+                if (!onGround || grade <= maxSlope) continue;
+                plan.Problems.Add("Too steep for this road: " + (grade * 100f).ToString("F0") + "% (it allows " +
+                                  (maxSlope * 100f).ToString("F0") + "%) about " + distance[i - 1].ToString("F0") + " m along");
+                return;
+            }
+        }
+
+        // A curve that crosses the same piece of road twice can make junctions,
+        // bridges or tunnels there, but not lower it or bridge it twice.
+        private static void CheckRepeatedCrossings(Plan plan)
+        {
+            for (int a = 0; a < plan.Crossings.Count; a++)
+            for (int b = a + 1; b < plan.Crossings.Count; b++)
+            {
+                var first = plan.Crossings[a];
+                var second = plan.Crossings[b];
+                if (first.Segment != second.Segment) continue;
+                if (ChangesExisting(first) || ChangesExisting(second))
+                {
+                    plan.Problems.Add("The curve crosses the same piece of the " + first.ExistingName +
+                                      " twice: use junctions, bridges or tunnels there (not overpass/underpass)");
+                    return;
+                }
+            }
+        }
+
+        private static bool ChangesExisting(Crossing crossing)
+        {
+            return crossing.Type == CrossingType.Overpass || crossing.Type == CrossingType.Underpass;
+        }
+
+        // Two overpasses lowering the same road (or overlapping stretches of it)
+        // would each cut and move the same pieces.
+        private static void CheckLoweringsApart(Plan plan)
+        {
+            // Node ids as they are, segment ids moved past the node range.
+            var used = new Dictionary<int, int>();
+            foreach (var pair in plan.Lowerings)
+            {
+                var touched = new HashSet<int>();
+                foreach (ushort node in pair.Value.Nodes) touched.Add(node);
+                touched.Add(0x10000 + pair.Value.Segment);
+                foreach (int id in touched)
+                {
+                    int other;
+                    if (used.TryGetValue(id, out other) && other != pair.Key)
+                    {
+                        plan.Problems.Add("Two overpasses would lower the same stretch of the " + plan.Crossings[pair.Key].ExistingName +
+                                          ": make one of them a bridge");
+                        return;
+                    }
+                    used[id] = pair.Key;
+                }
+            }
         }
 
         private static void CheckVariants(NetInfo info, Plan plan, bool hasElevated)
@@ -487,16 +627,33 @@ namespace RealisticRoads
 
             for (int i = 0; i < plan.Points.Count; i++)
             {
-                var kind = plan.Kinds[i];
-                if (kind != NodeKind.Cut && kind != NodeKind.Tunnel && kind != NodeKind.Slope) continue;
+                if (!IsBelow(plan.Kinds[i])) continue;
                 if (water[i])
                 {
                     plan.Problems.Add("Can't go under here: there is water");
                     return;
                 }
+            }
 
-                // Other networks near this lowered node and at about the same depth.
-                Vector3 p = plan.Points[i];
+            // Probe every lowered node and points along each lowered piece:
+            // nodes are up to 80 m apart, too far to see a tunnel in between.
+            var probes = new List<KeyValuePair<Vector3, float>>();   // point, ground there
+            for (int i = 0; i < plan.Points.Count; i++)
+            {
+                if (IsBelow(plan.Kinds[i])) probes.Add(new KeyValuePair<Vector3, float>(plan.Points[i], ground[i]));
+                if (i + 1 >= plan.Points.Count || !(IsBelow(plan.Kinds[i]) || IsBelow(plan.Kinds[i + 1]))) continue;
+                for (int k = 1; k < ProbesPerPiece; k++)
+                {
+                    float t = k / (float)ProbesPerPiece;
+                    probes.Add(new KeyValuePair<Vector3, float>(Vector3.Lerp(plan.Points[i], plan.Points[i + 1], t),
+                        Mathf.Lerp(ground[i], ground[i + 1], t)));
+                }
+            }
+
+            foreach (var probe in probes)
+            {
+                // Other networks near this point and at about the same depth.
+                Vector3 p = probe.Key;
                 foreach (var segment in NearbySegments(p, info.m_halfWidth + 40f))
                 {
                     if (checkedSegments.Contains(segment)) continue;
@@ -507,7 +664,7 @@ namespace RealisticRoads
                     foreach (var q in samples)
                     {
                         if (CurveMath.FlatDistance(p, q) < reach && Mathf.Abs(q.y - p.y) < UnderClearance &&
-                            q.y < ground[i] - 1f)
+                            q.y < probe.Value - 1f)
                         {
                             plan.Problems.Add("Too close to " + segments[segment].Info.name + " underground (" +
                                               Mathf.Abs(q.y - p.y).ToString("F0") + " m apart)");
@@ -516,6 +673,11 @@ namespace RealisticRoads
                     }
                 }
             }
+        }
+
+        private static bool IsBelow(NodeKind kind)
+        {
+            return kind == NodeKind.Cut || kind == NodeKind.Tunnel || kind == NodeKind.Slope;
         }
 
         // Passing over or under something without connecting needs headroom.

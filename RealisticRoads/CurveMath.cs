@@ -52,11 +52,11 @@ namespace RealisticRoads
                 float span = FlatDistance(p1, p2);
                 Vector3 p0 = i > 0 ? points[i - 1]
                     : startN != Vector3.zero ? p1 - startN * span
-                    : points.Count > 2 ? p1 * 3f - p2 * 3f + points[2]
+                    : points.Count > 2 ? Extrapolate(p1, p2, points[2])
                     : p1 + (p1 - p2);
                 Vector3 p3 = i + 2 < points.Count ? points[i + 2]
                     : endN != Vector3.zero ? p2 + endN * span
-                    : points.Count > 2 ? p2 * 3f - p1 * 3f + points[i - 1]
+                    : points.Count > 2 ? Extrapolate(p2, p1, points[i - 1])
                     : p2 + (p2 - p1);
 
                 for (int s = 1; s <= SamplesPerSpan; s++)
@@ -66,6 +66,31 @@ namespace RealisticRoads
                 }
             }
             return result;
+        }
+
+        // A phantom point one span before 'a', continuing the parabola through
+        // a, b, c parameterised by their real distances (the even-spacing
+        // formula 3a - 3b + c throws the point far off, even ahead of 'a', when
+        // a-b is short and b-c long). Falls back to mirroring b if the
+        // parabola would still turn the start round.
+        public static Vector3 Extrapolate(Vector3 a, Vector3 b, Vector3 c)
+        {
+            float ab = Mathf.Max(FlatDistance(a, b), 0.01f);
+            float bc = Mathf.Max(FlatDistance(b, c), 0.01f);
+            // Lagrange weights of the parabola through (0, a), (ab, b), (ab + bc, c) at -ab.
+            float wa = 2f * (2f * ab + bc) / (ab + bc);
+            float wb = -(2f * ab + bc) / bc;
+            float wc = 2f * ab * ab / ((ab + bc) * bc);
+            Vector3 phantom = a * wa + b * wb + c * wc;
+            Vector3 mirror = a + (a - b);
+
+            Vector3 back = FlatNormal(a - b);
+            Vector3 offset = phantom - a;
+            float along = offset.x * back.x + offset.z * back.z;
+            float flat = Mathf.Sqrt(offset.x * offset.x + offset.z * offset.z);
+            if (flat < 0.01f || along < flat * 0.5f) return mirror;   // turned more than 60 degrees
+            if (flat > ab * 2f) phantom = a + offset * (ab * 2f / flat); // keep it about one span away
+            return phantom;
         }
 
         // Adds guide points so the curve leaves its first point heading
@@ -172,6 +197,90 @@ namespace RealisticRoads
             }
         }
 
+        // Cuts a curve into pieces of about 'spacing' metres on straight
+        // stretches and shorter ones (down to 'minSpacing') only where it bends,
+        // so one tight corner doesn't chop the whole road into short pieces.
+        // Returns the points (first and last are the polyline's ends) and the
+        // ground direction at each; 'ok' is false if a piece still bends more
+        // than 'maxBend'. Builds its distance and turn tables once (no
+        // searching by trial division).
+        public static void DivideAdaptive(IList<Vector3> polyline, float spacing, float minSpacing, float maxBend,
+            out List<Vector3> points, out List<Vector3> tangents, out bool ok)
+        {
+            points = new List<Vector3>();
+            tangents = new List<Vector3>();
+            ok = true;
+            int n = polyline.Count;
+            if (n < 2) return;
+
+            // Distance along the curve and total turning up to each sample.
+            var along = new float[n];
+            var turned = new float[n];
+            for (int k = 1; k < n; k++)
+            {
+                along[k] = along[k - 1] + FlatDistance(polyline[k - 1], polyline[k]);
+                turned[k] = turned[k - 1];
+                if (k + 1 < n) turned[k] += BendAngle(polyline[k] - polyline[k - 1], polyline[k + 1] - polyline[k]);
+            }
+            float total = along[n - 1];
+            if (total < 0.01f) return;
+
+            // Leave room in each piece's bend allowance for the blended end directions.
+            float budget = maxBend * 0.8f;
+            var cuts = new List<float> { 0f };
+            float s = 0f;
+            // Keep cutting while what is left is too long, or still bends too much.
+            while (total - s > spacing || (total - s > minSpacing && TurnBetween(along, turned, s, total) > budget))
+            {
+                float length = spacing;
+                while (length > minSpacing && TurnBetween(along, turned, s, s + length) > budget)
+                    length = Mathf.Max(minSpacing, length * 0.9f);
+                s += length;
+                cuts.Add(s);
+            }
+            // A short last piece shares the length with the one before it.
+            float rest = total - s;
+            if (cuts.Count > 1 && rest < spacing * 0.5f)
+            {
+                float previous = cuts[cuts.Count - 1] - cuts[cuts.Count - 2];
+                float even = (previous + rest) * 0.5f;
+                float start = cuts[cuts.Count - 2];
+                if (TurnBetween(along, turned, start, start + even) <= budget &&
+                    TurnBetween(along, turned, start + even, total) <= budget)
+                    cuts[cuts.Count - 1] = start + even;
+            }
+            cuts.Add(total);
+
+            for (int c = 0; c < cuts.Count; c++)
+            {
+                Vector3 point, tangent;
+                PointAt(polyline, cuts[c], out point, out tangent);
+                if (c == 0) point = polyline[0];
+                if (c == cuts.Count - 1) point = polyline[n - 1];
+                points.Add(point);
+                tangents.Add(tangent);
+            }
+            ok = MaxBend(tangents) <= maxBend;
+        }
+
+        // Total turning of the curve between two distances along it.
+        private static float TurnBetween(float[] along, float[] turned, float from, float to)
+        {
+            return TurnedAt(along, turned, to) - TurnedAt(along, turned, from);
+        }
+
+        private static float TurnedAt(float[] along, float[] turned, float distance)
+        {
+            int low = 0, high = along.Length - 1;
+            while (low < high)
+            {
+                int mid = (low + high + 1) / 2;
+                if (along[mid] <= distance) low = mid;
+                else high = mid - 1;
+            }
+            return turned[low];
+        }
+
         // The largest bend of any single piece.
         public static float MaxBend(IList<Vector3> tangents)
         {
@@ -252,8 +361,9 @@ namespace RealisticRoads
         // Heights for the nodes of a road at ground distances 'distance':
         // each node starts on 'ground', is kept within [minH, maxH], and the
         // slope between neighbours stays within 'maxGrade' around lifted or
-        // lowered nodes (plain ground keeps following the terrain). Fixed
-        // nodes (minH == maxH and isFixed) never move. Returns false if the
+        // lowered nodes (plain ground keeps following the terrain, also next to
+        // a fixed node on the ground). Fixed nodes (minH == maxH and isFixed)
+        // never move. Returns false if the
         // limits cannot all be met, e.g. a flyover too close to a fixed end.
         public static bool SolveHeights(float[] distance, float[] ground, float[] minH, float[] maxH, bool[] isFixed,
             float maxGrade, out float[] heights)
@@ -266,8 +376,8 @@ namespace RealisticRoads
             for (int pass = 0; pass < 24; pass++)
             {
                 bool changed = false;
-                // Up and down, both directions: lifted/fixed nodes raise their neighbours,
-                // lowered/fixed nodes lower theirs.
+                // Up and down, both directions: lifted nodes raise their neighbours,
+                // lowered nodes lower theirs.
                 for (int dir = 0; dir < 2; dir++)
                 {
                     for (int k = 1; k < n; k++)
@@ -282,9 +392,12 @@ namespace RealisticRoads
                         // node follows lower ground (a tunnel comes out into a valley).
                         bool lifted = heights[i] > ground[i] + 0.5f;
                         bool lowered = heights[i] < ground[i] - 0.5f;
-                        if (isFixed[j] || heights[j] > ground[j] + 0.5f || (lifted && heights[j] > heights[i]))
+                        // A fixed node only shapes its neighbours when it is itself off the
+                        // ground (an elevated road end, a deck): a ground junction on a hill
+                        // must not drag the next node off the hillside.
+                        if (heights[j] > ground[j] + 0.5f || (lifted && heights[j] > heights[i]))
                             h = Mathf.Max(h, heights[j] - maxGrade * run);
-                        if (isFixed[j] || heights[j] < ground[j] - 0.5f || (lowered && heights[j] < heights[i]))
+                        if (heights[j] < ground[j] - 0.5f || (lowered && heights[j] < heights[i]))
                             h = Mathf.Min(h, heights[j] + maxGrade * run);
                         h = Mathf.Clamp(h, minH[i], maxH[i]);
                         if (Mathf.Abs(h - heights[i]) > 0.001f)
@@ -302,12 +415,60 @@ namespace RealisticRoads
             {
                 if (heights[i] < minH[i] - 0.01f || heights[i] > maxH[i] + 0.01f) return false;
                 if (i == 0) continue;
-                bool shaped = isFixed[i] || isFixed[i - 1] ||
-                              Mathf.Abs(heights[i] - ground[i]) > 0.5f || Mathf.Abs(heights[i - 1] - ground[i - 1]) > 0.5f;
+                bool shaped = Mathf.Abs(heights[i] - ground[i]) > 0.5f || Mathf.Abs(heights[i - 1] - ground[i - 1]) > 0.5f;
                 float run = Mathf.Abs(distance[i] - distance[i - 1]);
                 if (shaped && Mathf.Abs(heights[i] - heights[i - 1]) > maxGrade * run + 0.05f) return false;
             }
             return true;
+        }
+
+        // Dry gorges and steep valleys: where the road would follow the ground
+        // down a slope steeper than 'maxSlope' (the road's own limit) into a
+        // dip it has to climb out of again, the bottom node gets a lower limit
+        // so it becomes a viaduct from the rim; LevelSpans then levels it rim to
+        // rim. A slope that only goes one way is left alone (the planner
+        // reports it as too steep). Returns true if any limit was raised.
+        public static bool LiftValleys(float[] distance, float[] heights, bool[] isFixed, float maxSlope, float maxGrade,
+            float rimReach, float[] minH)
+        {
+            int n = heights.Length;
+            bool raised = false;
+            for (int i = 0; i < n; i++)
+            {
+                if (isFixed[i]) continue;
+                bool steep = false;
+                int rim = -1;
+                for (int j = i - 1; j <= i + 1; j += 2)
+                {
+                    if (j < 0 || j >= n) continue;
+                    float run = Mathf.Max(Mathf.Abs(distance[j] - distance[i]), 0.01f);
+                    if ((heights[j] - heights[i]) / run > maxSlope)
+                    {
+                        steep = true;
+                        if (rim < 0 || heights[j] > heights[rim]) rim = j;
+                    }
+                }
+                if (!steep) continue;
+                // A dip: the ground rises on both sides within reach.
+                if (!RisesWithin(distance, heights, i, -1, rimReach) || !RisesWithin(distance, heights, i, 1, rimReach)) continue;
+                float lift = heights[rim] - maxGrade * Mathf.Abs(distance[rim] - distance[i]);
+                if (lift > minH[i] + 0.01f && lift > heights[i] + 0.5f)
+                {
+                    minH[i] = lift;
+                    raised = true;
+                }
+            }
+            return raised;
+        }
+
+        private static bool RisesWithin(float[] distance, float[] heights, int from, int step, float reach)
+        {
+            for (int k = from + step; k >= 0 && k < heights.Length; k += step)
+            {
+                if (Mathf.Abs(distance[k] - distance[from]) > reach) return false;
+                if (heights[k] > heights[from] + 2f) return true;
+            }
+            return false;
         }
 
         // Bridges span: every run of lifted nodes between two nodes on the

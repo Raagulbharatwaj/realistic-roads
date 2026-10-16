@@ -17,6 +17,7 @@ namespace RealisticRoads
         // An existing segment we cut into pieces, so undo can put it back.
         private class Split
         {
+            public ushort Original;                 // the segment that was cut (id reused for the restored one)
             public NetInfo Info;
             public ushort StartNode, EndNode;
             public Vector3 StartDirection, EndDirection;
@@ -24,6 +25,9 @@ namespace RealisticRoads
             public readonly List<ushort> Segments = new List<ushort>();
             public readonly List<ushort> Nodes = new List<ushort>();
         }
+
+        // Simulation thread: nodes at both ends of every segment of the last build.
+        private static readonly HashSet<ushort> lastBuiltEnds = new HashSet<ushort>();
 
         // What one build created or changed, so one undo reverses all of it.
         private class Build
@@ -47,6 +51,8 @@ namespace RealisticRoads
                 if (!BuildNow(info, plan)) return;
                 foreach (var node in splitNodes)
                     if (node != 0) SmoothSplits.EnableIfSplit(node);
+                // Junctions the new road makes get the CS2 look (smooth splits excepted).
+                foreach (var node in lastBuiltEnds) Junctions.EnableIfJunction(node);
             });
         }
 
@@ -86,8 +92,10 @@ namespace RealisticRoads
                     if (!crossing.Connects && !underpass && !overpass) continue;
                     if (!touched.Add(crossing.Segment))
                     {
-                        Mod.Log("  Crossing " + (c + 1) + " is a second crossing of the same segment; left as is");
-                        continue;
+                        // Junctions on the same segment were all made with the first one.
+                        if (crossing.Connects && nodeIds[plan.CrossingIndex[c]] != 0) continue;
+                        // The planner refuses other repeats; never build straight through a road.
+                        throw new Exception("crossing " + (c + 1) + " crosses a road that is already being changed");
                     }
                     if ((net.m_segments.m_buffer[crossing.Segment].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None)
                         throw new Exception("the road at crossing " + (c + 1) + " no longer exists");
@@ -105,6 +113,7 @@ namespace RealisticRoads
                             Vector3 position = net.m_nodes.m_buffer[split.Nodes[i]].m_position;
                             position.y = lowering.SplitHeights[i];
                             net.MoveNode(split.Nodes[i], position);
+                            RefreshDirections(split.Nodes[i]);
                         }
                         for (int i = 0; i < lowering.Nodes.Count; i++)
                         {
@@ -114,24 +123,57 @@ namespace RealisticRoads
                             build.Moves.Add(new KeyValuePair<ushort, Vector3>(node, position));
                             position.y = lowering.NodeHeights[i];
                             net.MoveNode(node, position);
+                            RefreshDirections(node);
                         }
                         continue;
                     }
 
                     if (crossing.Connects)
                     {
-                        // Right next to an existing node: connect there instead of cutting.
+                        // Every junction with this segment (a curve can cross it more
+                        // than once) in one cut, in order along the segment.
                         var existingSegment = net.m_segments.m_buffer[crossing.Segment];
-                        float fromStart = crossing.ExistingT * existingSegment.m_averageLength;
-                        float fromEnd = (1f - crossing.ExistingT) * existingSegment.m_averageLength;
-                        if (fromStart < NodeSnap || fromEnd < NodeSnap)
+                        var group = new List<int>();
+                        for (int other = c; other < plan.Crossings.Count; other++)
+                            if (plan.Crossings[other].Segment == crossing.Segment && plan.Crossings[other].Connects) group.Add(other);
+                        group.Sort((x, y) => plan.Crossings[x].ExistingT.CompareTo(plan.Crossings[y].ExistingT));
+
+                        var cutAt = new List<float>();
+                        var cutFor = new List<int>();
+                        foreach (int g in group)
                         {
-                            nodeIds[plan.CrossingIndex[c]] = fromStart < fromEnd ? existingSegment.m_startNode : existingSegment.m_endNode;
-                            continue;
+                            // Right next to an existing node: connect there instead of cutting,
+                            // and move our point onto it so the road doesn't kink.
+                            float fromStart = plan.Crossings[g].ExistingT * existingSegment.m_averageLength;
+                            float fromEnd = (1f - plan.Crossings[g].ExistingT) * existingSegment.m_averageLength;
+                            int k = plan.CrossingIndex[g];
+                            if (fromStart < NodeSnap || fromEnd < NodeSnap)
+                            {
+                                nodeIds[k] = fromStart < fromEnd ? existingSegment.m_startNode : existingSegment.m_endNode;
+                                points[k] = net.m_nodes.m_buffer[nodeIds[k]].m_position;
+                                continue;
+                            }
+                            if (cutAt.Count > 0 && plan.Crossings[g].ExistingT - cutAt[cutAt.Count - 1] < 0.01f)
+                            {
+                                nodeIds[k] = ushort.MaxValue;   // same spot as the previous cut: filled in below
+                                cutFor.Add(-k - 1);
+                                continue;
+                            }
+                            cutAt.Add(plan.Crossings[g].ExistingT);
+                            cutFor.Add(k);
                         }
-                        var split = SplitSegment(crossing.Segment, new[] { crossing.ExistingT }, null);
-                        build.Splits.Add(split);
-                        nodeIds[plan.CrossingIndex[c]] = split.Nodes[0];
+                        if (cutAt.Count > 0)
+                        {
+                            var split = SplitSegment(crossing.Segment, cutAt.ToArray(), null);
+                            build.Splits.Add(split);
+                            int next = 0;
+                            ushort previous = 0;
+                            foreach (int k in cutFor)
+                            {
+                                if (k >= 0) { previous = split.Nodes[next++]; nodeIds[k] = previous; }
+                                else nodeIds[-k - 1] = previous;
+                            }
+                        }
                     }
                     else
                     {
@@ -163,6 +205,8 @@ namespace RealisticRoads
                         net.m_nodes.m_buffer[node].m_elevation = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(elevation)), 0, 255);
                     }
                     if (kind == NodeKind.Tunnel) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Underground;
+                    // Like the vanilla tool: nodes on (or dug into) the ground follow the terrain.
+                    if (kind == NodeKind.Ground || kind == NodeKind.Cut) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.OnGround;
                     if (plan.Middle != null && plan.Middle[i]) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Double;
                     nodeIds[i] = node;
                     build.Nodes.Add(node);
@@ -185,23 +229,33 @@ namespace RealisticRoads
                         else elevated++;
                     }
 
+                    // A tunnel ramp (slope) runs from its underground end up to the
+                    // surface, like the vanilla tool builds it, so the portal faces
+                    // the right way; 'invert' keeps the traffic direction.
+                    ushort from = nodeIds[i - 1], to = nodeIds[i];
+                    if (from == to)
+                    {
+                        // Two points of the curve snapped to the same existing node.
+                        Mod.Log("  Piece " + i + " starts and ends on node #" + from + "; skipped");
+                        continue;
+                    }
+                    bool invert = false;
+                    if (plan.Kinds[i] == NodeKind.Tunnel && plan.Kinds[i - 1] != NodeKind.Tunnel)
+                    {
+                        ushort t = from; from = to; to = t;
+                        Vector3 d = startDir; startDir = endDir; endDir = d;
+                        invert = true;
+                    }
+
                     ushort segment;
-                    if (!net.CreateSegment(out segment, ref sim.m_randomizer, segmentInfo, nodeIds[i - 1], nodeIds[i],
-                            startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex, false))
+                    if (!net.CreateSegment(out segment, ref sim.m_randomizer, segmentInfo, from, to,
+                            startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex, invert))
                         throw new Exception("CreateSegment failed for piece " + i);
+                    CalculateSegmentDirections(segment);
                     sim.m_currentBuildIndex++;
                     build.Segments.Add(segment);
                 }
 
-                if (plan.StripHalfWidth > 0f)
-                {
-                    foreach (ushort segment in build.Segments) LaneBundles.AddStrip(segment, plan.StripHalfWidth);
-                    foreach (ushort node in plan.LaneNodes) LaneBundles.AddLaneNode(node);
-                    foreach (ushort node in build.Nodes) net.UpdateNode(node, 0, -1);
-                    foreach (ushort node in plan.LaneNodes) net.UpdateNode(node, 0, -1);
-                    Mod.Log("  Lane road: " + build.Segments.Count + " segment(s) " + (plan.StripHalfWidth * 2f).ToString("F1") +
-                            " m wide, on " + plan.LaneNodes.Count + " lane node(s)");
-                }
                 int middles = 0;
                 if (plan.Middle != null) foreach (bool m in plan.Middle) if (m) middles++;
                 if (middles > 0) Mod.Log("  Suspension bridge: towers on every other node, " + middles + " middle node(s)");
@@ -210,6 +264,12 @@ namespace RealisticRoads
                 for (int c = 0; c < plan.Crossings.Count; c++)
                     Mod.Log("  Crossing " + (c + 1) + " with " + plan.Crossings[c].ExistingName + ": " + plan.Crossings[c].Describe());
 
+                lastBuiltEnds.Clear();
+                foreach (ushort segment in build.Segments)
+                {
+                    lastBuiltEnds.Add(net.m_segments.m_buffer[segment].m_startNode);
+                    lastBuiltEnds.Add(net.m_segments.m_buffer[segment].m_endNode);
+                }
                 undoStack.Add(build);
                 if (undoStack.Count > MaxUndo) undoStack.RemoveAt(0);
                 Mod.Log("Built " + build.Segments.Count + " segment(s) of " + info.name +
@@ -254,7 +314,11 @@ namespace RealisticRoads
 
             // Existing nodes we lowered go back up.
             for (int i = build.Moves.Count - 1; i >= 0; i--)
-                if (NodeExists(build.Moves[i].Key)) net.MoveNode(build.Moves[i].Key, build.Moves[i].Value);
+            {
+                if (!NodeExists(build.Moves[i].Key)) continue;
+                net.MoveNode(build.Moves[i].Key, build.Moves[i].Value);
+                RefreshDirections(build.Moves[i].Key);
+            }
 
             for (int i = build.Splits.Count - 1; i >= 0; i--)
             {
@@ -271,7 +335,24 @@ namespace RealisticRoads
                 ushort restored;
                 if (net.CreateSegment(out restored, ref sim.m_randomizer, split.Info, split.StartNode, split.EndNode,
                         split.StartDirection, split.EndDirection, sim.m_currentBuildIndex, sim.m_currentBuildIndex, split.Invert))
+                {
                     sim.m_currentBuildIndex++;
+                    // The restored road has a new id: older builds still on the undo
+                    // stack may refer to it by the old one (e.g. they had cut it).
+                    Remap(split.Original, restored);
+                }
+            }
+        }
+
+        private static void Remap(ushort oldSegment, ushort newSegment)
+        {
+            foreach (var build in undoStack)
+            {
+                for (int i = 0; i < build.Segments.Count; i++)
+                    if (build.Segments[i] == oldSegment) build.Segments[i] = newSegment;
+                foreach (var split in build.Splits)
+                    for (int i = 0; i < split.Segments.Count; i++)
+                        if (split.Segments[i] == oldSegment) split.Segments[i] = newSegment;
             }
         }
 
@@ -293,6 +374,7 @@ namespace RealisticRoads
             var s = net.m_segments.m_buffer[segment];
             var split = new Split
             {
+                Original = segment,
                 Info = s.Info,
                 StartNode = s.m_startNode,
                 EndNode = s.m_endNode,
@@ -316,9 +398,13 @@ namespace RealisticRoads
                 if (!net.CreateNode(out node, ref sim.m_randomizer, split.Info, position, sim.m_currentBuildIndex))
                     throw new Exception("could not add a node to " + split.Info.name);
                 sim.m_currentBuildIndex++;
+                // A cut in a road on the ground stays on the ground.
+                var nodes = net.m_nodes.m_buffer;
+                if ((nodes[split.StartNode].m_flags & nodes[split.EndNode].m_flags & NetNode.Flags.OnGround) != NetNode.Flags.None)
+                    nodes[node].m_flags |= NetNode.Flags.OnGround;
                 split.Nodes.Add(node);
                 chain.Add(node);
-                directions.Add(derivative / flat);
+                directions.Add(new Vector3(derivative.x / flat, 0f, derivative.z / flat));
             }
             chain.Add(split.EndNode);
 
@@ -332,6 +418,7 @@ namespace RealisticRoads
                         startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex, split.Invert))
                     throw new Exception("could not rebuild " + split.Info.name);
                 sim.m_currentBuildIndex++;
+                CalculateSegmentDirections(piece);
                 split.Segments.Add(piece);
             }
             return split;
@@ -486,6 +573,38 @@ namespace RealisticRoads
         public static Vector3 HalfSnapRunIn(ushort node, HalfSnap snap)
         {
             return HalfSnapMarker(node, snap) + snap.Forward * snap.RunIn;
+        }
+
+        // Flat directions, then the game works out the slope between the two
+        // nodes itself (as Network Multitool and Move It do).
+        private static void CalculateSegmentDirections(ushort segment)
+        {
+            var segments = NetManager.instance.m_segments.m_buffer;
+            segments[segment].m_startDirection = CurveMath.FlatNormal(segments[segment].m_startDirection);
+            segments[segment].m_endDirection = CurveMath.FlatNormal(segments[segment].m_endDirection);
+            segments[segment].m_startDirection = segments[segment].FindDirection(segment, segments[segment].m_startNode);
+            segments[segment].m_endDirection = segments[segment].FindDirection(segment, segments[segment].m_endNode);
+        }
+
+        // After a node moved up or down: fix the slope of its roads and redraw them.
+        private static void RefreshDirections(ushort node)
+        {
+            var net = NetManager.instance;
+            Vector3 min = net.m_nodes.m_buffer[node].m_position, max = min;
+            for (int i = 0; i < 8; i++)
+            {
+                ushort segment = net.m_nodes.m_buffer[node].GetSegment(i);
+                if (segment == 0) continue;
+                CalculateSegmentDirections(segment);
+                net.UpdateSegment(segment);
+                var s = net.m_segments.m_buffer[segment];
+                Vector3 other = net.m_nodes.m_buffer[s.m_startNode == node ? s.m_endNode : s.m_startNode].m_position;
+                min = Vector3.Min(min, other);
+                max = Vector3.Max(max, other);
+            }
+            // Re-dig / re-fill the terrain under the moved roads (as Move It does).
+            const float margin = 32f;
+            TerrainModify.UpdateArea(min.x - margin, min.z - margin, max.x + margin, max.z + margin, true, true, false);
         }
 
         private static Vector3 DirectionAway(ushort segment, ushort node)

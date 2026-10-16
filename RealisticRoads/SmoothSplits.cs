@@ -35,6 +35,7 @@ namespace RealisticRoads
         // junction piece between them shrinks to a thin, invisible strip.
         private const float BranchGap = 0.1f;
         private const float MovedTolerance = 2f;     // node moved/replaced => forget it
+        private const float ParallelSide = 0.02f;    // branches leaving within ~1 degree count as parallel
         // A branch at least this wide (relative to the trunk) is the trunk
         // carrying on, when the other branch is narrower: a ramp peeling off.
         private const float ThroughWidth = 0.85f;
@@ -130,29 +131,38 @@ namespace RealisticRoads
                 return false;
             }
 
-            var ids = new ushort[3];
+            // Locals, not arrays: this runs inside CalculateCorner, very often and
+            // on several threads.
+            ushort id0 = 0, id1 = 0, id2 = 0;
             int count = 0;
             for (int i = 0; i < 8; i++)
             {
                 ushort s = nodes[node].GetSegment(i);
                 if (s == 0) continue;
-                if (count == 3) { count++; break; }
-                ids[count++] = s;
+                if (count == 0) id0 = s; else if (count == 1) id1 = s; else if (count == 2) id2 = s;
+                count++;
             }
             if (count != 3)
             {
-                reason = "needs exactly 3 roads, has " + (count > 3 ? "more than 3" : count.ToString());
+                reason = "needs exactly 3 roads, has " + count;
+                return false;
+            }
+            if (segments[id0].Info == null || segments[id1].Info == null || segments[id2].Info == null)
+            {
+                reason = "a road is being rebuilt";
                 return false;
             }
 
-            var dirs = new Vector3[3];
-            for (int i = 0; i < 3; i++) dirs[i] = FlatNormal(DirectionAway(ref segments[ids[i]], node));
+            Vector3 dir0 = FlatNormal(DirectionAway(ref segments[id0], node));
+            Vector3 dir1 = FlatNormal(DirectionAway(ref segments[id1], node));
+            Vector3 dir2 = FlatNormal(DirectionAway(ref segments[id2], node));
 
             // The two branches are the pair with the smallest angle between them.
-            int a = 0, b = 1, t = 2;
-            float best = Vector3.Dot(dirs[0], dirs[1]);
-            if (Vector3.Dot(dirs[0], dirs[2]) > best) { best = Vector3.Dot(dirs[0], dirs[2]); a = 0; b = 2; t = 1; }
-            if (Vector3.Dot(dirs[1], dirs[2]) > best) { best = Vector3.Dot(dirs[1], dirs[2]); a = 1; b = 2; t = 0; }
+            ushort a = id0, b = id1, t = id2;
+            Vector3 da = dir0, db = dir1, dt = dir2;
+            float best = Vector3.Dot(dir0, dir1);
+            if (Vector3.Dot(dir0, dir2) > best) { best = Vector3.Dot(dir0, dir2); a = id0; b = id2; t = id1; da = dir0; db = dir2; dt = dir1; }
+            if (Vector3.Dot(dir1, dir2) > best) { best = Vector3.Dot(dir1, dir2); a = id1; b = id2; t = id0; da = dir1; db = dir2; dt = dir0; }
 
             float branchAngle = Mathf.Acos(Mathf.Clamp(best, -1f, 1f)) * Mathf.Rad2Deg;
             if (branchAngle > MaxSplitAngle)
@@ -161,8 +171,8 @@ namespace RealisticRoads
                 return false;
             }
 
-            var bisector = FlatNormal(dirs[a] + dirs[b]);
-            float trunkAngle = Mathf.Acos(Mathf.Clamp(Vector3.Dot(dirs[t], bisector), -1f, 1f)) * Mathf.Rad2Deg;
+            var bisector = FlatNormal(da + db);
+            float trunkAngle = Mathf.Acos(Mathf.Clamp(Vector3.Dot(dt, bisector), -1f, 1f)) * Mathf.Rad2Deg;
             if (trunkAngle < MinTrunkOpposite)
             {
                 reason = "third road is only " + trunkAngle.ToString("F0") + " degrees from the branches (min " + MinTrunkOpposite + ")";
@@ -170,34 +180,40 @@ namespace RealisticRoads
             }
 
             // Looking from the trunk towards the branches, which one is on the
-            // left? Judged by where each branch goes (its far end), which still
-            // works when a branch leaves parallel to the trunk.
-            var forward = -dirs[t];
-            float sideA = Vector3.Dot(FarDirection(ref segments[ids[a]], node), Left(forward));
-            float sideB = Vector3.Dot(FarDirection(ref segments[ids[b]], node), Left(forward));
+            // left? By the way each branch leaves the node; when they leave
+            // parallel (half-snapped branches), by where each is a quarter of
+            // the way along: never by the far end, which a looping ramp (a
+            // trumpet) can put on the other side.
+            var forward = -dt;
+            var left = Left(forward);
+            float sideA = Vector3.Dot(da, left), sideB = Vector3.Dot(db, left);
+            if (Mathf.Abs(sideA - sideB) < ParallelSide)
+            {
+                sideA = Vector3.Dot(QuarterDirection(a, node), left);
+                sideB = Vector3.Dot(QuarterDirection(b, node), left);
+            }
             if (sideA < sideB)
             {
-                int tmp = a; a = b; b = tmp;
-                float tmpSide = sideA; sideA = sideB; sideB = tmpSide;
+                ushort tmp = a; a = b; b = tmp;
             }
 
             // Each branch takes over a share of the trunk's width, in proportion
             // to its own width: the left branch from the trunk's left edge, the
             // right branch from its right edge.
-            float widthLeft = segments[ids[a]].Info.m_halfWidth;
-            float widthRight = segments[ids[b]].Info.m_halfWidth;
+            float widthLeft = segments[a].Info.m_halfWidth;
+            float widthRight = segments[b].Info.m_halfWidth;
 
-            shape.Trunk = ids[t];
-            shape.LeftBranch = ids[a];
-            shape.RightBranch = ids[b];
+            shape.Trunk = t;
+            shape.LeftBranch = a;
+            shape.RightBranch = b;
             shape.BranchAngle = branchAngle;
             shape.Forward = forward;
             shape.LeftShare = widthLeft / (widthLeft + widthRight);
-            float trunkWidth = segments[ids[t]].Info.m_halfWidth;
+            float trunkWidth = segments[t].Info.m_halfWidth;
             bool leftThrough = widthLeft >= trunkWidth * ThroughWidth;
             bool rightThrough = widthRight >= trunkWidth * ThroughWidth;
-            if (leftThrough && !rightThrough) shape.Through = ids[a];
-            else if (rightThrough && !leftThrough) shape.Through = ids[b];
+            if (leftThrough && !rightThrough) shape.Through = a;
+            else if (rightThrough && !leftThrough) shape.Through = b;
             reason = null;
             return true;
         }
@@ -342,12 +358,16 @@ namespace RealisticRoads
             return segment.m_startNode == node ? segment.m_startDirection : segment.m_endDirection;
         }
 
-        // Direction from this node to the segment's other end.
-        private static Vector3 FarDirection(ref NetSegment segment, ushort node)
+        // Direction from this node to the point a quarter of the way along the
+        // segment's curve.
+        private static Vector3 QuarterDirection(ushort segment, ushort node)
         {
-            var nodes = NetManager.instance.m_nodes.m_buffer;
-            ushort other = segment.m_startNode == node ? segment.m_endNode : segment.m_startNode;
-            return FlatNormal(nodes[other].m_position - nodes[node].m_position);
+            Vector3 a, b, c, d;
+            CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+            bool start = NetManager.instance.m_segments.m_buffer[segment].m_startNode == node;
+            Vector3 from = start ? a : d;
+            Vector3 quarter = CurveMath.Bezier(a, b, c, d, start ? 0.25f : 0.75f);
+            return FlatNormal(quarter - from);
         }
 
         private static Vector3 Left(Vector3 d)

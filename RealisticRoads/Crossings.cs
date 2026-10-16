@@ -27,11 +27,12 @@ namespace RealisticRoads
         public CrossingType Type;
         public float ExtraHeight;       // player's +/- on a Bridge crossing
         public float Skew = 1f;         // sine of the crossing angle (1 = square), set by RoadPlanner
+        public bool CanConnect;         // the two networks may join (road x road, rail x rail, road x rail)
 
         public bool ExistingAtGround => Mathf.Abs(ExistingElevation) < 2f;
 
         // Junction or level crossing: the new road connects to the existing one.
-        public bool Connects => Type == CrossingType.Junction && ExistingAtGround;
+        public bool Connects => Type == CrossingType.Junction && ExistingAtGround && CanConnect;
 
         // Which types make sense here. Lowering or bridging the existing
         // road only works where it is on the ground.
@@ -44,6 +45,9 @@ namespace RealisticRoads
                     return ExistingAtGround;
                 case CrossingType.Tunnel:
                     return ExistingElevation > -2f;
+                case CrossingType.Junction:
+                    // On the ground only networks that may join can meet there.
+                    return !ExistingAtGround || CanConnect;
                 default:
                     return true;
             }
@@ -113,6 +117,7 @@ namespace RealisticRoads
             int x0 = Cell(minX - GridCell), x1 = Cell(maxX + GridCell);
             int z0 = Cell(minZ - GridCell), z1 = Cell(maxZ + GridCell);
             var seen = new HashSet<ushort>();
+            var hits = new List<Crossing>();
             var samples = new Vector3[ExistingSamples + 1];
 
             for (int gz = z0; gz <= z1; gz++)
@@ -127,22 +132,29 @@ namespace RealisticRoads
                         segment = segments[current].m_nextGridSegment;
                         if (!seen.Add(current)) continue;
                         if ((segments[current].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
-                        ushort a = segments[current].m_startNode, b = segments[current].m_endNode;
-                        if (a == ignoreNodeA || a == ignoreNodeB || b == ignoreNodeA || b == ignoreNodeB) continue;
                         NetInfo existing = segments[current].Info;
-                        if (existing == null) continue;
+                        if (existing == null || existing.m_class == null) continue;
 
                         SampleSegment(current, samples);
-                        Crossing crossing = FirstCrossing(path, along, boxes, samples);
-                        if (crossing == null) continue;
+                        hits.Clear();
+                        AllCrossings(path, along, boxes, samples, hits);
+                        foreach (var crossing in hits)
+                        {
+                            // Where our road starts or ends on an existing node, the roads
+                            // at that node meet it there anyway; other crossings with them
+                            // further along (a loop back over one of them) still count.
+                            float near = existing.m_halfWidth + info.m_halfWidth + 2f;
+                            if (NearNode(crossing.Point, ignoreNodeA, near) || NearNode(crossing.Point, ignoreNodeB, near)) continue;
 
-                        crossing.Segment = current;
-                        crossing.SameType = existing.m_class.m_service == info.m_class.m_service &&
-                                            existing.m_class.m_subService == info.m_class.m_subService;
-                        crossing.ExistingElevation = crossing.Point.y - terrain.SampleRawHeightSmooth(crossing.Point);
-                        crossing.ExistingHalfWidth = existing.m_halfWidth;
-                        crossing.ExistingName = existing.name;
-                        result.Add(crossing);
+                            crossing.Segment = current;
+                            crossing.SameType = existing.m_class.m_service == info.m_class.m_service &&
+                                                existing.m_class.m_subService == info.m_class.m_subService;
+                            crossing.CanConnect = CanJoin(info, existing);
+                            crossing.ExistingElevation = crossing.Point.y - terrain.SampleRawHeightSmooth(crossing.Point);
+                            crossing.ExistingHalfWidth = existing.m_halfWidth;
+                            crossing.ExistingName = existing.name;
+                            result.Add(crossing);
+                        }
                     }
                 }
             }
@@ -171,7 +183,10 @@ namespace RealisticRoads
             NetSegment.CalculateMiddlePoints(a, s.m_startDirection, d, s.m_endDirection, smoothStart, smoothEnd, out b, out c);
         }
 
-        private static Crossing FirstCrossing(List<Vector3> path, float[] along, Vector4[] boxes, Vector3[] samples)
+        // Every place the path crosses the existing curve 'samples' (a curve
+        // can cross the same segment more than once). A crossing found again on
+        // the next path piece (exactly at a sample) is only counted once.
+        private static void AllCrossings(List<Vector3> path, float[] along, Vector4[] boxes, Vector3[] samples, List<Crossing> hits)
         {
             var box = new Vector4(samples[0].x, samples[0].z, samples[0].x, samples[0].z);
             for (int k = 1; k < samples.Length; k++) box = Grow(box, samples[k]);
@@ -185,16 +200,37 @@ namespace RealisticRoads
                 {
                     float tp, ts;
                     if (!CurveMath.Intersect(path[i - 1], path[i], samples[k - 1], samples[k], out tp, out ts)) continue;
-                    Vector3 onExisting = Vector3.Lerp(samples[k - 1], samples[k], ts);
-                    return new Crossing
+                    float distance = Mathf.Lerp(along[i - 1], along[i], tp);
+                    if (hits.Count > 0 && Mathf.Abs(hits[hits.Count - 1].Distance - distance) < 1f) continue;
+                    hits.Add(new Crossing
                     {
-                        Point = onExisting,
-                        Distance = Mathf.Lerp(along[i - 1], along[i], tp),
+                        Point = Vector3.Lerp(samples[k - 1], samples[k], ts),
+                        Distance = distance,
                         ExistingT = (k - 1 + ts) / (samples.Length - 1),
-                    };
+                    });
                 }
             }
-            return null;
+        }
+
+        private static bool NearNode(Vector3 point, ushort node, float radius)
+        {
+            if (node == 0) return false;
+            return CurveMath.FlatDistance(point, NetManager.instance.m_nodes.m_buffer[node].m_position) < radius;
+        }
+
+        // May a junction join these two networks? Roads with roads (highways
+        // included), rail with rail, and a road over a railway as a level
+        // crossing. Paths, canals, power lines and the like never join a road.
+        public static bool CanJoin(NetInfo ours, NetInfo theirs)
+        {
+            var a = ours.m_class;
+            var b = theirs.m_class;
+            if (a == null || b == null) return false;
+            if (a.m_service == b.m_service && a.m_subService == b.m_subService) return true;
+            bool aRoad = a.m_service == ItemClass.Service.Road, bRoad = b.m_service == ItemClass.Service.Road;
+            bool aTrain = a.m_subService.ToString() == "PublicTransportTrain";
+            bool bTrain = b.m_subService.ToString() == "PublicTransportTrain";
+            return (aRoad && bRoad) || (aRoad && bTrain) || (aTrain && bRoad);
         }
 
         private static Vector4 Grow(Vector4 box, Vector3 p)
