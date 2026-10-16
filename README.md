@@ -135,7 +135,33 @@ Marking Tool's fillers), the curb height, any gaps or flicker where the roads me
 From far away the vanilla junction is still drawn. If drawing fails, the log says
 `Drawing CS2-style junctions failed` and the junctions show as vanilla.
 
-## 8. What's next
+## 8. Road builder (RB, first version)
+Put a road together from lanes, CS2 Road Builder style. Design: [docs/R3_ROAD_BUILDER.md](docs/R3_ROAD_BUILDER.md).
+1. Click **RB** (below JN) or press **Ctrl+Shift+B**. The panel shows the road to scale, left to right in the direction
+   you draw it: `Walk` sidewalk, `<` / `>` car lanes (backward / forward), `Bus`, `Bk` bike, `P` parking, and medians
+   (`=` painted, `Grs` grass, `Tree` trees).
+2. Start from a **preset**, click a piece to select it, then **Add** lanes after it, **< >** to move it,
+   **Narrower / Wider** (0.5 m steps; both sidewalks change together), **Flip** its direction, **Style** for a
+   median, **Remove**. **Speed -/+** sets the speed limit. Errors (`!`) and warnings (`~`) show live under the road.
+3. Type a name and press **Create road**. It is saved to
+   `%LOCALAPPDATA%\Colossal Order\Cities_Skylines\RealisticRoads\Roads` and selected: press **RR** to draw it. After
+   you load a city again it is also in the vanilla roads menu, next to the road it was made from.
+4. Your roads are listed at the bottom: click one to load it into the editor, **Delete** removes it (only when none of
+   it is built). Create always makes a new road type; roads already built keep theirs.
+
+How it works for now (milestone R3.2): the mod copies the closest vanilla road (e.g. Medium Road with grass for 2+2
+lanes with a grass median), with its elevated, bridge, slope and tunnel versions, and puts in your lanes. Traffic,
+parking, bus stops and bikes use your lanes; **the look is the vanilla road stretched to the new width**, so lane
+markings won't match your lanes yet (generated road surfaces are the next step, R3.3).
+
+Please check and send the log (search for `Road builder` and `Mesh `):
+- the panel works and Create says the road is selected; build it with RR (with a bridge and a tunnel);
+- cars, buses and bikes use the lanes you made (TM:PE's lane view helps);
+- save, quit to the menu, load the city again: the roads are still there and the road is in the roads menu;
+- if the log says `prefab indices changed`, don't save that city and send the log.
+Saved cities need the mod for these roads: without it the game reports them missing.
+
+## 9. What's next
 See [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md) for the current plan (R1-R4),
 [docs/R3_ROAD_BUILDER.md](docs/R3_ROAD_BUILDER.md) for the road builder design and
 [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) for the original brief.

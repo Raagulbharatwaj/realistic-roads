@@ -78,8 +78,10 @@ A road type is a `NetInfo` (a Unity component on a prefab GameObject). The field
 Rendering facts we already rely on for R2's junction renderer:
 
 - Segment meshes are bent along the Bezier by the `Custom/Net/Road` shader (left/right control matrices).
-- The shader scales the mesh across the road by `m_halfWidth`. A mesh built for a 16 m road therefore stretches to fit
-  a 24 m road. CS2's Road Builder relies on the same trick, and so will we for tunnels and slopes.
+- The shader places mesh vertices relative to `m_halfWidth` (x / halfWidth), so a mesh built for a 16 m road keeps its
+  16 m on a road type made 24 m wide. To stretch a vanilla mesh we scale a copy of its vertices: the asphalt stretches,
+  the sidewalks keep their shape and move out with the edge (`CrossSection.StretchX`). CS2's Road Builder stretches
+  vanilla pieces the same way; we use it for every version in R3.2 and keep it for tunnels and slopes.
 - Surfaces use the road material's `_MainTex`, `_XYSMap` and `_APRMap` (alpha, pavement, road). `_APRMap` decides which
   parts are tinted as asphalt and which as pavement.
 
@@ -252,6 +254,20 @@ Each milestone is one PR, and each ends with something to check in game.
 | R3.5 | Props: lights, arrows, traffic lights, signs, median trees, bus stops. | Traffic lights at junctions; arrows match lanes; bus stop works. |
 | R3.6 | RB panel, presets, library, live errors. | Make a road from scratch in the panel. |
 | R3.7 | Thumbnails and vanilla menu entry, Convert to vanilla, config changes on built roads, city configs copied to the library. | Share a save to a fresh game folder; uninstall path. |
+
+### Status
+
+- **R3.1 done:** `RoadConfig.cs` (config, presets, `CrossSection.Compose`, `StretchX`) with unit tests in
+  `tests/CurveMath.Tests/RoadConfigTests.cs`; XML library and city copy in `RoadLibrary.cs`.
+- **R3.2 written, not yet tested in game:** `RoadTypes.cs` clones the base road and its variants, builds the lanes from
+  the base road's lanes (props, stop types and flags come along), stretches the meshes, scales costs, adds menu
+  names, and registers the types either in a `NetCollection.Awake` prefix (before a city's roads are matched to
+  prefabs) or straight away from the panel (`InitializePrefabs` + `BindPrefabs`, logged with a warning if the vanilla
+  prefab indices move). It logs each vanilla mesh's layout for R3.3.
+- **R3.6 basic panel:** `RoadBuilderPanel.cs` (RB, Ctrl+Shift+B): preview, add/move/resize/flip/remove, presets,
+  speed, library load/delete. Drag-to-reorder and edge dragging come later.
+- R3.0 (reading T.D.W.'s mod and NE2) could not be done from here: both are on sites this environment can't reach.
+  The load hook is the one most likely to need a fix after the first test in game.
 
 ## 6. Risks and open questions
 

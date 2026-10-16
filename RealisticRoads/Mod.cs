@@ -99,6 +99,14 @@ namespace RealisticRoads
         public override void OnLevelLoaded(LoadMode mode)
         {
             Mod.Log("City loaded, mode = " + mode);
+            try
+            {
+                RoadTypes.CreateMissing();
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Road builder: registering library roads failed", e);
+            }
             ToolActivator.Create(mode);
         }
 
