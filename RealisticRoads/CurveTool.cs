@@ -330,7 +330,8 @@ namespace RealisticRoads
                 pointSides.Add(side);
                 pointMarkers.Add(hoverMarker);
                 Mod.Log("Point " + points.Count + " at " + Format(p) +
-                        (hoverNode != 0 ? " (on node #" + hoverNode + (side > 0 ? ", left half" : side < 0 ? ", right half" : "") + ")" : ""));
+                        (hoverNode != 0 ? " (on node #" + hoverNode + (LaneMode ? (side != 0 ? ", lane slot " + side : "") :
+                        side > 0 ? ", left half" : side < 0 ? ", right half" : "") + ")" : ""));
             }
             else if (e.button == 1 && points.Count > 0)
             {

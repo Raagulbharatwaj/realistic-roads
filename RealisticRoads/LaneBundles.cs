@@ -31,7 +31,8 @@ namespace RealisticRoads
     public static class LaneBundles
     {
         public const string DataId = "RealisticRoads.LaneBundles";
-        public const string DefaultLaneRoad = "Highway Ramp";
+        // The vanilla one-lane ramp's prefab name (its menu title is "Highway Ramp").
+        private static readonly string[] DefaultLaneRoads = { "HighwayRamp", "Highway Ramp" };
         public const float RunIn = 16f;             // a lane leaves its road end parallel for this far
         private const float DefaultHalfWidth = 1.5f;
         private const float MovedTolerance = 2f;
@@ -92,7 +93,12 @@ namespace RealisticRoads
         public static NetInfo LaneRoad(NetInfo picked)
         {
             if (picked != null && CarLanes(picked) == 1 && IsOneWay(picked)) return picked;
-            return PrefabCollection<NetInfo>.FindLoaded(DefaultLaneRoad);
+            foreach (string name in DefaultLaneRoads)
+            {
+                var info = PrefabCollection<NetInfo>.FindLoaded(name);
+                if (info != null) return info;
+            }
+            return null;
         }
 
         // The lanes at a road end (a dead end, or a lane node) that lane roads
