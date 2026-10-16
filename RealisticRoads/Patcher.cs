@@ -202,12 +202,17 @@ namespace RealisticRoads
             throw new Exception("NetNode.RenderInstance(cameraInfo, nodeID, ...) not found");
         }
 
-        public static bool Prefix(ushort nodeID)
+        // Skipping the drawing must still step to the next instance: the
+        // caller loops until the list ends and logs "Invalid list detected!"
+        // (every frame) if the index never moves on.
+        public static bool Prefix(ushort nodeID, ref uint instanceIndex, ref RenderManager.Instance data)
         {
             if (failed) return true;
             try
             {
-                return !SmoothSplits.IsEnabled(nodeID) && !LaneBundles.IsLaneNode(nodeID);
+                if (!SmoothSplits.IsEnabled(nodeID) && !LaneBundles.IsLaneNode(nodeID)) return true;
+                instanceIndex = data.m_nextInstance;
+                return false;
             }
             catch (Exception e)
             {
