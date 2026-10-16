@@ -62,10 +62,20 @@ Tip: launch with `-noWorkshop` in Steam launch options to test with only local m
    - **bridge**: our road goes over on a flyover (9 m clearance), the existing one is untouched. **+/-** sets the height;
    - **overpass**: the existing road is lowered 8 m into a cutting (ramping down along it at 6 %), ours crosses at
      ground level on a bridge deck. Needs ~140 m of plain road (no junction) on each side of the crossing;
-   - **underpass**: the existing road gets a short bridge, ours is dug 8 m down into a cutting under it;
-   - **tunnel**: ours goes 12 m under through a tunnel with proper portals.
+   - **underpass**: the existing road gets a short bridge, ours is dug 8 m down into an open cutting under it;
+   - **tunnel**: ours goes 12 m under through a tunnel. Like the vanilla tool: an open cutting while it is less than
+     8 m down, one slope piece with the portal, then the tunnel (no more rows of portals).
+   Crossing at an angle, bridges, cuttings and lowered stretches get longer to fit the skewed footprint.
+   If an overpass can't lower the other road, the log lists that road's nodes and heights (`Overpass: lowering ...
+   failed`); please send it.
    Over water the preview shows **+/-** at the middle of the river: the bridge deck is 10 m above the water by
    default, 5 m per click (up to +60 m) so ships fit. Bridges over water use ~90 m spans.
+   Bridges and flyovers span level between their banks: over a gorge or a river with high banks the deck stays at
+   the top of the banks instead of dipping down to the water, and a ramp next to rising ground follows it up.
+   Wet patches less than 60 m apart count as one water crossing (one +/- pair).
+   Suspension bridges (e.g. the six-lane road's) get a tower on every other node, like the vanilla tool builds them;
+   the log lists each such segment as `tower`/`middle`. If one still looks wrong, build the same bridge with the
+   vanilla tool too and send the log, so the two can be compared.
    The panel lists each crossing and water bridge with its height/depth; problems are listed with "!" and the
    curve won't build until they are fixed. Preview colours: green ground, blue raised, orange lowered, red too sharp.
 4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
@@ -86,11 +96,36 @@ TM:PE settings or custom names on them are lost). Long curves are cut into ~40 m
 4. Click a yellow junction: it turns green, the junction block and its crosswalks should disappear, and the two
    branches should run back into the trunk side by side, with a gore nose where they part.
    The log shows `Smooth split ON at node #...` with the branch angle and each branch's share of the trunk.
+   If one branch is as wide as the trunk (the road carrying on) and the other is narrower (a ramp), the wide one
+   keeps the trunk's full width and the ramp starts inside the trunk's outer edge and peels off; the log says
+   `carries on at full width`.
 5. Click it again to go back to the vanilla junction. Clicking a red one logs why it is not a split.
 6. Watch a few cars drive through, then save, quit, reload the city and check the shape is still there.
 
 Screenshots of before/after help a lot: the shape is computed, and the numbers may need tuning.
 
-## 7. What's next
+## 7. Lane tool: draw each lane on its own (LN)
+For splits, merges, weaving and odd junctions, each lane can be drawn as its own one-lane road, like train tracks.
+1. Build (or bulldoze back to) a **road end** where the lanes should start: a dead end of any road or highway.
+2. Click **LN** (below SPL) or press **Ctrl+Shift+L**. Lanes are built with the vanilla **Highway Ramp**, or with
+   the road picked in the Roads menu if that is a one-lane one-way road.
+3. Hover the road end: a ring shows on each of its lanes (white = free, grey = already used). Click one to start a
+   lane there, place points like with RR (bridges, tunnels and crossings all work), then:
+   - end on a lane of **another road end** to join it (only lanes running the right way are offered; the others
+     show red), or
+   - end anywhere / on another road to connect normally.
+   Enter or double-click builds. The lane leaves its road end parallel for 16 m, then follows your points.
+4. Draw the next lane from the next ring. Each lane moves on its own: give them different paths to split a road,
+   bring lanes from several roads into one road end to merge, or cross them over (pick bridge at the crossing).
+5. Lanes are squeezed to the width of the lane they start on, so lanes side by side look like one road, and the
+   road end they start from is drawn square with no junction block. The log shows `Lane road: ...`.
+   To change a lane, Ctrl+Z it (or bulldoze it) and draw it again.
+
+Things to check and screenshot: how the squeezed Highway Ramp looks, whether cars drive in the lane they
+should, and traffic lights (the game may put lights on a lane node: TM:PE can switch them off; in-game lane
+choice at the road end can be fixed with TM:PE's lane connector). Saves keep the lanes; without the mod they show
+as ordinary ramps. Two-way lanes (e.g. single-lane two-way roads) are not offered.
+
+## 8. What's next
 See the milestones in [docs/PROJECT_BRIEF.md](../docs/PROJECT_BRIEF.md). Next up is milestone 3:
 a live spline/arc preview between the points, showing length and turning red where a bend is too sharp.

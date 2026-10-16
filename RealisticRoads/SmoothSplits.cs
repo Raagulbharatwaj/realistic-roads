@@ -16,6 +16,7 @@ namespace RealisticRoads
         public float BranchAngle;   // degrees between the two branches
         public Vector3 Forward;     // trunk direction, pointing towards the branches
         public float LeftShare;     // fraction of the trunk width the left branch takes over
+        public ushort Through;      // the branch that is the trunk carrying on at full width, or 0
     }
 
     // Junction nodes the player has marked as smooth splits, and the corner
@@ -34,6 +35,9 @@ namespace RealisticRoads
         // junction piece between them shrinks to a thin, invisible strip.
         private const float BranchGap = 0.1f;
         private const float MovedTolerance = 2f;     // node moved/replaced => forget it
+        // A branch at least this wide (relative to the trunk) is the trunk
+        // carrying on, when the other branch is narrower: a ramp peeling off.
+        private const float ThroughWidth = 0.85f;
 
         // Written on the main thread, read from any thread. A node only counts
         // while it still sits where it was when it was marked, so a deleted
@@ -189,6 +193,11 @@ namespace RealisticRoads
             shape.BranchAngle = branchAngle;
             shape.Forward = forward;
             shape.LeftShare = widthLeft / (widthLeft + widthRight);
+            float trunkWidth = segments[ids[t]].Info.m_halfWidth;
+            bool leftThrough = widthLeft >= trunkWidth * ThroughWidth;
+            bool rightThrough = widthRight >= trunkWidth * ThroughWidth;
+            if (leftThrough && !rightThrough) shape.Through = ids[a];
+            else if (rightThrough && !leftThrough) shape.Through = ids[b];
             reason = null;
             return true;
         }
@@ -234,6 +243,28 @@ namespace RealisticRoads
                 return true;
             }
 
+            if (shape.Through != 0)
+            {
+                // The trunk carries on unchanged; the ramp starts inside its
+                // outer edge (where a half-snapped branch runs in) and peels off.
+                if (segment == shape.Through)
+                {
+                    position = leftSide ? leftEdge : rightEdge;
+                }
+                else if (segment == shape.LeftBranch || segment == shape.RightBranch)
+                {
+                    float rampWidth = segments[segment].Info.m_halfWidth * 2f;
+                    bool rampOnLeft = segment == shape.LeftBranch;
+                    Vector3 outer = rampOnLeft ? leftEdge : rightEdge;
+                    Vector3 inner = outer + (rampOnLeft ? -left : left) * Mathf.Min(rampWidth, trunkHalf * 2f);
+                    position = rampOnLeft == leftSide ? outer : inner;
+                    position += f * BranchGap;
+                }
+                else return false;
+                direction = f;
+                return true;
+            }
+
             // The two inner sidewalks overlap by half their width each, so the
             // nose between the branches is one sidewalk wide instead of two.
             Vector3 across = CurveMath.FlatNormal(rightEdge - leftEdge);
@@ -257,7 +288,8 @@ namespace RealisticRoads
                    ", left #" + s.LeftBranch + " (" + segments[s.LeftBranch].Info.name + ")" +
                    ", right #" + s.RightBranch + " (" + segments[s.RightBranch].Info.name + ")" +
                    ", branch angle " + s.BranchAngle.ToString("F1") + " deg" +
-                   ", left branch takes " + (s.LeftShare * 100f).ToString("F0") + "% of the trunk width";
+                   (s.Through != 0 ? ", #" + s.Through + " carries on at full width, the other peels off"
+                                   : ", left branch takes " + (s.LeftShare * 100f).ToString("F0") + "% of the trunk width");
         }
 
         // --- save/load -------------------------------------------------------

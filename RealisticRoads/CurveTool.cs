@@ -40,9 +40,11 @@ namespace RealisticRoads
         private static readonly Color BadColor = new Color(1f, 0.2f, 0.15f, 0.6f);
         private static readonly Color BridgeColor = new Color(0.25f, 0.6f, 1f, 0.55f);
         private static readonly Color LowColor = new Color(1f, 0.6f, 0.15f, 0.55f);
+        private static readonly Color TakenColor = new Color(0.5f, 0.5f, 0.5f, 0.5f);
         private static readonly Color JunctionColor = new Color(1f, 1f, 1f, 0.8f);
         public const float BridgeSpacing = 90f;      // long spans over water so bridge models look whole
         public const float BridgeMinSpacing = 40f;
+        private const float WaterJoin = 60f;         // wet patches closer than this are one water crossing
         private const float HeightStep = 5f;
         private const float MaxExtraHeight = 60f;
         private const float IconSize = 34f;
@@ -82,8 +84,16 @@ namespace RealisticRoads
         // Preview, recomputed on the main thread every frame.
         private Division preview;
 
-        // The road/track the player last picked in the vanilla Roads menu.
+        // The road/track the player last picked in the vanilla Roads menu
+        // (in lane mode: the one-lane road lanes are built with).
         public NetInfo SelectedNetwork { get; set; }
+
+        // Lane mode (the LN button): each curve is one lane, drawn from a lane
+        // of a road end (or lane node) to a lane of another, or anywhere.
+        // Hovering a road end snaps to the lane under the cursor; pointSides
+        // then holds the lane's index + 1 instead of a half.
+        public bool LaneMode { get; set; }
+        private volatile int laneStartInto;   // first point's lane: 0 none, 1 traffic into its node, 2 out of it
 
         public bool IsActive => ToolsModifierControl.toolController != null &&
                                 ToolsModifierControl.toolController.CurrentTool == this;
@@ -167,6 +177,20 @@ namespace RealisticRoads
             bool onGround = GroundUnderMouse(out ground);
 
             ushort node = FindSnapNode();
+            if (node != 0 && LaneMode)
+            {
+                // A lane of a road end; the end of a lane must run the other way to its start.
+                Vector3 position = NetManager.instance.m_nodes.m_buffer[node].m_position;
+                bool? into = laneStartInto == 0 ? (bool?)null : laneStartInto == 2;
+                LaneSlot slot;
+                bool isSlot = LaneBundles.TryNearestSlot(node, onGround ? ground : position, into, out slot);
+                hoverMarker = isSlot ? slot.Position : position;
+                hoverPosition = position;
+                hoverSide = isSlot ? slot.Index + 1 : 0;
+                hoverNode = node;
+                hoverValid = true;
+                return;
+            }
             if (node != 0)
             {
                 Vector3 position = NetManager.instance.m_nodes.m_buffer[node].m_position;
@@ -296,6 +320,11 @@ namespace RealisticRoads
                     return;
                 }
                 int side = hoverSide;
+                if (points.Count == 0 && LaneMode)
+                {
+                    LaneSlot slot;
+                    laneStartInto = side != 0 && LaneBundles.TryGetSlot(hoverNode, side - 1, out slot) ? (slot.Into ? 1 : 2) : 0;
+                }
                 points.Add(p);
                 pointNodes.Add(hoverNode);
                 pointSides.Add(side);
@@ -310,6 +339,7 @@ namespace RealisticRoads
                 pointNodes.RemoveAt(pointNodes.Count - 1);
                 pointSides.RemoveAt(pointSides.Count - 1);
                 pointMarkers.RemoveAt(pointMarkers.Count - 1);
+                if (points.Count == 0) laneStartInto = 0;
                 Mod.Log("Removed last point, " + points.Count + " left");
             }
         }
@@ -323,7 +353,7 @@ namespace RealisticRoads
 
             if (division != null && division.Points.Count >= 2 && division.Plan != null)
             {
-                float width = SelectedNetwork != null ? SelectedNetwork.m_halfWidth * 2f : 8f;
+                float width = LaneMode ? PreviewLaneHalf() * 2f : SelectedNetwork != null ? SelectedNetwork.m_halfWidth * 2f : 8f;
                 var kinds = division.Plan.Kinds;
                 for (int i = 1; i < division.Points.Count; i++)
                 {
@@ -350,6 +380,19 @@ namespace RealisticRoads
 
             for (int i = 0; i < points.Count; i++)
                 overlay.DrawCircle(cameraInfo, pointNodes[i] != 0 ? SnapColor : PointColor, pointMarkers[i], PointSize, -1f, 1280f, false, true);
+
+            // Lane mode: every lane of the road end under the mouse. White = free,
+            // grey = a lane road already starts there, red = runs the wrong way for this lane.
+            ushort slotsNode = hoverNode;
+            if (LaneMode && hoverValid && mouseRayValid && slotsNode != 0)
+            {
+                bool? into = laneStartInto == 0 ? (bool?)null : laneStartInto == 2;
+                foreach (var slot in LaneBundles.Slots(slotsNode))
+                {
+                    Color color = slot.Taken ? TakenColor : into.HasValue && slot.Into != into.Value ? BadColor : HoverColor;
+                    overlay.DrawCircle(cameraInfo, color, slot.Position, slot.HalfWidth * 2f, -1f, 1280f, false, true);
+                }
+            }
 
             if (hoverValid && mouseRayValid)
                 overlay.DrawCircle(cameraInfo, hoverNode != 0 ? SnapColor : HoverColor, hoverMarker, HoverSize, -1f, 1280f, false, true);
@@ -378,6 +421,12 @@ namespace RealisticRoads
                 return;
             }
 
+            if (LaneMode)
+            {
+                BuildLane();
+                return;
+            }
+
             var division = Divide(points, pointNodes, pointSides);
             if (!division.Ok)
             {
@@ -396,6 +445,81 @@ namespace RealisticRoads
             ClearPoints();
         }
 
+        // Lane mode: builds the lane in its traffic direction, squeezed to the
+        // width of the lane it starts (or ends) on, and makes the road ends it
+        // uses lane nodes.
+        private void BuildLane()
+        {
+            int n = points.Count - 1;
+            LaneSlot start = default(LaneSlot), end = default(LaneSlot);
+            bool hasStart = pointSides[0] != 0 && LaneBundles.TryGetSlot(pointNodes[0], pointSides[0] - 1, out start);
+            bool hasEnd = pointSides[n] != 0 && LaneBundles.TryGetSlot(pointNodes[n], pointSides[n] - 1, out end);
+            if (hasStart && hasEnd && start.Into == end.Into)
+            {
+                Mod.Log("Not built: the two lanes run the same way (both " + (start.Into ? "into" : "out of") +
+                        " their road ends). End on a lane going the other way.");
+                return;
+            }
+
+            // Traffic flows from the first point to the last, so a lane that
+            // comes out of a road is built from its far end towards it.
+            bool reverse = hasStart ? !start.Into : hasEnd && end.Into;
+            var controls = new List<Vector3>(points);
+            var nodes = new List<ushort>(pointNodes);
+            var sides = new List<int>(pointSides);
+            if (reverse)
+            {
+                controls.Reverse();
+                nodes.Reverse();
+                sides.Reverse();
+            }
+
+            var division = Divide(controls, nodes, sides);
+            if (!division.Ok)
+            {
+                Mod.Log("Not built: a bend is too sharp (over " + MaxBend + " degrees per segment). Spread the points out.");
+                return;
+            }
+            if (!division.Plan.Ok)
+            {
+                Mod.Log("Not built: " + string.Join("; ", division.Plan.Problems.ToArray()));
+                return;
+            }
+
+            division.Plan.StripHalfWidth = hasStart ? start.HalfWidth : hasEnd ? end.HalfWidth : DefaultLaneHalf;
+            if (hasStart) division.Plan.LaneNodes.Add(pointNodes[0]);
+            if (hasEnd) division.Plan.LaneNodes.Add(pointNodes[n]);
+            Mod.Log("Building a lane (" + SelectedNetwork.name + ", " + (division.Plan.StripHalfWidth * 2f).ToString("F1") + " m wide): " +
+                    division.Length.ToString("F0") + " m in " + (division.Points.Count - 1) + " segment(s)" +
+                    (hasStart ? ", from lane " + (start.Index + 1) + " of node #" + pointNodes[0] : "") +
+                    (hasEnd ? ", to lane " + (end.Index + 1) + " of node #" + pointNodes[n] : "") +
+                    (reverse ? ", traffic runs towards the first point" : ""));
+            NetworkBuilder.BuildCurve(SelectedNetwork, division.Plan);
+            ClearPoints();
+        }
+
+        private const float DefaultLaneHalf = 1.5f;
+
+        // Width of the lane being drawn, for the preview.
+        private float PreviewLaneHalf()
+        {
+            LaneSlot slot;
+            if (pointSides.Count > 0 && pointSides[0] != 0 && LaneBundles.TryGetSlot(pointNodes[0], pointSides[0] - 1, out slot))
+                return slot.HalfWidth;
+            return DefaultLaneHalf;
+        }
+
+        // A road end's half (normal mode) or lane (lane mode) as a half-snap.
+        private bool TrySnap(ushort node, int side, out NetworkBuilder.HalfSnap snap)
+        {
+            snap = default(NetworkBuilder.HalfSnap);
+            if (!LaneMode) return NetworkBuilder.TryHalfSnap(node, SelectedNetwork, Vector3.zero, side, out snap);
+            LaneSlot slot;
+            if (!LaneBundles.TryGetSlot(node, side - 1, out slot)) return false;
+            snap = LaneBundles.AsSnap(node, slot);
+            return true;
+        }
+
         // Cuts the curve through 'controls' into buildable pieces. Where an end
         // is snapped to an existing road, the curve continues that road
         // smoothly; if that would bend too much it meets the road at an angle
@@ -411,8 +535,8 @@ namespace RealisticRoads
             var shaped = new List<Vector3>(controls);
             var startHalf = default(NetworkBuilder.HalfSnap);
             var endHalf = default(NetworkBuilder.HalfSnap);
-            bool halfStart = sides[0] != 0 && NetworkBuilder.TryHalfSnap(nodes[0], SelectedNetwork, Vector3.zero, sides[0], out startHalf);
-            bool halfEnd = sides[n] != 0 && NetworkBuilder.TryHalfSnap(nodes[n], SelectedNetwork, Vector3.zero, sides[n], out endHalf);
+            bool halfStart = sides[0] != 0 && TrySnap(nodes[0], sides[0], out startHalf);
+            bool halfEnd = sides[n] != 0 && TrySnap(nodes[n], sides[n], out endHalf);
             if (halfStart) shaped[0] = NetworkBuilder.HalfSnapRunIn(nodes[0], startHalf);
             if (halfEnd) shaped[n] = NetworkBuilder.HalfSnapRunIn(nodes[n], endHalf);
 
@@ -465,6 +589,7 @@ namespace RealisticRoads
 
             // Stretches over water get long bridge spans; crossings become fixed nodes.
             division.WaterRuns = FindWater(polyline);
+            bool doubleLength = RoadPlanner.IsDoubleLength(SelectedNetwork);
             var cuts = new List<KeyValuePair<float, Crossing>>();
             foreach (var run in division.WaterRuns)
             {
@@ -505,6 +630,8 @@ namespace RealisticRoads
                 bool ignored;
                 int count = CurveMath.ChoosePieceCount(slice, overWater ? BridgeSpacing : Spacing,
                     overWater ? BridgeMinSpacing : MinSpacing, MaxBend, out ignored);
+                // Suspension bridges: an even number of spans, so both ends get a tower.
+                if (overWater && doubleLength && count % 2 == 1) count++;
                 List<Vector3> slicePoints, sliceTangents;
                 CurveMath.Divide(slice, count, out slicePoints, out sliceTangents);
                 int skip = division.Points.Count == 0 ? 0 : 1;
@@ -534,7 +661,9 @@ namespace RealisticRoads
             return division;
         }
 
-        // Stretches of the curve over water (gaps under 20 m are joined).
+        // Stretches of the curve over water. Wet patches less than WaterJoin
+        // apart are one crossing: a stream with gravel banks, a river with an
+        // islet, the bottom of a gorge.
         private List<WaterRun> FindWater(List<Vector3> polyline)
         {
             var runs = new List<WaterRun>();
@@ -546,7 +675,7 @@ namespace RealisticRoads
                 bool wet = NetworkBuilder.IsOverWater(polyline[i]);
                 if (wet)
                 {
-                    if (current != null && along - current.To < 20f) current.To = along;
+                    if (current != null && along - current.To < WaterJoin) current.To = along;
                     else
                     {
                         current = new WaterRun { From = along, To = along };
@@ -758,9 +887,13 @@ namespace RealisticRoads
         private string InfoText()
         {
             string road = SelectedNetwork != null ? SelectedNetwork.name : "no road picked (choose one in the Roads menu)";
+            if (LaneMode) road = "lanes, built as " + (SelectedNetwork != null ? SelectedNetwork.name : "(no one-lane road found)");
             var division = preview;
             if (division == null || division.Points.Count < 2 || division.Plan == null)
-                return "Curve tool: " + road + "\nClick to place points";
+                return LaneMode
+                    ? "Lane tool: " + road + "\nClick a lane at a road end (yellow ring) to start a lane, then place points;" +
+                      "\nend on a lane of another road end to merge into it, or anywhere"
+                    : "Curve tool: " + road + "\nClick to place points";
 
             var plan = division.Plan;
             int raised = 0, lowered = 0;
@@ -789,24 +922,41 @@ namespace RealisticRoads
             }
             for (int w = 0; w < division.WaterRuns.Count; w++)
             {
-                float deck = 0f;
                 var run = division.WaterRuns[w];
-                float along = 0f;
-                for (int i = 0; i < plan.Points.Count; i++)
-                {
-                    if (i > 0) along += CurveMath.FlatDistance(plan.Points[i - 1], plan.Points[i]);
-                    if (along < run.From || along > run.To) continue;
-                    deck = Mathf.Max(deck, plan.Points[i].y - terrain.SampleRawHeightSmoothWithWater(plan.Points[i], false, 0f));
-                }
-                text += "\nWater " + (w + 1) + ": bridge deck " + deck.ToString("F0") + " m above the water (+/- to change)";
+                float deck = HeightAt(plan, (run.From + run.To) * 0.5f) - terrain.SampleRawHeightSmoothWithWater(run.Middle, false, 0f);
+                text += "\nWater " + (w + 1) + " (" + (run.To - run.From).ToString("F0") + " m wide): bridge deck " +
+                        deck.ToString("F0") + " m above the water (+/- to change)";
             }
             foreach (var problem in plan.Problems) text += "\n! " + problem;
 
             return text + "\nEnter / double-click: build   Ctrl+Z: undo   Esc: clear   Icons: choose each crossing";
         }
 
+        // The planned road height 'at' metres along the curve.
+        private static float HeightAt(Plan plan, float at)
+        {
+            float along = 0f;
+            for (int i = 1; i < plan.Points.Count; i++)
+            {
+                float piece = CurveMath.FlatDistance(plan.Points[i - 1], plan.Points[i]);
+                if (along + piece >= at || i == plan.Points.Count - 1)
+                    return Mathf.Lerp(plan.Points[i - 1].y, plan.Points[i].y, piece > 0.01f ? Mathf.Clamp01((at - along) / piece) : 0f);
+                along += piece;
+            }
+            return plan.Points.Count > 0 ? plan.Points[0].y : 0f;
+        }
+
+        // Switches between curves and lanes; clears the points.
+        public void SetMode(bool laneMode, NetInfo network)
+        {
+            LaneMode = laneMode;
+            SelectedNetwork = network;
+            ClearPoints();
+        }
+
         private void ClearPoints()
         {
+            laneStartInto = 0;
             points.Clear();
             pointNodes.Clear();
             pointSides.Clear();

@@ -93,12 +93,34 @@ namespace RealisticRoads
             {
                 if (!__result || segment == lastLogged) return;
                 lastLogged = segment;
-                Mod.Log("Road segment created: #" + segment);
+                Mod.Log("Road segment created: #" + segment + DescribeBridge(segment));
             }
             catch (Exception e)
             {
                 Mod.LogError("CreateSegment postfix failed", e);
             }
+        }
+
+        // For suspension bridges (m_doubleLength): the length and which ends
+        // are towers or middle nodes, to compare our bridges with vanilla ones.
+        private static string DescribeBridge(ushort segment)
+        {
+            var net = NetManager.instance;
+            var s = net.m_segments.m_buffer[segment];
+            var info = s.Info;
+            if (info == null || info.m_netAI == null) return "";
+            var field = info.m_netAI.GetType().GetField("m_doubleLength", BindingFlags.Public | BindingFlags.Instance);
+            if (field == null || field.FieldType != typeof(bool) || !(bool)field.GetValue(info.m_netAI)) return "";
+            var nodes = net.m_nodes.m_buffer;
+            float length = CurveMath.FlatDistance(nodes[s.m_startNode].m_position, nodes[s.m_endNode].m_position);
+            return " (" + info.name + ", " + length.ToString("F0") + " m, start node #" + s.m_startNode +
+                   " " + NodeState(nodes[s.m_startNode]) + ", end node #" + s.m_endNode + " " + NodeState(nodes[s.m_endNode]) + ")";
+        }
+
+        private static string NodeState(NetNode node)
+        {
+            bool middle = (node.m_flags & NetNode.Flags.Double) != NetNode.Flags.None;
+            return (middle ? "middle" : "tower") + " elev " + node.m_elevation;
         }
     }
 
@@ -122,6 +144,19 @@ namespace RealisticRoads
             {
                 var segments = NetManager.instance.m_segments.m_buffer;
                 ushort node = start ? segments[segmentID].m_startNode : segments[segmentID].m_endNode;
+
+                // Lane bundles: lane nodes and lane roads (strips).
+                UnityEngine.Vector3 lanePosition = cornerPos, laneDirection = cornerDirection;
+                if (LaneBundles.TryGetCorner(segmentID, node, leftSide, ref lanePosition, ref laneDirection))
+                {
+                    // Keep the game's height handling, as for smooth splits.
+                    lanePosition.y = cornerPos.y;
+                    laneDirection.y = cornerDirection.y;
+                    cornerPos = lanePosition;
+                    cornerDirection = laneDirection;
+                    return;
+                }
+
                 if (!SmoothSplits.IsEnabled(node)) return;
 
                 UnityEngine.Vector3 position, direction;
@@ -172,7 +207,7 @@ namespace RealisticRoads
             if (failed) return true;
             try
             {
-                return !SmoothSplits.IsEnabled(nodeID);
+                return !SmoothSplits.IsEnabled(nodeID) && !LaneBundles.IsLaneNode(nodeID);
             }
             catch (Exception e)
             {

@@ -139,7 +139,7 @@ namespace RealisticRoads
                         NetInfo bridge = RoadPlanner.Variant(existing, "m_bridgeInfo") ?? RoadPlanner.Variant(existing, "m_elevatedInfo");
                         if (bridge == null) throw new Exception(existing.name + " has no bridge version for the underpass");
                         float length = Mathf.Max(net.m_segments.m_buffer[crossing.Segment].m_averageLength, 1f);
-                        float half = (info.m_halfWidth + UnderpassBridgeExtra) / length;
+                        float half = (info.m_halfWidth / crossing.Skew + UnderpassBridgeExtra) / length;
                         float t0 = Mathf.Max(crossing.ExistingT - half, 0.05f);
                         float t1 = Mathf.Min(crossing.ExistingT + half, 0.95f);
                         build.Splits.Add(SplitSegment(crossing.Segment, new[] { t0, t1 }, new[] { existing, bridge, existing }));
@@ -163,6 +163,7 @@ namespace RealisticRoads
                         net.m_nodes.m_buffer[node].m_elevation = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(elevation)), 0, 255);
                     }
                     if (kind == NodeKind.Tunnel) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Underground;
+                    if (plan.Middle != null && plan.Middle[i]) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Double;
                     nodeIds[i] = node;
                     build.Nodes.Add(node);
                 }
@@ -192,6 +193,18 @@ namespace RealisticRoads
                     build.Segments.Add(segment);
                 }
 
+                if (plan.StripHalfWidth > 0f)
+                {
+                    foreach (ushort segment in build.Segments) LaneBundles.AddStrip(segment, plan.StripHalfWidth);
+                    foreach (ushort node in plan.LaneNodes) LaneBundles.AddLaneNode(node);
+                    foreach (ushort node in build.Nodes) net.UpdateNode(node, 0, -1);
+                    foreach (ushort node in plan.LaneNodes) net.UpdateNode(node, 0, -1);
+                    Mod.Log("  Lane road: " + build.Segments.Count + " segment(s) " + (plan.StripHalfWidth * 2f).ToString("F1") +
+                            " m wide, on " + plan.LaneNodes.Count + " lane node(s)");
+                }
+                int middles = 0;
+                if (plan.Middle != null) foreach (bool m in plan.Middle) if (m) middles++;
+                if (middles > 0) Mod.Log("  Suspension bridge: towers on every other node, " + middles + " middle node(s)");
                 if (bridges + elevated + tunnels > 0)
                     Mod.Log("  " + bridges + " bridge, " + elevated + " elevated, " + tunnels + " tunnel/slope segment(s)");
                 for (int c = 0; c < plan.Crossings.Count; c++)
