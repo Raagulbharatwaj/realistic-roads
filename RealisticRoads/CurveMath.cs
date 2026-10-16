@@ -17,6 +17,19 @@ namespace RealisticRoads
         // as a dense polyline that starts and ends exactly at the end points.
         public static List<Vector3> SampleSpline(IList<Vector3> points)
         {
+            return SampleSpline(points, Vector3.zero, Vector3.zero);
+        }
+
+        // As above, but the curve leaves the first point heading 'startDir' and
+        // reaches the last heading 'endDir' (Vector3.zero = no preference).
+        // Combine with ShapeEnds so the curve also bends gently into them.
+        public static List<Vector3> SampleShaped(IList<Vector3> controls, Vector3 startDir, Vector3 endDir)
+        {
+            return SampleSpline(ShapeEnds(controls, startDir, endDir), startDir, endDir);
+        }
+
+        public static List<Vector3> SampleSpline(IList<Vector3> points, Vector3 startDir, Vector3 endDir)
+        {
             var result = new List<Vector3>();
             if (points == null || points.Count == 0) return result;
             if (points.Count == 1)
@@ -33,10 +46,16 @@ namespace RealisticRoads
                 // Past the ends, continue the curve's own bend (quadratic
                 // extrapolation) so the road leaves its first point already
                 // curving; with only two points, just mirror (a straight line).
+                // A fixed end direction puts the phantom point straight behind
+                // the end, which makes the curve leave exactly that way.
+                Vector3 startN = FlatNormal(startDir), endN = FlatNormal(endDir);
+                float span = FlatDistance(p1, p2);
                 Vector3 p0 = i > 0 ? points[i - 1]
+                    : startN != Vector3.zero ? p1 - startN * span
                     : points.Count > 2 ? p1 * 3f - p2 * 3f + points[2]
                     : p1 + (p1 - p2);
                 Vector3 p3 = i + 2 < points.Count ? points[i + 2]
+                    : endN != Vector3.zero ? p2 + endN * span
                     : points.Count > 2 ? p2 * 3f - p1 * 3f + points[i - 1]
                     : p2 + (p2 - p1);
 
@@ -45,6 +64,43 @@ namespace RealisticRoads
                     float u = s / (float)SamplesPerSpan;
                     result.Add(s == SamplesPerSpan ? p2 : CatmullRom(p0, p1, p2, p3, u));
                 }
+            }
+            return result;
+        }
+
+        // Adds guide points so the curve leaves its first point heading
+        // 'startDir' and arrives at its last point heading 'endDir' (pass
+        // Vector3.zero for "no preference"). Used to continue an existing road
+        // smoothly instead of meeting it at an angle.
+        public static List<Vector3> ShapeEnds(IList<Vector3> controls, Vector3 startDir, Vector3 endDir)
+        {
+            var result = new List<Vector3>(controls);
+            if (controls.Count < 2) return result;
+
+            float firstSpan = FlatDistance(controls[0], controls[1]);
+            float lastSpan = FlatDistance(controls[controls.Count - 2], controls[controls.Count - 1]);
+            if (controls.Count == 2)
+            {
+                // One span shared by both guides: keep them from crossing.
+                firstSpan *= 0.5f;
+                lastSpan *= 0.5f;
+            }
+
+            Vector3 s = FlatNormal(startDir);
+            if (s != Vector3.zero)
+            {
+                Vector3 guide = controls[0] + s * Mathf.Min(firstSpan * 0.35f, 60f);
+                guide.y = controls[0].y;
+                result.Insert(1, guide);
+            }
+
+            Vector3 e = FlatNormal(endDir);
+            if (e != Vector3.zero)
+            {
+                Vector3 end = controls[controls.Count - 1];
+                Vector3 guide = end - e * Mathf.Min(lastSpan * 0.35f, 60f);
+                guide.y = end.y;
+                result.Insert(result.Count - 1, guide);
             }
             return result;
         }

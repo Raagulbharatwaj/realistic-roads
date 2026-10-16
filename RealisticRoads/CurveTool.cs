@@ -6,7 +6,8 @@ using UnityEngine;
 namespace RealisticRoads
 {
     // CS2-style curve tool.
-    //   Left-click        add a control point (snaps to an existing road end/junction)
+    //   Left-click        add a control point (snaps to an existing road end/junction;
+    //                     the curve then continues that road smoothly)
     //   Right-click       remove the last point
     //   Enter/double-click build the curve with the road picked in the Roads menu
     //   Ctrl+Z            undo the last curve built
@@ -21,12 +22,14 @@ namespace RealisticRoads
         private const float PointSize = 6f;
         private const float HoverSize = 4f;
         private const float MinPointSpacing = 2f;
+        private const float SnapReach = 12f;    // snap to a road end this far beyond the road's edge
 
         private static readonly Color PointColor = new Color(0.2f, 0.8f, 1f, 0.9f);
         private static readonly Color SnapColor = new Color(1f, 0.85f, 0.1f, 0.9f);
         private static readonly Color HoverColor = new Color(1f, 1f, 1f, 0.6f);
         private static readonly Color GoodColor = new Color(0.25f, 0.9f, 0.35f, 0.55f);
         private static readonly Color BadColor = new Color(1f, 0.2f, 0.15f, 0.6f);
+        private static readonly Color BridgeColor = new Color(0.25f, 0.6f, 1f, 0.55f);
 
         // Clicked control points and, for each, the existing node it snapped to (or 0).
         private readonly List<Vector3> points = new List<Vector3>();
@@ -58,6 +61,8 @@ namespace RealisticRoads
             public List<Vector3> Tangents;
             public float Length;
             public bool Ok;
+            public bool Continues;       // follows an existing road at the start or end
+            public List<bool> OverWater; // per piece: will be a bridge
         }
 
         protected override void OnEnable()
@@ -114,33 +119,81 @@ namespace RealisticRoads
                 return;
             }
 
-            // Snap to an existing node under the mouse.
-            var nodeInput = new RaycastInput(mouseRay, mouseRayLength);
-            nodeInput.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
-            nodeInput.m_ignoreTerrain = true;
-            nodeInput.m_ignoreNodeFlags = NetNode.Flags.None;
-            RaycastOutput output;
-            if (RayCast(nodeInput, out output) && output.m_netNode != 0)
+            ushort node = FindSnapNode();
+            if (node != 0)
             {
-                hoverPosition = NetManager.instance.m_nodes.m_buffer[output.m_netNode].m_position;
-                hoverNode = output.m_netNode;
+                hoverPosition = NetManager.instance.m_nodes.m_buffer[node].m_position;
+                hoverNode = node;
                 hoverValid = true;
                 return;
             }
 
+            Vector3 ground;
+            hoverValid = GroundUnderMouse(out ground);
+            hoverPosition = ground;
+            hoverNode = 0;
+        }
+
+        // Simulation thread. A node under the mouse, or the end of the road
+        // under the mouse when the mouse is near that end.
+        private ushort FindSnapNode()
+        {
             var input = new RaycastInput(mouseRay, mouseRayLength);
-            input.m_ignoreTerrain = false;
-            if (RayCast(input, out output))
+            input.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
+            input.m_ignoreTerrain = true;
+            input.m_ignoreNodeFlags = NetNode.Flags.None;
+            RaycastOutput output;
+            if (RayCast(input, out output) && output.m_netNode != 0) return output.m_netNode;
+
+            input = new RaycastInput(mouseRay, mouseRayLength);
+            input.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
+            input.m_ignoreTerrain = true;
+            input.m_ignoreSegmentFlags = NetSegment.Flags.None;
+            if (!RayCast(input, out output) || output.m_netSegment == 0) return 0;
+
+            var segment = NetManager.instance.m_segments.m_buffer[output.m_netSegment];
+            var nodes = NetManager.instance.m_nodes.m_buffer;
+            float reach = segment.Info.m_halfWidth + SnapReach;
+            float toStart = CurveMath.FlatDistance(output.m_hitPos, nodes[segment.m_startNode].m_position);
+            float toEnd = CurveMath.FlatDistance(output.m_hitPos, nodes[segment.m_endNode].m_position);
+            if (toStart <= toEnd && toStart <= reach) return segment.m_startNode;
+            if (toEnd < toStart && toEnd <= reach) return segment.m_endNode;
+            return 0;
+        }
+
+        // Simulation thread. Where the mouse ray meets the ground or the water
+        // surface, ignoring trees, buildings and props, so points can be placed
+        // anywhere (the game's own raycast stops at the first object it hits).
+        private bool GroundUnderMouse(out Vector3 hit)
+        {
+            var terrain = TerrainManager.instance;
+            Vector3 origin = mouseRay.origin;
+            Vector3 direction = mouseRay.direction;
+            const float step = 8f;
+            Vector3 previous = origin;
+            for (float d = step; d <= mouseRayLength; d += step)
             {
-                hoverPosition = output.m_hitPos;
-                hoverNode = 0;
-                hoverValid = true;
+                Vector3 p = origin + direction * d;
+                if (p.y > terrain.SampleRawHeightSmoothWithWater(p, false, 0f))
+                {
+                    previous = p;
+                    continue;
+                }
+
+                // Crossed the surface between 'previous' and 'p': narrow it down.
+                Vector3 above = previous, below = p;
+                for (int i = 0; i < 12; i++)
+                {
+                    Vector3 mid = (above + below) * 0.5f;
+                    if (mid.y > terrain.SampleRawHeightSmoothWithWater(mid, false, 0f)) above = mid;
+                    else below = mid;
+                }
+                hit = below;
+                hit.y = terrain.SampleRawHeightSmoothWithWater(hit, false, 0f);
+                return true;
             }
-            else
-            {
-                hoverValid = false;
-                hoverNode = 0;
-            }
+            hit = Vector3.zero;
+            return false;
         }
 
         // Main thread, for mouse and keyboard events.
@@ -216,7 +269,7 @@ namespace RealisticRoads
                 {
                     var bezier = PieceBezier(division, i);
                     float bend = CurveMath.BendAngle(division.Tangents[i - 1], division.Tangents[i]);
-                    var color = bend <= MaxBend ? GoodColor : BadColor;
+                    var color = bend > MaxBend ? BadColor : division.OverWater[i - 1] ? BridgeColor : GoodColor;
                     overlay.DrawBezier(cameraInfo, color, bezier, width, 100000f, -100000f, -1f, 1280f, false, true);
                 }
             }
@@ -256,26 +309,46 @@ namespace RealisticRoads
             ClearPoints();
         }
 
-        // Cuts the curve through 'controls' into buildable pieces. Where a
-        // point is snapped to a dead end, the curve continues that road smoothly.
+        // Cuts the curve through 'controls' into buildable pieces. Where an end
+        // is snapped to an existing road, the curve continues that road
+        // smoothly; if that would bend too much it meets the road at an angle
+        // instead (like a normal junction).
         private static Division Divide(List<Vector3> controls, List<ushort> nodes)
         {
-            var division = new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>() };
-            if (controls.Count < 2) return division;
+            if (controls.Count < 2) return new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>(), OverWater = new List<bool>() };
 
-            var polyline = CurveMath.SampleSpline(controls);
+            int n = controls.Count - 1;
+            Vector3 startDir = NetworkBuilder.ContinuationDirection(nodes[0], controls[1] - controls[0], true);
+            Vector3 endDir = NetworkBuilder.ContinuationDirection(nodes[n], controls[n] - controls[n - 1], false);
+
+            var division = DivideShaped(controls, startDir, endDir);
+            division.Continues = startDir != Vector3.zero || endDir != Vector3.zero;
+            if (!division.Ok && division.Continues)
+            {
+                var plain = DivideShaped(controls, Vector3.zero, Vector3.zero);
+                if (plain.Ok) division = plain;
+            }
+
+            division.OverWater = new List<bool>();
+            for (int i = 1; i < division.Points.Count; i++)
+                division.OverWater.Add(NetworkBuilder.IsOverWater(division.Points[i - 1]) ||
+                                       NetworkBuilder.IsOverWater(division.Points[i]) ||
+                                       NetworkBuilder.IsOverWater((division.Points[i - 1] + division.Points[i]) * 0.5f));
+            return division;
+        }
+
+        private static Division DivideShaped(List<Vector3> controls, Vector3 startDir, Vector3 endDir)
+        {
+            var division = new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>() };
+            var polyline = CurveMath.SampleShaped(controls, startDir, endDir);
             division.Length = CurveMath.Length(polyline);
             if (division.Length < 1f) return division;
 
             bool ok;
             int count = CurveMath.ChoosePieceCount(polyline, Spacing, MinSpacing, MaxBend, out ok);
             CurveMath.Divide(polyline, count, out division.Points, out division.Tangents);
-
-            Vector3 startDir = NetworkBuilder.DeadEndDirection(nodes[0]);
-            if (startDir != Vector3.zero) division.Tangents[0] = -startDir;
-            Vector3 endDir = NetworkBuilder.DeadEndDirection(nodes[nodes.Count - 1]);
-            if (endDir != Vector3.zero) division.Tangents[division.Tangents.Count - 1] = endDir;
-
+            if (startDir != Vector3.zero) division.Tangents[0] = CurveMath.FlatNormal(startDir);
+            if (endDir != Vector3.zero) division.Tangents[division.Tangents.Count - 1] = CurveMath.FlatNormal(endDir);
             division.Ok = CurveMath.MaxBend(division.Tangents) <= MaxBend;
             return division;
         }
@@ -297,8 +370,12 @@ namespace RealisticRoads
             var division = preview;
             if (division == null || division.Points.Count < 2)
                 return "Curve tool: " + road + "\nClick to place points";
+            int bridges = 0;
+            foreach (bool water in division.OverWater) if (water) bridges++;
             return "Curve tool: " + road +
                    "\n" + division.Length.ToString("F0") + " m, " + (division.Points.Count - 1) + " segment(s)" +
+                   (bridges > 0 ? ", bridge over water" : "") +
+                   (division.Continues ? ", continues the road" : "") +
                    (division.Ok ? "" : "  -  TOO SHARP") +
                    "\nEnter / double-click: build   Ctrl+Z: undo   Esc: clear";
         }
