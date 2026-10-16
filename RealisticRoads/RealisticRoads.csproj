@@ -27,7 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Crossing-tool icons, drawn by Icons/make_icons.py -->
+    <!-- Crossing-tool icons, drawn by tools/make_icons.py -->
     <EmbeddedResource Include="Icons\*.png" />
   </ItemGroup>
 

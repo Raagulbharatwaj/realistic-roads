@@ -141,3 +141,30 @@ The user's decisions:
   has to use the same vertex layout and the vanilla road textures (or generated ones). Prototype one
   piece (plain asphalt with curbs) first.
 - Asset compatibility: custom roads should probably also export to a normal asset for sharing.
+
+## 5. Code review follow-ups
+
+From an outside code review (it assumed a standalone game; items that only apply there are left out:
+Harmony patching, `Unity.Mathematics`/Burst and Addressables don't exist for a CS1 mod on Unity 5.6 / .NET 3.5).
+
+Done:
+- One README at the root (build, test and tool instructions); design docs live in `docs/`.
+- The icon generator moved to `tools/`; the mod only embeds the generated PNGs, which are packed into one
+  UI atlas at runtime.
+
+To do, in priority order:
+1. **Split drift:** when a crossing splits an existing curved road, the new pieces are rebuilt from end
+   directions and can drift slightly from the original curve. Pick directions and node positions so the
+   game's own middle points reproduce the original halves as closely as possible, and test it in CurveMath.
+2. **Vertical curves:** heights are solved per node at a constant 6 % grade, so ramps have kinks where they
+   start and end. Smooth the grade changes over a parabolic crest or sag curve.
+3. **Preview telemetry:** show the tightest radius, the steepest grade and a cost estimate while drawing, and
+   highlight pillars that would land on a road below.
+4. **Planner tests:** RoadPlanner and CrossingFinder read the game's managers directly. Put terrain and
+   network reads behind a small interface so crossing and lowering cases (back-to-back overpass and
+   underpass, crossings at both ends, water plus a crossing) can be unit-tested like CurveMath.
+5. **Plans as data:** the tools already hand a `Plan` to `NetworkBuilder`, which applies it on the
+   simulation thread and keeps an undo record. Make the record a full diff (created and removed nodes and
+   segments, moved nodes, flags) so redo becomes possible as well as undo.
+6. **Transition curves:** clothoid (Euler spiral) easing for ramps and S-bends, so curvature changes
+   gradually instead of jumping between pieces.

@@ -8,7 +8,7 @@ EXIST = (175, 180, 190, 255)
 DASH = (255, 255, 255, 255)
 WATER = (70, 150, 230, 255)
 GROUND = (110, 170, 80, 255)
-# Usage: python3 make_icons.py <output folder> <preview sheet.png>
+# Usage (from the repo root): python3 tools/make_icons.py RealisticRoads/Icons <preview sheet.png>
 out = sys.argv[1]
 
 def canvas():
