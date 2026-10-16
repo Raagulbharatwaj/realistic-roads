@@ -26,6 +26,9 @@ namespace RealisticRoads
         }
 
         // What one build created or changed, so one undo reverses all of it.
+        // Simulation thread: nodes at both ends of every segment of the last build.
+        private static readonly HashSet<ushort> lastBuiltEnds = new HashSet<ushort>();
+
         private class Build
         {
             public readonly List<ushort> Segments = new List<ushort>();
@@ -47,6 +50,8 @@ namespace RealisticRoads
                 if (!BuildNow(info, plan)) return;
                 foreach (var node in splitNodes)
                     if (node != 0) SmoothSplits.EnableIfSplit(node);
+                // Junctions the new road makes get the CS2 look (smooth splits excepted).
+                foreach (var node in lastBuiltEnds) Junctions.EnableIfJunction(node);
             });
         }
 
@@ -218,6 +223,12 @@ namespace RealisticRoads
                 for (int c = 0; c < plan.Crossings.Count; c++)
                     Mod.Log("  Crossing " + (c + 1) + " with " + plan.Crossings[c].ExistingName + ": " + plan.Crossings[c].Describe());
 
+                lastBuiltEnds.Clear();
+                foreach (ushort segment in build.Segments)
+                {
+                    lastBuiltEnds.Add(net.m_segments.m_buffer[segment].m_startNode);
+                    lastBuiltEnds.Add(net.m_segments.m_buffer[segment].m_endNode);
+                }
                 undoStack.Add(build);
                 if (undoStack.Count > MaxUndo) undoStack.RemoveAt(0);
                 Mod.Log("Built " + build.Segments.Count + " segment(s) of " + info.name +
@@ -515,13 +526,21 @@ namespace RealisticRoads
         private static void RefreshDirections(ushort node)
         {
             var net = NetManager.instance;
+            Vector3 min = net.m_nodes.m_buffer[node].m_position, max = min;
             for (int i = 0; i < 8; i++)
             {
                 ushort segment = net.m_nodes.m_buffer[node].GetSegment(i);
                 if (segment == 0) continue;
                 CalculateSegmentDirections(segment);
                 net.UpdateSegment(segment);
+                var s = net.m_segments.m_buffer[segment];
+                Vector3 other = net.m_nodes.m_buffer[s.m_startNode == node ? s.m_endNode : s.m_startNode].m_position;
+                min = Vector3.Min(min, other);
+                max = Vector3.Max(max, other);
             }
+            // Re-dig / re-fill the terrain under the moved roads (as Move It does).
+            const float margin = 32f;
+            TerrainModify.UpdateArea(min.x - margin, min.z - margin, max.x + margin, max.z + margin, true, true, false);
         }
 
         private static Vector3 DirectionAway(ushort segment, ushort node)

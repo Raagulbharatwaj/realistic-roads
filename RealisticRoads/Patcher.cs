@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 
 namespace RealisticRoads
@@ -144,6 +145,9 @@ namespace RealisticRoads
             {
                 var segments = NetManager.instance.m_segments.m_buffer;
                 ushort node = start ? segments[segmentID].m_startNode : segments[segmentID].m_endNode;
+                // CS2-style junctions: road ends moved back for rounder corners.
+                if (Junctions.TryAdjustCorner(segmentID, node, ref cornerPos, cornerDirection)) return;
+
                 if (!SmoothSplits.IsEnabled(node)) return;
 
                 UnityEngine.Vector3 position, direction;
@@ -167,47 +171,113 @@ namespace RealisticRoads
         }
     }
 
-    // Smooth splits: don't draw the junction piece at a marked node. The
-    // branches already meet the trunk edge to edge, and the junction piece
-    // is what shows the seam strip and crosswalk lines there.
+    // Smooth splits and CS2-style junctions: don't draw the vanilla junction
+    // pieces (seam strip, crosswalks, median blocks) close up. Like Node
+    // Controller, the road's list of junction pieces reads as empty for our
+    // nodes inside NetNode.RenderInstance, so everything else the method does
+    // (props, the render list) carries on as normal.
     [HarmonyPatch]
     public static class NodeRenderPatch
     {
-        private static bool failed;
-
-        // NetNode.RenderInstance(RenderManager.CameraInfo, ushort nodeID, NetInfo info, int iter,
-        //     NetNode.Flags flags, ref uint instanceIndex, ref RenderManager.Instance data)
-        public static MethodBase TargetMethod()
+        public static IEnumerable<MethodBase> TargetMethods()
         {
-            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.NonPublic | BindingFlags.Instance))
+            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
             {
                 if (method.Name != "RenderInstance") continue;
                 var parameters = method.GetParameters();
                 if (parameters.Length > 1 && parameters[1].Name == "nodeID" && parameters[1].ParameterType == typeof(ushort))
-                    return method;
+                    yield return method;
             }
-            throw new Exception("NetNode.RenderInstance(cameraInfo, nodeID, ...) not found");
         }
 
-        // Skipping the drawing must still step to the next instance: the
-        // caller loops until the list ends and logs "Invalid list detected!"
-        // (every frame) if the index never moves on.
-        public static bool Prefix(ushort nodeID, ref uint instanceIndex, ref RenderManager.Instance data)
+        public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
-            if (failed) return true;
+            return NodeMeshes.HideNodeMeshes(instructions, OpCodes.Ldarg_2,
+                typeof(NodeMeshes).GetMethod(nameof(NodeMeshes.CloseUpLength), BindingFlags.Public | BindingFlags.Static));
+        }
+
+        // After the node is drawn (the public overload, once per node and
+        // frame; the private one runs once per junction piece): our own
+        // junction surface.
+        public static void Postfix(ushort nodeID, MethodBase __originalMethod)
+        {
+            if (__originalMethod.IsPublic) JunctionRenderer.Render(nodeID);
+        }
+    }
+
+    public static class NodeMeshes
+    {
+        // After every "info.m_nodes.Length", pass the length and the node
+        // through 'filter', which returns 0 for nodes whose pieces we hide.
+        public static IEnumerable<CodeInstruction> HideNodeMeshes(IEnumerable<CodeInstruction> instructions, OpCode loadNodeId, MethodInfo filter)
+        {
+            var nodesField = typeof(NetInfo).GetField("m_nodes");
+            bool previousLoadsNodes = false;
+            int count = 0;
+            foreach (var instruction in instructions)
+            {
+                yield return instruction;
+                if (previousLoadsNodes && instruction.opcode == OpCodes.Ldlen)
+                {
+                    yield return new CodeInstruction(loadNodeId);
+                    yield return new CodeInstruction(OpCodes.Call, filter);
+                    count++;
+                }
+                previousLoadsNodes = instruction.opcode == OpCodes.Ldfld && Equals(instruction.operand, nodesField);
+            }
+            Mod.Log("Junction piece lookups redirected: " + count);
+        }
+
+        public static int CloseUpLength(int length, ushort nodeID)
+        {
             try
             {
-                if (!SmoothSplits.IsEnabled(nodeID)) return true;
-                instanceIndex = data.m_nextInstance;
-                return false;
+                return SmoothSplits.IsEnabled(nodeID) || Junctions.IsEnabled(nodeID) ? 0 : length;
             }
-            catch (Exception e)
+            catch
             {
-                failed = true;
-                Mod.LogError("Smooth split node drawing failed, drawing vanilla junctions", e);
-                return true;
+                return length;
+            }
+        }
+
+        // Far away only smooth splits are hidden; CS2-style junctions keep the
+        // vanilla far-away piece (ours is only drawn close up).
+        public static int FarLength(int length, ushort nodeID)
+        {
+            try
+            {
+                return SmoothSplits.IsEnabled(nodeID) ? 0 : length;
+            }
+            catch
+            {
+                return length;
             }
         }
     }
-}
 
+    // Smooth splits seen from far away: the game draws junctions into
+    // combined LOD meshes (CalculateGroupData / PopulateGroupData), which the
+    // RenderInstance prefix doesn't reach. Like Node Controller, make the
+    // road's list of junction pieces look empty for our nodes there. Both
+    // methods must agree, or the LOD buffers are sized wrong.
+    [HarmonyPatch]
+    public static class NodeGroupDataPatch
+    {
+        public static IEnumerable<MethodBase> TargetMethods()
+        {
+            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (method.Name != "CalculateGroupData" && method.Name != "PopulateGroupData") continue;
+                var parameters = method.GetParameters();
+                if (parameters.Length > 0 && parameters[0].Name == "nodeID" && parameters[0].ParameterType == typeof(ushort))
+                    yield return method;
+            }
+        }
+
+        public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            return NodeMeshes.HideNodeMeshes(instructions, OpCodes.Ldarg_1,
+                typeof(NodeMeshes).GetMethod(nameof(NodeMeshes.FarLength), BindingFlags.Public | BindingFlags.Static));
+        }
+    }
+}

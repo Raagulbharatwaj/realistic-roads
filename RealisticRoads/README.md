@@ -104,6 +104,21 @@ TM:PE settings or custom names on them are lost). Long curves are cut into ~80 m
 
 Screenshots of before/after help a lot: the shape is computed, and the numbers may need tuning.
 
-## 7. What's next
+## 7. CS2-style junctions (JN)
+Junctions built with RR get the CS2 look automatically; JN changes any other junction.
+1. Click **JN** (below SPL) or press **Ctrl+Shift+N**. Hover junctions: **green** = CS2-style, **yellow** = can be,
+   **red** = can't (rail, paths, elevated or underground for now; the info panel says why).
+2. Click a yellow junction: the vanilla junction piece (crosswalks, median blocks) is replaced by a flat asphalt
+   floor and raised sidewalk corners that curve from road to road. The road ends move 3 m back for rounder corners.
+3. With the mouse over a CS2-style junction, **+** / **-** make the corners bigger / smaller (1 m steps, 0-20 m).
+   Click again to go back to vanilla.
+4. Traffic is unchanged; cars follow the new road ends. Saves keep the junctions; without the mod they are vanilla.
+
+Please check and screenshot: the asphalt and sidewalk colours (they use the game's road shader, like Intersection
+Marking Tool's fillers), the curb height, any gaps or flicker where the roads meet the junction, and traffic lights.
+From far away the vanilla junction is still drawn. If drawing fails, the log says
+`Drawing CS2-style junctions failed` and the junctions show as vanilla.
+
+## 8. What's next
 See the milestones in [docs/PROJECT_BRIEF.md](../docs/PROJECT_BRIEF.md). Next up is milestone 3:
 a live spline/arc preview between the points, showing length and turning red where a bend is too sharp.

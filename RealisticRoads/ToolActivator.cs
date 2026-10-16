@@ -12,6 +12,8 @@ namespace RealisticRoads
     {
         private static CurveTool curveTool;
         private static SplitTool splitTool;
+        private static JunctionTool junctionTool;
+        private static UIButton junctionButton;
         private static UIButton curveButton;
         private static UIButton splitButton;
         private static UILabel infoLabel;
@@ -32,17 +34,24 @@ namespace RealisticRoads
                 curveTool.enabled = false;
                 splitTool = controller.gameObject.AddComponent<SplitTool>();
                 splitTool.enabled = false;
+                junctionTool = controller.gameObject.AddComponent<JunctionTool>();
+                junctionTool.enabled = false;
 
                 curveButton = CreateButton("RealisticRoadsCurveButton", "RR",
                     "Realistic Roads curve tool (Ctrl+Shift+C)", 120f, ToggleCurveTool);
                 splitButton = CreateButton("RealisticRoadsSplitButton", "SPL",
                     "Realistic Roads smooth split tool (Ctrl+Shift+J)\nClick a junction where a road splits in two", 172f, ToggleSplitTool);
 
-                infoLabel = CreateInfoLabel(224f);
+                junctionButton = CreateButton("RealisticRoadsJunctionButton", "JN",
+                    "Realistic Roads junction tool (Ctrl+Shift+N)\nClick a junction for the CS2 look", 224f, ToggleJunctionTool);
+
+                infoLabel = CreateInfoLabel(276f);
                 NetworkBuilder.ClearUndo();
 
-                Mod.Log("Tools ready: RR / Ctrl+Shift+C = curve tool, SPL / Ctrl+Shift+J = smooth split tool");
+                Mod.Log("Tools ready: RR / Ctrl+Shift+C = curve tool, SPL / Ctrl+Shift+J = smooth split tool, " +
+                        "JN / Ctrl+Shift+N = junction tool");
                 SmoothSplits.RefreshAll();
+                Junctions.RefreshAll();
             }
             catch (Exception e)
             {
@@ -58,7 +67,7 @@ namespace RealisticRoads
                 var current = ToolsModifierControl.toolController != null
                     ? ToolsModifierControl.toolController.CurrentTool
                     : null;
-                if (current != null && (current == curveTool || current == splitTool))
+                if (current != null && (current == curveTool || current == splitTool || current == junctionTool))
                     ToolsModifierControl.SetTool<DefaultTool>();
                 if (curveTool != null)
                 {
@@ -66,6 +75,8 @@ namespace RealisticRoads
                     UnityEngine.Object.Destroy(curveTool);
                 }
                 if (splitTool != null) UnityEngine.Object.Destroy(splitTool);
+                if (junctionTool != null) UnityEngine.Object.Destroy(junctionTool);
+                if (junctionButton != null) UnityEngine.Object.Destroy(junctionButton.gameObject);
                 if (curveButton != null) UnityEngine.Object.Destroy(curveButton.gameObject);
                 if (splitButton != null) UnityEngine.Object.Destroy(splitButton.gameObject);
                 if (infoLabel != null) UnityEngine.Object.Destroy(infoLabel.gameObject);
@@ -78,6 +89,8 @@ namespace RealisticRoads
             splitTool = null;
             curveButton = null;
             splitButton = null;
+            junctionTool = null;
+            junctionButton = null;
             infoLabel = null;
         }
 
@@ -102,6 +115,26 @@ namespace RealisticRoads
             catch (Exception e)
             {
                 Mod.LogError("Switching the curve tool failed", e);
+            }
+        }
+
+        public static void ToggleJunctionTool()
+        {
+            if (junctionTool == null) return;
+            try
+            {
+                if (junctionTool.IsActive)
+                {
+                    ToolsModifierControl.SetTool<DefaultTool>();
+                    Mod.Log("Junction tool off");
+                    return;
+                }
+                ToolsModifierControl.toolController.CurrentTool = junctionTool;
+                Mod.Log("Junction tool on: green = CS2-style, yellow = can be, red = can't");
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Switching the junction tool failed", e);
             }
         }
 
@@ -185,7 +218,8 @@ namespace RealisticRoads
         }
     }
 
-    // Ctrl+Shift+C toggles the curve tool, Ctrl+Shift+J the smooth split tool.
+    // Ctrl+Shift+C toggles the curve tool, Ctrl+Shift+J the smooth split tool,
+    // Ctrl+Shift+N the junction tool.
     // OnUpdate runs on the main thread.
     public class HotkeyHandler : ThreadingExtensionBase
     {
@@ -193,12 +227,14 @@ namespace RealisticRoads
         {
             bool c = Input.GetKeyDown(KeyCode.C);
             bool j = Input.GetKeyDown(KeyCode.J);
-            if (!c && !j) return;
+            bool n = Input.GetKeyDown(KeyCode.N);
+            if (!c && !j && !n) return;
             var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             var shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
             if (!ctrl || !shift || UIView.HasInputFocus()) return;
             if (c) ToolActivator.ToggleCurveTool();
-            else ToolActivator.ToggleSplitTool();
+            else if (j) ToolActivator.ToggleSplitTool();
+            else ToolActivator.ToggleJunctionTool();
         }
     }
 }
