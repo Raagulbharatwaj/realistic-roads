@@ -26,6 +26,7 @@ namespace RealisticRoads
         public string ExistingName;
         public CrossingType Type;
         public float ExtraHeight;       // player's +/- on a Bridge crossing
+        public float Skew = 1f;         // sine of the crossing angle (1 = square), set by RoadPlanner
 
         public bool ExistingAtGround => Mathf.Abs(ExistingElevation) < 2f;
 

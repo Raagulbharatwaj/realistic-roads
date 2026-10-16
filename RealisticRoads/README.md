@@ -62,8 +62,12 @@ Tip: launch with `-noWorkshop` in Steam launch options to test with only local m
    - **bridge**: our road goes over on a flyover (9 m clearance), the existing one is untouched. **+/-** sets the height;
    - **overpass**: the existing road is lowered 8 m into a cutting (ramping down along it at 6 %), ours crosses at
      ground level on a bridge deck. Needs ~140 m of plain road (no junction) on each side of the crossing;
-   - **underpass**: the existing road gets a short bridge, ours is dug 8 m down into a cutting under it;
-   - **tunnel**: ours goes 12 m under through a tunnel with proper portals.
+   - **underpass**: the existing road gets a short bridge, ours is dug 8 m down into an open cutting under it;
+   - **tunnel**: ours goes 12 m under through a tunnel. Like the vanilla tool: an open cutting while it is less than
+     8 m down, one slope piece with the portal, then the tunnel (no more rows of portals).
+   Crossing at an angle, bridges, cuttings and lowered stretches get longer to fit the skewed footprint.
+   If an overpass can't lower the other road, the log lists that road's nodes and heights (`Overpass: lowering ...
+   failed`); please send it.
    Over water the preview shows **+/-** at the middle of the river: the bridge deck is 10 m above the water by
    default, 5 m per click (up to +60 m) so ships fit. Bridges over water use ~90 m spans.
    Bridges and flyovers span level between their banks: over a gorge or a river with high banks the deck stays at

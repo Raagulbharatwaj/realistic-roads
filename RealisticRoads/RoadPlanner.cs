@@ -11,7 +11,7 @@ namespace RealisticRoads
         Elevated,   // above land: elevated version, pillars
         Bridge,     // above water, or over a lowered road: bridge version
         Cut,        // below the ground in an open cutting: normal version, the game digs the terrain
-        Slope,      // tunnel ramp: slope version (walls, portal)
+        Slope,      // (not used for nodes any more: the one segment from a cutting into a tunnel is the slope version)
         Tunnel,     // deep underground: tunnel version
     }
 
@@ -62,8 +62,12 @@ namespace RealisticRoads
         public const float UnderClearance = 7f;       // headroom under an elevated road we pass beneath
         public const float TunnelDepth = 12f;         // tunnel under the existing road
         public const float CutDepth = 8f;             // open cutting under a short bridge
-        public const float TunnelMinDepth = 6f;       // shallower than this a tunnel is a ramp (slope)
+        // Like the vanilla tool: shallower than this the road stays the normal
+        // version in an open cutting; deeper it is a tunnel. The one segment
+        // between the two is the slope version, which has the portal.
+        public const float TunnelMinDepth = 8f;
         private const float Unlimited = 100000f;
+        private static string lastLoweringFailure;
 
         public static Plan Make(NetInfo info, List<Vector3> points, List<Vector3> tangents,
             List<Crossing> crossings, List<int> crossingIndex, List<WaterRun> waterRuns, ushort startNode, ushort endNode)
@@ -114,7 +118,9 @@ namespace RealisticRoads
             {
                 var crossing = crossings[c];
                 int k = crossingIndex[c];
-                float window = crossing.ExistingHalfWidth + info.m_halfWidth + 2f;
+                // Crossing at an angle, the other road is wider measured along ours.
+                crossing.Skew = Skew(crossing, plan.Tangents[k]);
+                float window = (crossing.ExistingHalfWidth + info.m_halfWidth + 2f) / crossing.Skew;
                 switch (crossing.Type)
                 {
                     case CrossingType.Junction:
@@ -128,7 +134,7 @@ namespace RealisticRoads
                         Fix(k, crossing.Point.y, minH, maxH, isFixed);
                         Mark(distance, k, window, forceBridge);
                         string problem;
-                        var lowering = PlanLowering(crossing, info.m_halfWidth, out problem);
+                        var lowering = PlanLowering(crossing, info.m_halfWidth, plan.Tangents[k], out problem);
                         if (lowering != null) plan.Lowerings[c] = lowering;
                         else plan.Problems.Add(problem);
                         break;
@@ -170,8 +176,18 @@ namespace RealisticRoads
                 if (forceBridge[i] && elevation > -1f) plan.Kinds[i] = NodeKind.Bridge;
                 else if (elevation >= 1f) plan.Kinds[i] = water[i] && hasBridge ? NodeKind.Bridge : NodeKind.Elevated;
                 else if (elevation <= -1f)
-                    plan.Kinds[i] = cutting[i] ? NodeKind.Cut : elevation <= -TunnelMinDepth ? NodeKind.Tunnel : NodeKind.Slope;
+                    plan.Kinds[i] = !cutting[i] && elevation <= -TunnelMinDepth ? NodeKind.Tunnel : NodeKind.Cut;
                 else plan.Kinds[i] = NodeKind.Ground;
+            }
+
+            // A tunnel needs at least two tunnel nodes in a row; a lone deep node
+            // would be two portals facing each other, so it stays a cutting.
+            for (int i = 0; i < n; i++)
+            {
+                if (plan.Kinds[i] != NodeKind.Tunnel) continue;
+                bool before = i > 0 && plan.Kinds[i - 1] == NodeKind.Tunnel;
+                bool after = i < n - 1 && plan.Kinds[i + 1] == NodeKind.Tunnel;
+                if (!before && !after) plan.Kinds[i] = NodeKind.Cut;
             }
 
             if (IsDoubleLength(info)) MarkMiddles(plan);
@@ -256,7 +272,20 @@ namespace RealisticRoads
         // around the crossing, drop that part by CutDepth and ramp it back up
         // along the road on both sides. Null (with a reason) if the road has a
         // junction too close or runs over water.
-        private static Lowering PlanLowering(Crossing crossing, float ourHalfWidth, out string problem)
+        private static Lowering PlanLowering(Crossing crossing, float ourHalfWidth, Vector3 ourDirection, out string problem)
+        {
+            // Crossing at an angle, our road is wider measured along the existing one.
+            ourHalfWidth /= Skew(crossing, ourDirection);
+
+            // First with the shortest ramp, then with more of the road to ramp along.
+            float ramp = CutDepth / MaxGrade + 10f;
+            Lowering lowering = PlanLowering(crossing, ourHalfWidth, ramp, false, out problem);
+            if (lowering == null && problem != null && problem.StartsWith("Not enough room"))
+                lowering = PlanLowering(crossing, ourHalfWidth, ramp * 2f, true, out problem);
+            return lowering;
+        }
+
+        private static Lowering PlanLowering(Crossing crossing, float ourHalfWidth, float ramp, bool logFailure, out string problem)
         {
             problem = null;
             var net = NetManager.instance;
@@ -267,7 +296,6 @@ namespace RealisticRoads
             float t1 = Mathf.Clamp(crossing.ExistingT + span / length, 0.04f, 0.98f);
             float tx = Mathf.Clamp(crossing.ExistingT, t0 + 0.01f, t1 - 0.01f);
             float low = crossing.Point.y - CutDepth;
-            float ramp = CutDepth / MaxGrade + 10f;
 
             // Existing nodes along the road on both sides, until the ramp fits.
             var back = WalkChain(crossing.Segment, segment.m_startNode, crossing.ExistingT * length, ramp, out problem);
@@ -315,7 +343,22 @@ namespace RealisticRoads
             float[] heights;
             if (!CurveMath.SolveHeights(along.ToArray(), current.ToArray(), minH, maxH, isFixed, MaxGrade, out heights))
             {
-                problem = "Not enough room to lower the " + crossing.ExistingName;
+                problem = "Not enough room to lower the " + crossing.ExistingName +
+                          " (it climbs or drops too steeply near the crossing; try a bridge, or cross somewhere flatter)";
+                if (logFailure)
+                {
+                    // Enough detail to see from the log why it didn't fit.
+                    var detail = new System.Text.StringBuilder("Overpass: lowering the " + crossing.ExistingName + " #" +
+                                                               crossing.Segment + " failed, along / now / planned / fixed:");
+                    for (int i = 0; i < m; i++)
+                        detail.Append("\n  " + (ids[i] != 0 ? "node #" + ids[i] : "split") + "  " + along[i].ToString("F0") + " m  " +
+                                      current[i].ToString("F1") + "  " + heights[i].ToString("F1") + (isFixed[i] ? "  fixed" : "") +
+                                      (maxH[i] < Unlimited ? "  max " + maxH[i].ToString("F1") : ""));
+                    // The preview plans every frame: log each different failure once.
+                    string text = detail.ToString();
+                    if (text != lastLoweringFailure) Mod.Log(text);
+                    lastLoweringFailure = text;
+                }
                 return null;
             }
 
@@ -382,6 +425,17 @@ namespace RealisticRoads
         }
 
         // --- helpers -------------------------------------------------------------
+
+        // Sine of the angle between the two roads at a crossing (1 = square),
+        // not below 0.35 so a very shallow crossing doesn't blow up.
+        private static float Skew(Crossing crossing, Vector3 ourDirection)
+        {
+            Vector3 a, b, c, d;
+            CrossingFinder.SegmentBezier(crossing.Segment, out a, out b, out c, out d);
+            Vector3 theirs = CurveMath.FlatNormal(CurveMath.BezierDerivative(a, b, c, d, crossing.ExistingT));
+            Vector3 ours = CurveMath.FlatNormal(ourDirection);
+            return Mathf.Max(Mathf.Abs(ours.x * theirs.z - ours.z * theirs.x), 0.35f);
+        }
 
         private static void Fix(int i, float height, float[] minH, float[] maxH, bool[] isFixed)
         {

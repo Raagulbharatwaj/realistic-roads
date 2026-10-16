@@ -139,7 +139,7 @@ namespace RealisticRoads
                         NetInfo bridge = RoadPlanner.Variant(existing, "m_bridgeInfo") ?? RoadPlanner.Variant(existing, "m_elevatedInfo");
                         if (bridge == null) throw new Exception(existing.name + " has no bridge version for the underpass");
                         float length = Mathf.Max(net.m_segments.m_buffer[crossing.Segment].m_averageLength, 1f);
-                        float half = (info.m_halfWidth + UnderpassBridgeExtra) / length;
+                        float half = (info.m_halfWidth / crossing.Skew + UnderpassBridgeExtra) / length;
                         float t0 = Mathf.Max(crossing.ExistingT - half, 0.05f);
                         float t1 = Mathf.Min(crossing.ExistingT + half, 0.95f);
                         build.Splits.Add(SplitSegment(crossing.Segment, new[] { t0, t1 }, new[] { existing, bridge, existing }));
