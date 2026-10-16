@@ -71,6 +71,17 @@ Where a road splits in two (or two roads merge), vanilla CS1 draws a normal junc
 
 Technical notes: implemented as a `[HarmonyPriority(Priority.Last)]` postfix on `NetSegment.CalculateCorner` that only changes nodes the player marked, so it coexists with Node Controller Renewal (NCR wins on every other node; on marked nodes this mod wins). Geometry follows each segment's Bézier curve. Must be thread-safe: corners are calculated from the simulation and render threads.
 
+### E. Grade-separated crossings (curve tool)
+
+Agreed with the player (Oct 16):
+- Same type crossing (road x road, rail x rail): **junction** by default; per-crossing UP = flyover, DN = tunnel.
+- Different type (road x rail): **level crossing** by default; UP = overpass (new one on a bridge, existing untouched);
+  DN = underpass: the existing line's segment at the crossing is replaced by its short bridge version and the new one
+  is lowered into an open cutting (not a tunnel).
+- Passing an existing flyover: UP/DN choose over or under it.
+- Controls: on-screen UP/DN buttons next to each crossing in the preview.
+- Going down: check clearance (water, nearby underground networks, room to ramp) and show depth/warnings in the panel.
+
 ### C. Settings page
 
 - Segment spacing, pillar spacing, default heights, default pillar style, hotkeys, show/hide preview info, debug logging on/off.

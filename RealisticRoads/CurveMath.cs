@@ -180,6 +180,131 @@ namespace RealisticRoads
             return max;
         }
 
+        // --- points, slices and crossings on polylines ------------------------
+
+        // Point and ground direction 'distance' metres along a polyline.
+        public static void PointAt(IList<Vector3> polyline, float distance, out Vector3 point, out Vector3 tangent)
+        {
+            float travelled = 0f;
+            for (int i = 1; i < polyline.Count; i++)
+            {
+                float step = FlatDistance(polyline[i - 1], polyline[i]);
+                if (travelled + step >= distance || i == polyline.Count - 1)
+                {
+                    float t = step > 0.0001f ? Mathf.Clamp01((distance - travelled) / step) : 0f;
+                    point = Vector3.Lerp(polyline[i - 1], polyline[i], t);
+                    tangent = TangentAt(polyline, i, t);
+                    return;
+                }
+                travelled += step;
+            }
+            point = polyline.Count > 0 ? polyline[0] : Vector3.zero;
+            tangent = Vector3.zero;
+        }
+
+        // The part of a polyline between two distances along it.
+        public static List<Vector3> Slice(IList<Vector3> polyline, float from, float to)
+        {
+            var result = new List<Vector3>();
+            Vector3 p, t;
+            PointAt(polyline, from, out p, out t);
+            result.Add(p);
+            float travelled = 0f;
+            for (int i = 1; i < polyline.Count; i++)
+            {
+                travelled += FlatDistance(polyline[i - 1], polyline[i]);
+                if (travelled > from + 0.01f && travelled < to - 0.01f) result.Add(polyline[i]);
+            }
+            PointAt(polyline, to, out p, out t);
+            result.Add(p);
+            return result;
+        }
+
+        // Where two ground line pieces a-b and c-d cross, as fractions along each.
+        public static bool Intersect(Vector3 a, Vector3 b, Vector3 c, Vector3 d, out float ta, out float tc)
+        {
+            float rx = b.x - a.x, rz = b.z - a.z;
+            float sx = d.x - c.x, sz = d.z - c.z;
+            float denominator = rx * sz - rz * sx;
+            ta = tc = 0f;
+            if (Mathf.Abs(denominator) < 1e-6f) return false;
+            float qx = c.x - a.x, qz = c.z - a.z;
+            ta = (qx * sz - qz * sx) / denominator;
+            tc = (qx * rz - qz * rx) / denominator;
+            return ta >= 0f && ta <= 1f && tc >= 0f && tc <= 1f;
+        }
+
+        // A cubic Bezier and its derivative (a, d ends; b, c control points).
+        public static Vector3 Bezier(Vector3 a, Vector3 b, Vector3 c, Vector3 d, float t)
+        {
+            float u = 1f - t;
+            return a * (u * u * u) + b * (3f * u * u * t) + c * (3f * u * t * t) + d * (t * t * t);
+        }
+
+        public static Vector3 BezierDerivative(Vector3 a, Vector3 b, Vector3 c, Vector3 d, float t)
+        {
+            float u = 1f - t;
+            return (b - a) * (3f * u * u) + (c - b) * (6f * u * t) + (d - c) * (3f * t * t);
+        }
+
+        // --- heights along a road ----------------------------------------------
+
+        // Heights for the nodes of a road at ground distances 'distance':
+        // each node starts on 'ground', is kept within [minH, maxH], and the
+        // slope between neighbours stays within 'maxGrade' around lifted or
+        // lowered nodes (plain ground keeps following the terrain). Fixed
+        // nodes (minH == maxH and isFixed) never move. Returns false if the
+        // limits cannot all be met, e.g. a flyover too close to a fixed end.
+        public static bool SolveHeights(float[] distance, float[] ground, float[] minH, float[] maxH, bool[] isFixed,
+            float maxGrade, out float[] heights)
+        {
+            int n = ground.Length;
+            heights = new float[n];
+            for (int i = 0; i < n; i++)
+                heights[i] = isFixed[i] ? minH[i] : Mathf.Clamp(ground[i], minH[i], maxH[i]);
+
+            for (int pass = 0; pass < 12; pass++)
+            {
+                bool changed = false;
+                // Up and down, both directions: lifted/fixed nodes raise their neighbours,
+                // lowered/fixed nodes lower theirs.
+                for (int dir = 0; dir < 2; dir++)
+                {
+                    for (int k = 1; k < n; k++)
+                    {
+                        int i = dir == 0 ? k : n - 1 - k;
+                        int j = dir == 0 ? k - 1 : n - k;
+                        if (isFixed[i]) continue;
+                        float run = Mathf.Abs(distance[i] - distance[j]);
+                        float h = heights[i];
+                        if (isFixed[j] || heights[j] > ground[j] + 0.5f)
+                            h = Mathf.Max(h, heights[j] - maxGrade * run);
+                        if (isFixed[j] || heights[j] < ground[j] - 0.5f)
+                            h = Mathf.Min(h, heights[j] + maxGrade * run);
+                        h = Mathf.Clamp(h, minH[i], maxH[i]);
+                        if (Mathf.Abs(h - heights[i]) > 0.001f)
+                        {
+                            heights[i] = h;
+                            changed = true;
+                        }
+                    }
+                }
+                if (!changed) break;
+            }
+
+            // Check: every limit met, and no lifted/lowered part steeper than allowed.
+            for (int i = 0; i < n; i++)
+            {
+                if (heights[i] < minH[i] - 0.01f || heights[i] > maxH[i] + 0.01f) return false;
+                if (i == 0) continue;
+                bool shaped = isFixed[i] || isFixed[i - 1] ||
+                              Mathf.Abs(heights[i] - ground[i]) > 0.5f || Mathf.Abs(heights[i - 1] - ground[i - 1]) > 0.5f;
+                float run = Mathf.Abs(distance[i] - distance[i - 1]);
+                if (shaped && Mathf.Abs(heights[i] - heights[i - 1]) > maxGrade * run + 0.05f) return false;
+            }
+            return true;
+        }
+
         // The left-hand direction on the ground when facing 'd' (same side the
         // game calls leftSide for a segment going away from a node).
         public static Vector3 Left(Vector3 d)
