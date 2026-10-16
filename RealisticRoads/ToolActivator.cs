@@ -214,6 +214,23 @@ namespace RealisticRoads
                     component.position.y + param.moveDelta.y * ratio,
                     component.position.z);
             };
+            // Remember where it was put (per button, across cities and restarts).
+            button.eventMouseUp += (component, param) =>
+            {
+                if ((param.buttons & UIMouseButton.Right) == 0) return;
+                try
+                {
+                    PlayerPrefs.SetFloat(name + ".x", component.relativePosition.x);
+                    PlayerPrefs.SetFloat(name + ".y", component.relativePosition.y);
+                    PlayerPrefs.Save();
+                }
+                catch (Exception e)
+                {
+                    Mod.LogError("Saving the button position failed", e);
+                }
+            };
+            if (PlayerPrefs.HasKey(name + ".x"))
+                button.relativePosition = new Vector3(PlayerPrefs.GetFloat(name + ".x"), PlayerPrefs.GetFloat(name + ".y"));
             return button;
         }
     }

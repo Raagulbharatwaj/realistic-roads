@@ -66,7 +66,9 @@ Tip: launch with `-noWorkshop` in Steam launch options to test with only local m
    **Crossings:** where the curve crosses an existing road or track, a ring marks the crossing and a row of
    **icons** above it picks what happens (selected one is green; our road is yellow in the icons):
    - **junction** (default): junction, or level crossing for road x rail; passes over/under an elevated or
-     underground road;
+     underground road. Only networks that may join get one (roads, rail, road x rail); a road crossing a path,
+     canal or the like defaults to **bridge**. A curve may cross the same road several times (junctions,
+     bridges or tunnels; overpass/underpass only once per piece of road);
    - **bridge**: our road goes over on a flyover (9 m clearance), the existing one is untouched. **+/-** sets the height;
    - **overpass**: the existing road is lowered 8 m into a cutting (ramping down along it at 6 %), ours crosses at
      ground level on a bridge deck. Needs ~140 m of plain road (no junction) on each side of the crossing;

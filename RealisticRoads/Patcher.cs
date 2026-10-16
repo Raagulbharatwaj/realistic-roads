@@ -135,16 +135,19 @@ namespace RealisticRoads
     [HarmonyPriority(Priority.Last)]
     public static class CalculateCornerPatch
     {
-        private static bool failed;
+        // Nodes whose corner failed once (logged once each; the call falls back
+        // to the vanilla corner). Not a global switch: one road being rebuilt
+        // mid-call must not turn off every smooth split in the city.
+        private static readonly HashSet<ushort> logged = new HashSet<ushort>();
 
         public static void Postfix(ushort segmentID, bool start, bool leftSide,
             ref UnityEngine.Vector3 cornerPos, ref UnityEngine.Vector3 cornerDirection)
         {
-            if (failed) return;
+            ushort node = 0;
             try
             {
                 var segments = NetManager.instance.m_segments.m_buffer;
-                ushort node = start ? segments[segmentID].m_startNode : segments[segmentID].m_endNode;
+                node = start ? segments[segmentID].m_startNode : segments[segmentID].m_endNode;
                 // CS2-style junctions: road ends moved back for rounder corners.
                 if (Junctions.TryAdjustCorner(segmentID, node, ref cornerPos, cornerDirection)) return;
 
@@ -164,9 +167,9 @@ namespace RealisticRoads
             }
             catch (Exception e)
             {
-                // Corners are asked for constantly; log once and fall back to vanilla.
-                failed = true;
-                Mod.LogError("Smooth split corner failed, smooth splits disabled until restart", e);
+                bool first;
+                lock (logged) first = logged.Count < 32 && logged.Add(node);
+                if (first) Mod.LogError("Corner at node #" + node + " failed; vanilla corner used there", e);
             }
         }
     }

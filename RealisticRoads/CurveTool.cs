@@ -69,8 +69,12 @@ namespace RealisticRoads
         private readonly List<Vector3> pointMarkers = new List<Vector3>();
 
         // Written on the main thread in OnToolUpdate, read by SimulationStep.
+        // Shared under rayLock: a Ray is too big to be written and read atomically.
+        private readonly object rayLock = new object();
         private Ray mouseRay;
         private float mouseRayLength;
+        private Ray simRay;              // simulation thread's copy, taken under rayLock
+        private float simRayLength;
         private volatile bool mouseRayValid;
 
         // Written by SimulationStep (simulation thread), read on the main thread.
@@ -128,8 +132,11 @@ namespace RealisticRoads
             var camera = Camera.main;
             if (camera != null)
             {
-                mouseRay = camera.ScreenPointToRay(Input.mousePosition);
-                mouseRayLength = camera.farClipPlane;
+                lock (rayLock)
+                {
+                    mouseRay = camera.ScreenPointToRay(Input.mousePosition);
+                    mouseRayLength = camera.farClipPlane;
+                }
                 mouseRayValid = !m_toolController.IsInsideUI && Cursor.visible;
             }
             else
@@ -156,6 +163,11 @@ namespace RealisticRoads
         public override void SimulationStep()
         {
             base.SimulationStep();
+            lock (rayLock)
+            {
+                simRay = mouseRay;
+                simRayLength = mouseRayLength;
+            }
             if (!mouseRayValid)
             {
                 hoverValid = false;
@@ -192,14 +204,14 @@ namespace RealisticRoads
         // under the mouse when the mouse is near that end.
         private ushort FindSnapNode()
         {
-            var input = new RaycastInput(mouseRay, mouseRayLength);
+            var input = new RaycastInput(simRay, simRayLength);
             input.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
             input.m_ignoreTerrain = true;
             input.m_ignoreNodeFlags = NetNode.Flags.None;
             RaycastOutput output;
             if (RayCast(input, out output) && output.m_netNode != 0) return output.m_netNode;
 
-            input = new RaycastInput(mouseRay, mouseRayLength);
+            input = new RaycastInput(simRay, simRayLength);
             input.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
             input.m_ignoreTerrain = true;
             input.m_ignoreSegmentFlags = NetSegment.Flags.None;
@@ -221,11 +233,11 @@ namespace RealisticRoads
         private bool GroundUnderMouse(out Vector3 hit)
         {
             var terrain = TerrainManager.instance;
-            Vector3 origin = mouseRay.origin;
-            Vector3 direction = mouseRay.direction;
+            Vector3 origin = simRay.origin;
+            Vector3 direction = simRay.direction;
             const float step = 8f;
             Vector3 previous = origin;
-            for (float d = step; d <= mouseRayLength; d += step)
+            for (float d = step; d <= simRayLength; d += step)
             {
                 Vector3 p = origin + direction * d;
                 if (p.y > terrain.SampleRawHeightSmoothWithWater(p, false, 0f))
@@ -477,7 +489,9 @@ namespace RealisticRoads
             {
                 if (crossing.Distance < MinSpacing * 0.5f || crossing.Distance > division.Length - MinSpacing * 0.5f) continue;
                 CrossingType type;
-                crossing.Type = crossingTypes.TryGetValue(crossing.Segment, out type) && crossing.Allows(type) ? type : CrossingType.Junction;
+                // Default: a junction where the two may join, else a bridge over the other.
+                var fallback = crossing.Allows(CrossingType.Junction) ? CrossingType.Junction : CrossingType.Bridge;
+                crossing.Type = crossingTypes.TryGetValue(crossing.Segment, out type) && crossing.Allows(type) ? type : fallback;
                 float extra;
                 crossing.ExtraHeight = crossingExtra.TryGetValue(crossing.Segment, out extra) ? extra : 0f;
                 cuts.Add(new KeyValuePair<float, Crossing>(crossing.Distance, crossing));

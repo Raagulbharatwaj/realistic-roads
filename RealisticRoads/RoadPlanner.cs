@@ -167,6 +167,7 @@ namespace RealisticRoads
             }
 
             CheckLoweringsApart(plan);
+            CheckRepeatedCrossings(plan);
 
             float[] heights;
             bool solved = CurveMath.SolveHeights(distance, ground, minH, maxH, isFixed, MaxGrade, out heights);
@@ -552,6 +553,30 @@ namespace RealisticRoads
                                   (maxSlope * 100f).ToString("F0") + "%) about " + distance[i - 1].ToString("F0") + " m along");
                 return;
             }
+        }
+
+        // A curve that crosses the same piece of road twice can make junctions,
+        // bridges or tunnels there, but not lower it or bridge it twice.
+        private static void CheckRepeatedCrossings(Plan plan)
+        {
+            for (int a = 0; a < plan.Crossings.Count; a++)
+            for (int b = a + 1; b < plan.Crossings.Count; b++)
+            {
+                var first = plan.Crossings[a];
+                var second = plan.Crossings[b];
+                if (first.Segment != second.Segment) continue;
+                if (ChangesExisting(first) || ChangesExisting(second))
+                {
+                    plan.Problems.Add("The curve crosses the same piece of the " + first.ExistingName +
+                                      " twice: use junctions, bridges or tunnels there (not overpass/underpass)");
+                    return;
+                }
+            }
+        }
+
+        private static bool ChangesExisting(Crossing crossing)
+        {
+            return crossing.Type == CrossingType.Overpass || crossing.Type == CrossingType.Underpass;
         }
 
         // Two overpasses lowering the same road (or overlapping stretches of it)

@@ -18,8 +18,12 @@ namespace RealisticRoads
         private static readonly Color NoColor = new Color(1f, 0.25f, 0.2f, 0.6f);
 
         // Written on the main thread in OnToolUpdate, read by SimulationStep.
+        // Shared under rayLock: a Ray is too big to be written and read atomically.
+        private readonly object rayLock = new object();
         private Ray mouseRay;
         private float mouseRayLength;
+        private Ray simRay;              // simulation thread's copy, taken under rayLock
+        private float simRayLength;
         private volatile bool mouseRayValid;
 
         // Written by SimulationStep (simulation thread), read on the main thread.
@@ -45,8 +49,11 @@ namespace RealisticRoads
                 mouseRayValid = false;
                 return;
             }
-            mouseRay = camera.ScreenPointToRay(Input.mousePosition);
-            mouseRayLength = camera.farClipPlane;
+            lock (rayLock)
+            {
+                mouseRay = camera.ScreenPointToRay(Input.mousePosition);
+                mouseRayLength = camera.farClipPlane;
+            }
             mouseRayValid = !m_toolController.IsInsideUI && Cursor.visible;
             ToolActivator.SetInfo(InfoText());
         }
@@ -54,6 +61,11 @@ namespace RealisticRoads
         public override void SimulationStep()
         {
             base.SimulationStep();
+            lock (rayLock)
+            {
+                simRay = mouseRay;
+                simRayLength = mouseRayLength;
+            }
             hoverNode = mouseRayValid ? FindHoveredNode() : (ushort)0;
         }
 
@@ -61,14 +73,14 @@ namespace RealisticRoads
         // road under the mouse.
         private ushort FindHoveredNode()
         {
-            var input = new RaycastInput(mouseRay, mouseRayLength);
+            var input = new RaycastInput(simRay, simRayLength);
             input.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
             input.m_ignoreTerrain = true;
             input.m_ignoreNodeFlags = NetNode.Flags.None;
             RaycastOutput output;
             if (RayCast(input, out output) && output.m_netNode != 0) return output.m_netNode;
 
-            input = new RaycastInput(mouseRay, mouseRayLength);
+            input = new RaycastInput(simRay, simRayLength);
             input.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
             input.m_ignoreTerrain = true;
             input.m_ignoreSegmentFlags = NetSegment.Flags.None;
@@ -98,18 +110,19 @@ namespace RealisticRoads
                 else if (node != 0 && (e.keyCode == KeyCode.Equals || e.keyCode == KeyCode.Plus || e.keyCode == KeyCode.KeypadPlus))
                 {
                     e.Use();
-                    Junctions.AdjustCorner(node, CornerStep);
+                    SimulationManager.instance.AddAction(() => Junctions.AdjustCorner(node, CornerStep));
                 }
                 else if (node != 0 && (e.keyCode == KeyCode.Minus || e.keyCode == KeyCode.KeypadMinus))
                 {
                     e.Use();
-                    Junctions.AdjustCorner(node, -CornerStep);
+                    SimulationManager.instance.AddAction(() => Junctions.AdjustCorner(node, -CornerStep));
                 }
                 return;
             }
 
             if (e.type != EventType.MouseDown || e.button != 0 || m_toolController.IsInsideUI || node == 0) return;
-            Junctions.Toggle(node);
+            // Changes go through the simulation thread, like road building.
+            SimulationManager.instance.AddAction(() => Junctions.Toggle(node));
             e.Use();
         }
 
