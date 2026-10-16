@@ -48,6 +48,8 @@ namespace RealisticRoads
         public List<WaterRun> WaterRuns = new List<WaterRun>();
         public List<string> Problems = new List<string>();
         public ushort StartNode, EndNode;
+        public float StripHalfWidth;          // lane roads: squeeze to this half width (0 = a normal road)
+        public List<ushort> LaneNodes = new List<ushort>();  // road ends the lane road starts/ends on
         public bool Ok => Problems.Count == 0;
     }
 

@@ -14,6 +14,7 @@ namespace RealisticRoads
         private static SplitTool splitTool;
         private static UIButton curveButton;
         private static UIButton splitButton;
+        private static UIButton laneButton;
         private static UILabel infoLabel;
 
         public static void Create(LoadMode mode)
@@ -38,11 +39,16 @@ namespace RealisticRoads
                 splitButton = CreateButton("RealisticRoadsSplitButton", "SPL",
                     "Realistic Roads smooth split tool (Ctrl+Shift+J)\nClick a junction where a road splits in two", 172f, ToggleSplitTool);
 
-                infoLabel = CreateInfoLabel(224f);
+                laneButton = CreateButton("RealisticRoadsLaneButton", "LN",
+                    "Realistic Roads lane tool (Ctrl+Shift+L)\nDraw each lane of a road end as its own lane road", 224f, ToggleLaneTool);
+
+                infoLabel = CreateInfoLabel(276f);
                 NetworkBuilder.ClearUndo();
 
-                Mod.Log("Tools ready: RR / Ctrl+Shift+C = curve tool, SPL / Ctrl+Shift+J = smooth split tool");
+                Mod.Log("Tools ready: RR / Ctrl+Shift+C = curve tool, SPL / Ctrl+Shift+J = smooth split tool, " +
+                        "LN / Ctrl+Shift+L = lane tool");
                 SmoothSplits.RefreshAll();
+                LaneBundles.RefreshAll();
             }
             catch (Exception e)
             {
@@ -68,6 +74,7 @@ namespace RealisticRoads
                 if (splitTool != null) UnityEngine.Object.Destroy(splitTool);
                 if (curveButton != null) UnityEngine.Object.Destroy(curveButton.gameObject);
                 if (splitButton != null) UnityEngine.Object.Destroy(splitButton.gameObject);
+                if (laneButton != null) UnityEngine.Object.Destroy(laneButton.gameObject);
                 if (infoLabel != null) UnityEngine.Object.Destroy(infoLabel.gameObject);
             }
             catch (Exception e)
@@ -78,6 +85,7 @@ namespace RealisticRoads
             splitTool = null;
             curveButton = null;
             splitButton = null;
+            laneButton = null;
             infoLabel = null;
         }
 
@@ -86,7 +94,7 @@ namespace RealisticRoads
             if (curveTool == null) return;
             try
             {
-                if (curveTool.IsActive)
+                if (curveTool.IsActive && !curveTool.LaneMode)
                 {
                     ToolsModifierControl.SetTool<DefaultTool>();
                     Mod.Log("Curve tool off");
@@ -94,7 +102,7 @@ namespace RealisticRoads
                 }
 
                 var netTool = ToolsModifierControl.GetTool<NetTool>();
-                curveTool.SelectedNetwork = netTool != null ? netTool.m_prefab : null;
+                curveTool.SetMode(false, netTool != null ? netTool.m_prefab : null);
                 ToolsModifierControl.toolController.CurrentTool = curveTool;
                 Mod.Log("Curve tool on, network = " +
                         (curveTool.SelectedNetwork != null ? curveTool.SelectedNetwork.name : "none selected"));
@@ -102,6 +110,32 @@ namespace RealisticRoads
             catch (Exception e)
             {
                 Mod.LogError("Switching the curve tool failed", e);
+            }
+        }
+
+        // The curve tool in lane mode.
+        public static void ToggleLaneTool()
+        {
+            if (curveTool == null) return;
+            try
+            {
+                if (curveTool.IsActive && curveTool.LaneMode)
+                {
+                    ToolsModifierControl.SetTool<DefaultTool>();
+                    Mod.Log("Lane tool off");
+                    return;
+                }
+
+                var netTool = ToolsModifierControl.GetTool<NetTool>();
+                var laneRoad = LaneBundles.LaneRoad(netTool != null ? netTool.m_prefab : null);
+                curveTool.SetMode(true, laneRoad);
+                ToolsModifierControl.toolController.CurrentTool = curveTool;
+                Mod.Log("Lane tool on, lanes are built as " + (laneRoad != null ? laneRoad.name
+                    : "nothing: no one-lane road found (pick a one-lane one-way road in the Roads menu)"));
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Switching the lane tool failed", e);
             }
         }
 
@@ -185,7 +219,8 @@ namespace RealisticRoads
         }
     }
 
-    // Ctrl+Shift+C toggles the curve tool, Ctrl+Shift+J the smooth split tool.
+    // Ctrl+Shift+C toggles the curve tool, Ctrl+Shift+J the smooth split tool,
+    // Ctrl+Shift+L the lane tool.
     // OnUpdate runs on the main thread.
     public class HotkeyHandler : ThreadingExtensionBase
     {
@@ -193,12 +228,14 @@ namespace RealisticRoads
         {
             bool c = Input.GetKeyDown(KeyCode.C);
             bool j = Input.GetKeyDown(KeyCode.J);
-            if (!c && !j) return;
+            bool l = Input.GetKeyDown(KeyCode.L);
+            if (!c && !j && !l) return;
             var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             var shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
             if (!ctrl || !shift || UIView.HasInputFocus()) return;
             if (c) ToolActivator.ToggleCurveTool();
-            else ToolActivator.ToggleSplitTool();
+            else if (j) ToolActivator.ToggleSplitTool();
+            else ToolActivator.ToggleLaneTool();
         }
     }
 }

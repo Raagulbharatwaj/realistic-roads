@@ -144,6 +144,19 @@ namespace RealisticRoads
             {
                 var segments = NetManager.instance.m_segments.m_buffer;
                 ushort node = start ? segments[segmentID].m_startNode : segments[segmentID].m_endNode;
+
+                // Lane bundles: lane nodes and lane roads (strips).
+                UnityEngine.Vector3 lanePosition = cornerPos, laneDirection = cornerDirection;
+                if (LaneBundles.TryGetCorner(segmentID, node, leftSide, ref lanePosition, ref laneDirection))
+                {
+                    // Keep the game's height handling, as for smooth splits.
+                    lanePosition.y = cornerPos.y;
+                    laneDirection.y = cornerDirection.y;
+                    cornerPos = lanePosition;
+                    cornerDirection = laneDirection;
+                    return;
+                }
+
                 if (!SmoothSplits.IsEnabled(node)) return;
 
                 UnityEngine.Vector3 position, direction;
@@ -194,7 +207,7 @@ namespace RealisticRoads
             if (failed) return true;
             try
             {
-                return !SmoothSplits.IsEnabled(nodeID);
+                return !SmoothSplits.IsEnabled(nodeID) && !LaneBundles.IsLaneNode(nodeID);
             }
             catch (Exception e)
             {

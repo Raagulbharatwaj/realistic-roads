@@ -100,6 +100,28 @@ TM:PE settings or custom names on them are lost). Long curves are cut into ~40 m
 
 Screenshots of before/after help a lot: the shape is computed, and the numbers may need tuning.
 
-## 7. What's next
+## 7. Lane tool: draw each lane on its own (LN)
+For splits, merges, weaving and odd junctions, each lane can be drawn as its own one-lane road, like train tracks.
+1. Build (or bulldoze back to) a **road end** where the lanes should start: a dead end of any road or highway.
+2. Click **LN** (below SPL) or press **Ctrl+Shift+L**. Lanes are built with the vanilla **Highway Ramp**, or with
+   the road picked in the Roads menu if that is a one-lane one-way road.
+3. Hover the road end: a ring shows on each of its lanes (white = free, grey = already used). Click one to start a
+   lane there, place points like with RR (bridges, tunnels and crossings all work), then:
+   - end on a lane of **another road end** to join it (only lanes running the right way are offered; the others
+     show red), or
+   - end anywhere / on another road to connect normally.
+   Enter or double-click builds. The lane leaves its road end parallel for 16 m, then follows your points.
+4. Draw the next lane from the next ring. Each lane moves on its own: give them different paths to split a road,
+   bring lanes from several roads into one road end to merge, or cross them over (pick bridge at the crossing).
+5. Lanes are squeezed to the width of the lane they start on, so lanes side by side look like one road, and the
+   road end they start from is drawn square with no junction block. The log shows `Lane road: ...`.
+   To change a lane, Ctrl+Z it (or bulldoze it) and draw it again.
+
+Things to check and screenshot: how the squeezed Highway Ramp looks, whether cars drive in the lane they
+should, and traffic lights (the game may put lights on a lane node: TM:PE can switch them off; in-game lane
+choice at the road end can be fixed with TM:PE's lane connector). Saves keep the lanes; without the mod they show
+as ordinary ramps. Two-way lanes (e.g. single-lane two-way roads) are not offered.
+
+## 8. What's next
 See the milestones in [docs/PROJECT_BRIEF.md](../docs/PROJECT_BRIEF.md). Next up is milestone 3:
 a live spline/arc preview between the points, showing length and turning red where a bend is too sharp.
