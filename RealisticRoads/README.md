@@ -30,7 +30,7 @@ The build copies `RealisticRoads.dll` + `CitiesHarmony.API.dll` to:
 What the log should contain (milestone 1 sign-off):
 
     [RealisticRoads] Enabled, version 0.1.x.x
-    [RealisticRoads] Patching NetManager.CreateSegment(UInt16& segment, ...)
+    [RealisticRoads] Patched NetManager.CreateSegment(UInt16& segment, ...)   (one line per overload)
     [RealisticRoads] Harmony patches applied
     [RealisticRoads] City loaded, mode = LoadGame
     [RealisticRoads] Road segment created: #1234

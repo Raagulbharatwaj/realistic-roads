@@ -16,8 +16,10 @@ namespace RealisticRoads
             if (patched) return;
             try
             {
-                new Harmony(HarmonyId).PatchAll(typeof(Patcher).Assembly);
+                var harmony = new Harmony(HarmonyId);
+                harmony.PatchAll(typeof(Patcher).Assembly);
                 patched = true;
+                foreach (var method in harmony.GetPatchedMethods()) Mod.Log("Patched " + Describe(method));
                 Mod.Log("Harmony patches applied");
             }
             catch (Exception e)
@@ -41,16 +43,29 @@ namespace RealisticRoads
             }
             patched = false;
         }
+
+        internal static string Describe(MethodBase method)
+        {
+            var parts = new List<string>();
+            foreach (var p in method.GetParameters()) parts.Add(p.ParameterType.Name + " " + p.Name);
+            return method.DeclaringType.Name + "." + method.Name + "(" + string.Join(", ", parts.ToArray()) + ")";
+        }
     }
 
     // Example patch: runs every time the game creates a road segment.
     // Proves you can hook into road building, which a curve tool needs.
+    // NOTE: CreateSegment runs on the simulation thread. Only thread-safe code here.
     [HarmonyPatch]
     public static class CreateSegmentPatch
     {
-        // Newer game versions have more than one CreateSegment overload, and a
-        // plain [HarmonyPatch(typeof(NetManager), "CreateSegment")] throws when
-        // the name is ambiguous. Patch every overload that starts with
+        // One overload calls the other, so a single new segment passes through
+        // this patch twice with the same id. Remember the last id logged on this
+        // thread and skip the repeat.
+        [ThreadStatic] private static ushort lastLogged;
+
+        // The game has more than one CreateSegment overload (with and without
+        // TreeInfo), and a plain [HarmonyPatch(typeof(NetManager), "CreateSegment")]
+        // throws when the name is ambiguous. Patch every overload that starts with
         // "out ushort segment" and returns bool instead.
         public static IEnumerable<MethodBase> TargetMethods()
         {
@@ -61,10 +76,7 @@ namespace RealisticRoads
                 if (parameters.Length == 0) continue;
                 var first = parameters[0];
                 if (first.Name == "segment" && first.IsOut && first.ParameterType == typeof(ushort).MakeByRefType())
-                {
-                    Mod.Log("Patching " + Describe(method));
                     yield return method;
-                }
             }
         }
 
@@ -73,19 +85,14 @@ namespace RealisticRoads
         {
             try
             {
-                if (__result) Mod.Log("Road segment created: #" + segment);
+                if (!__result || segment == lastLogged) return;
+                lastLogged = segment;
+                Mod.Log("Road segment created: #" + segment);
             }
             catch (Exception e)
             {
                 Mod.LogError("CreateSegment postfix failed", e);
             }
-        }
-
-        private static string Describe(MethodBase method)
-        {
-            var parts = new List<string>();
-            foreach (var p in method.GetParameters()) parts.Add(p.ParameterType.Name + " " + p.Name);
-            return method.DeclaringType.Name + "." + method.Name + "(" + string.Join(", ", parts.ToArray()) + ")";
         }
     }
 }
