@@ -44,31 +44,27 @@ Full log: `C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_
 Tip: launch with `-noWorkshop` in Steam launch options to test with only local mods
 (remove it afterwards, or Harmony from the Workshop won't load).
 
-## 5. Test the curve tool (milestone 2)
-1. Load a city. A small **RR** button appears near the top-left (right-drag it to move it).
-2. Optionally pick a road in the vanilla Roads menu first; the log shows which network the tool will use.
-3. Click **RR** or press **Ctrl+Shift+C**. A white circle follows the mouse over the ground.
-4. Left-click a few times: each click leaves a blue circle and logs `Point N at (x, y, z)`.
-5. Right-click removes the last point (`Removed last point, N left`).
-6. Press **Esc**, or click **RR** / press Ctrl+Shift+C again: the circles disappear and the normal tool is back.
+## 5. Curve tool: build CS2-style curves (milestones 3 + 4)
+1. Pick a road in the vanilla **Roads** menu (e.g. Basic Road or Oneway Road), then click **RR** or press **Ctrl+Shift+C**.
+   The panel under the buttons shows the road, length and segment count.
+2. Click points on the ground. The curve follows the mouse as a road-width band through all of them:
+   **green** = can be built, **red** = a bend is too tight (spread the points out).
+3. Clicking on an existing road end or junction snaps to it (yellow circle) so the new road connects there.
+   On a dead end the curve continues that road smoothly.
+4. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.
+5. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
 
-Expected log lines:
-
-    [RealisticRoads] Curve tool ready: click the RR button or press Ctrl+Shift+C
-    [RealisticRoads] Curve tool on, network = Basic Road
-    [RealisticRoads] Point 1 at (123.4, 60.2, -456.7)
-    [RealisticRoads] Removed last point, 0 left
-    [RealisticRoads] Esc pressed, back to the vanilla tool
-
-Nothing is built yet; that comes in milestone 4.
+Notes for this version: it builds on the ground only, follows the terrain, does not charge money yet, and
+does not bulldoze trees/buildings in the way. Long curves are cut into ~40 m segments (shorter in tight bends).
 
 ## 6. Test smooth splits (milestone S1)
 1. Load a city with a road that splits in two (e.g. a one-way road splitting into two one-way roads).
 2. Click **SPL** (below RR) or press **Ctrl+Shift+J**.
 3. Hover over junctions. The circle shows: **green** = smoothed, **yellow** = a split that can be smoothed, **red** = not a split.
-   On a yellow/green junction, small blue dots show where the road edges will start.
-4. Click a yellow junction: it turns green and the junction should become a taper with a pointed gore.
-   The log shows `Smooth split ON at node #...` with the branch angle and how far from the node the branches start.
+   On a yellow/green junction, small blue dots show where the road edges will meet the trunk.
+4. Click a yellow junction: it turns green, the junction block and its crosswalks should disappear, and the two
+   branches should run back into the trunk side by side, with a gore nose where they part.
+   The log shows `Smooth split ON at node #...` with the branch angle and each branch's share of the trunk.
 5. Click it again to go back to the vanilla junction. Clicking a red one logs why it is not a split.
 6. Watch a few cars drive through, then save, quit, reload the city and check the shape is still there.
 

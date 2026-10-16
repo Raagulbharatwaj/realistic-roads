@@ -65,7 +65,7 @@ Runtime dependency: the Harmony 2 Steam Workshop item must be subscribed.
 
 Where a road splits in two (or two roads merge), vanilla CS1 draws a normal junction: a blunt block of pavement with crosswalks and a hard corner. Real splits (and CS2) taper: the trunk keeps its width, the branches peel off, and a pointed gore separates them.
 
-- **S1 – Smooth existing splits (prototype).** A split tool (button `SPL`, hotkey Ctrl+Shift+J): hover a junction to see whether it is a split (3 roads, the two branches within 75° of each other, the trunk opposite them); click to turn the smooth shape on/off. The mod moves the corners of the three road ends so the trunk ends at the node and the branches start where their inner edges have separated; the game's junction surface and lanes then form the taper. Saved per node in the city; if the mod is removed the node is a vanilla junction again.
+- **S1 – Smooth existing splits (prototype).** A split tool (button `SPL`, hotkey Ctrl+Shift+J): hover a junction to see whether it is a split (3 roads, the two branches within 75° of each other, the trunk opposite them); click to turn the smooth shape on/off. The mod moves the corners of the three road ends so the branches run back to the trunk side by side, each taking a share of the trunk's width: their outer edges continue the trunk's edges, their inner edges meet at the gore nose, and the vanilla junction piece (pavement block, crosswalks) shrinks to a thin strip. First attempt (branches starting ~24 m out) changed the shape but still looked like a junction block. Saved per node in the city; if the mod is removed the node is a vanilla junction again.
 - **S2 – Tidy the junction.** Hide crosswalks and junction markings at smoothed splits, set lane connections so each lane flows straight into its branch (TM:PE API when installed), and handle splits of one-way roads into more than two branches.
 - **S3 – Automatic.** After milestone 4, the curve tool applies the smooth shape automatically when it joins a new road to an existing one at a shallow angle.
 
@@ -117,8 +117,8 @@ Build in this order; each milestone must work in game before the next starts.
 | 2 | Tool skeleton | Button/hotkey activates `CurveTool`; clicks place control points shown as circles; Esc returns to the vanilla tool. |
 | S1 | Smooth existing splits (prototype) | Clicking a split junction turns it into a taper with a gore; vehicles still use all lanes; works on one-way and two-way roads; survives save/reload; clicking again restores the vanilla junction. **Done before milestone 3 at the player's request.** |
 | S2 | Tidy smooth splits | No crosswalks or junction markings at smoothed splits; lanes flow straight into their branch; works with TM:PE and NCR installed. |
-| 3 | Curve preview | Spline and arc previews follow the mouse, show length, turn red where the bend is too sharp. |
-| 4 | Build the curve | Enter builds the curve with the selected road; vehicles drive it end to end; it connects to existing roads at snapped ends. |
+| 3 | Curve preview *(spline mode done, arc/parallel later)* | Spline and arc previews follow the mouse, show length, turn red where the bend is too sharp. |
+| 4 | Build the curve *(first version: ground roads, snaps to nodes, Ctrl+Z undo)* | Enter builds the curve with the selected road; vehicles drive it end to end; it connects to existing roads at snapped ends. |
 | 5 | Undo, slopes, settings | One undo removes a whole curve; start/end heights work; settings save and reload. |
 | S3 | Automatic smooth splits | The curve tool smooths a split automatically when it joins a road at a shallow angle. |
 | 6 | Flyover follow mode | Elevated road/monorail built over 500 m of an existing curved road, matching its path. |

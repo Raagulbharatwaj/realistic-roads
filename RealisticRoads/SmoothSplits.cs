@@ -14,8 +14,8 @@ namespace RealisticRoads
         public ushort LeftBranch;   // left/right as seen from the trunk looking at the branches
         public ushort RightBranch;
         public float BranchAngle;   // degrees between the two branches
-        public float BranchOffset;  // metres from the node where the branches start
-        public float TrunkOffset;   // metres from the node where the trunk ends
+        public Vector3 Forward;     // trunk direction, pointing towards the branches
+        public float LeftShare;     // fraction of the trunk width the left branch takes over
     }
 
     // Junction nodes the player has marked as smooth splits, and the corner
@@ -30,9 +30,9 @@ namespace RealisticRoads
         private const int MaxNodes = 32768;          // NetManager.MAX_NODE_COUNT
         private const float MaxSplitAngle = 75f;     // branches must be closer than this
         private const float MinTrunkOpposite = 135f; // trunk must come in from the other side
-        private const float GoreGap = 1f;            // metres between the branches where they start
-        private const float MaxBranchOffset = 80f;
-        private const float TrunkOffset = 1f;
+        // The branches start this far past the trunk end, so the vanilla
+        // junction piece between them shrinks to a thin, invisible strip.
+        private const float BranchGap = 0.5f;
         private const float MovedTolerance = 2f;     // node moved/replaced => forget it
 
         // Written on the main thread, read from any thread. A node only counts
@@ -160,27 +160,36 @@ namespace RealisticRoads
                 float tmpSide = sideA; sideA = sideB; sideB = tmpSide;
             }
 
-            // Branch edges separate at (sideA - sideB) metres per metre travelled.
-            // Start the branches where their inner edges are GoreGap apart.
+            // Each branch takes over a share of the trunk's width, in proportion
+            // to its own width: the left branch from the trunk's left edge, the
+            // right branch from its right edge.
             float widthLeft = segments[ids[a]].Info.m_halfWidth;
             float widthRight = segments[ids[b]].Info.m_halfWidth;
-            float spread = Mathf.Max(sideA - sideB, 0.01f);
-            float offset = (widthLeft + widthRight + GoreGap) / spread;
-            float shortest = Mathf.Min(segments[ids[a]].m_averageLength, segments[ids[b]].m_averageLength);
-            offset = Mathf.Min(offset, MaxBranchOffset, shortest * 0.45f);
 
             shape.Trunk = ids[t];
             shape.LeftBranch = ids[a];
             shape.RightBranch = ids[b];
             shape.BranchAngle = branchAngle;
-            shape.BranchOffset = offset;
-            shape.TrunkOffset = TrunkOffset;
+            shape.Forward = forward;
+            shape.LeftShare = widthLeft / (widthLeft + widthRight);
             reason = null;
             return true;
         }
 
         // The corner of one road end at a smoothed split. Called from the
         // CalculateCorner postfix, so it must be thread-safe and quick.
+        //
+        // The branches are pulled back to meet the trunk side by side:
+        //
+        //   trunk left edge  ───────────┬──── left branch, outer edge
+        //                               │     left branch
+        //   trunk           (node)  split ◄── inner edges meet: the gore nose
+        //                               │     right branch
+        //   trunk right edge ───────────┴──── right branch, outer edge
+        //
+        // Their outer edges continue the trunk's edges and they leave parallel
+        // to the trunk before curving onto their own path, so the vanilla
+        // junction piece (pavement block, crosswalks) has almost no area left.
         public static bool TryGetCorner(ushort segment, ushort node, bool leftSide, out Vector3 position, out Vector3 direction)
         {
             position = direction = Vector3.zero;
@@ -188,14 +197,34 @@ namespace RealisticRoads
             string reason;
             if (!TryAnalyze(node, out shape, out reason)) return false;
 
-            float offset = segment == shape.Trunk ? shape.TrunkOffset : shape.BranchOffset;
+            var nodes = NetManager.instance.m_nodes.m_buffer;
             var segments = NetManager.instance.m_segments.m_buffer;
-            Vector3 centre, tangent;
-            PointAlong(ref segments[segment], node, offset, out centre, out tangent);
+            Vector3 centre = nodes[node].m_position;
+            Vector3 f = shape.Forward;
+            Vector3 left = Left(f);
+            float trunkHalf = segments[shape.Trunk].Info.m_halfWidth;
 
-            float halfWidth = segments[segment].Info.m_halfWidth;
-            position = centre + Left(tangent) * (leftSide ? halfWidth : -halfWidth);
-            direction = tangent;
+            // Points across the trunk end, seen from the trunk looking at the branches.
+            Vector3 leftEdge = centre + left * trunkHalf;
+            Vector3 rightEdge = centre - left * trunkHalf;
+            Vector3 split = leftEdge + (rightEdge - leftEdge) * shape.LeftShare;
+
+            if (segment == shape.Trunk)
+            {
+                // The trunk faces the other way, so its own left is our right.
+                position = leftSide ? rightEdge : leftEdge;
+                direction = -f;
+                return true;
+            }
+
+            Vector3 gap = f * BranchGap;
+            if (segment == shape.LeftBranch)
+                position = (leftSide ? leftEdge : split) + gap;
+            else if (segment == shape.RightBranch)
+                position = (leftSide ? split : rightEdge) + gap;
+            else
+                return false;
+            direction = f;
             return true;
         }
 
@@ -206,7 +235,7 @@ namespace RealisticRoads
                    ", left #" + s.LeftBranch + " (" + segments[s.LeftBranch].Info.name + ")" +
                    ", right #" + s.RightBranch + " (" + segments[s.RightBranch].Info.name + ")" +
                    ", branch angle " + s.BranchAngle.ToString("F1") + " deg" +
-                   ", branches start " + s.BranchOffset.ToString("F1") + " m from the node";
+                   ", left branch takes " + (s.LeftShare * 100f).ToString("F0") + "% of the trunk width";
         }
 
         // --- save/load -------------------------------------------------------
@@ -259,54 +288,6 @@ namespace RealisticRoads
             return segment.m_startNode == node ? segment.m_startDirection : segment.m_endDirection;
         }
 
-        // Point and direction on the segment's centre line, 'distance' metres from
-        // the node, following the segment's curve.
-        private static void PointAlong(ref NetSegment segment, ushort node, float distance, out Vector3 point, out Vector3 tangent)
-        {
-            var nodes = NetManager.instance.m_nodes.m_buffer;
-            ushort other = segment.m_startNode == node ? segment.m_endNode : segment.m_startNode;
-            Vector3 a = nodes[node].m_position;
-            Vector3 d = nodes[other].m_position;
-            Vector3 dirA = DirectionAway(ref segment, node);
-            Vector3 dirD = DirectionAway(ref segment, other);
-            Vector3 b, c;
-            NetSegment.CalculateMiddlePoints(a, dirA, d, dirD, false, false, out b, out c);
-
-            const int steps = 64;
-            Vector3 previous = a;
-            float travelled = 0f;
-            float t = 1f;
-            for (int i = 1; i <= steps; i++)
-            {
-                float u = i / (float)steps;
-                Vector3 p = Cubic(a, b, c, d, u);
-                float step = FlatDistance(previous, p);
-                if (travelled + step >= distance)
-                {
-                    t = (i - 1 + (distance - travelled) / Mathf.Max(step, 0.0001f)) / steps;
-                    break;
-                }
-                travelled += step;
-                previous = p;
-            }
-
-            point = Cubic(a, b, c, d, t);
-            tangent = FlatNormal(CubicTangent(a, b, c, d, t));
-            if (tangent == Vector3.zero) tangent = FlatNormal(dirA);
-        }
-
-        private static Vector3 Cubic(Vector3 a, Vector3 b, Vector3 c, Vector3 d, float t)
-        {
-            float u = 1f - t;
-            return a * (u * u * u) + b * (3f * u * u * t) + c * (3f * u * t * t) + d * (t * t * t);
-        }
-
-        private static Vector3 CubicTangent(Vector3 a, Vector3 b, Vector3 c, Vector3 d, float t)
-        {
-            float u = 1f - t;
-            return (b - a) * (3f * u * u) + (c - b) * (6f * u * t) + (d - c) * (3f * t * t);
-        }
-
         // The left-hand direction when facing 'd' (matches the game's leftSide).
         private static Vector3 Left(Vector3 d)
         {
@@ -318,12 +299,6 @@ namespace RealisticRoads
             v.y = 0f;
             float length = Mathf.Sqrt(v.x * v.x + v.z * v.z);
             return length > 0.0001f ? v / length : Vector3.zero;
-        }
-
-        private static float FlatDistance(Vector3 p, Vector3 q)
-        {
-            float dx = q.x - p.x, dz = q.z - p.z;
-            return Mathf.Sqrt(dx * dx + dz * dz);
         }
     }
 }
