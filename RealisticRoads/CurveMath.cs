@@ -471,6 +471,54 @@ namespace RealisticRoads
             return false;
         }
 
+        // Embankments and cuttings, CS2 style: nodes on plain ground may move
+        // up or down by at most 'maxDeviation' so the road between them is no
+        // steeper than 'maxSlope' (the road's own limit). Lifted, lowered and
+        // fixed nodes don't move. Marks the nodes moved off the ground in
+        // 'embanked'. Returns the steepest grade left over (0 if none).
+        public static float SmoothGrades(float[] distance, float[] ground, float[] heights, bool[] isFixed,
+            float[] minH, float[] maxH, float maxSlope, float maxDeviation, bool[] embanked)
+        {
+            int n = heights.Length;
+            var free = new bool[n];
+            for (int i = 0; i < n; i++) free[i] = !isFixed[i] && Mathf.Abs(heights[i] - ground[i]) <= 0.5f;
+
+            for (int pass = 0; pass < 24; pass++)
+            {
+                bool changed = false;
+                for (int dir = 0; dir < 2; dir++)
+                {
+                    for (int k = 1; k < n; k++)
+                    {
+                        int i = dir == 0 ? k : n - 1 - k;
+                        int j = dir == 0 ? k - 1 : n - k;
+                        if (!free[i]) continue;
+                        float run = Mathf.Abs(distance[i] - distance[j]);
+                        float h = Mathf.Clamp(heights[i], heights[j] - maxSlope * run, heights[j] + maxSlope * run);
+                        h = Mathf.Clamp(h, ground[i] - maxDeviation, ground[i] + maxDeviation);
+                        h = Mathf.Clamp(h, minH[i], maxH[i]);
+                        if (Mathf.Abs(h - heights[i]) > 0.001f)
+                        {
+                            heights[i] = h;
+                            changed = true;
+                        }
+                    }
+                }
+                if (!changed) break;
+            }
+
+            float steepest = 0f;
+            for (int i = 0; i < n; i++)
+            {
+                if (free[i] && Mathf.Abs(heights[i] - ground[i]) > 0.5f) embanked[i] = true;
+                if (i == 0) continue;
+                float run = Mathf.Max(Mathf.Abs(distance[i] - distance[i - 1]), 0.01f);
+                float grade = Mathf.Abs(heights[i] - heights[i - 1]) / run;
+                if ((free[i] || free[i - 1]) && grade > maxSlope + 0.001f) steepest = Mathf.Max(steepest, grade);
+            }
+            return steepest;
+        }
+
         // Bridges span: every run of lifted nodes between two nodes on the
         // ground (or fixed) gets a lower limit on the straight line between
         // those two, so a deck crosses a gorge or valley level with its banks

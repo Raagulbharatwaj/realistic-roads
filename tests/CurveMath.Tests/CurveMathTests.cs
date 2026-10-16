@@ -329,4 +329,30 @@ public class CurveMathTests
         var min = Fill(5, -1000);
         Assert.False(CurveMath.LiftValleys(d, ground, new bool[5], 0.25f, 0.06f, 400f, min));
     }
+
+    [Fact]
+    public void SmoothGrades_StepInTheGround_GetsAnEmbankmentAndACutting()
+    {
+        // A 20 m step between two nodes 40 m apart is 50 %; the road allows 25 %.
+        // Raising the low node and lowering the high one by up to 6 m brings it down.
+        var d = Spaced(6, 40f);
+        var ground = new float[] { 0, 0, 0, 20, 20, 20 };
+        var h = (float[])ground.Clone();
+        var embanked = new bool[6];
+        float steepest = CurveMath.SmoothGrades(d, ground, h, new bool[6], Fill(6, -1000), Fill(6, 1000), 0.25f, 6f, embanked);
+        Assert.Equal(0f, steepest);
+        for (int i = 1; i < 6; i++) Assert.True(Mathf.Abs(h[i] - h[i - 1]) <= 0.25f * 40f + 0.01f);
+        Assert.True(embanked[2] && embanked[3]);
+        Assert.False(embanked[0] || embanked[5]);
+    }
+
+    [Fact]
+    public void SmoothGrades_CliffTooHigh_ReportsTheLeftoverGrade()
+    {
+        var d = Spaced(4, 40f);
+        var ground = new float[] { 0, 0, 60, 60 };
+        var h = (float[])ground.Clone();
+        float steepest = CurveMath.SmoothGrades(d, ground, h, new bool[4], Fill(4, -1000), Fill(4, 1000), 0.25f, 6f, new bool[4]);
+        Assert.Equal((60f - 12f) / 40f, steepest, 2);
+    }
 }

@@ -7,7 +7,7 @@ research into CS2 and existing CS1 mods taught us, and the plan from here.
 
 | Feature | State in game | Notes |
 |---|---|---|
-| RR curve tool (spline, snapping, continue a road) | Works | Segments now ~80 m (was 40 m, too crowded). |
+| RR curve tool (spline, snapping, continue a road) | Works | Segments now ~120 m (was 40 m, then 80 m: too crowded). |
 | Bridges over water, level between banks, long spans | Works | Gorge bridges build since the deck was levelled between banks. |
 | Suspension bridge (6-lane) | Built with towers on alternate nodes | Logged as tower/middle; still to be confirmed visually. |
 | Level crossing / junction at a crossing | Works | |
@@ -127,8 +127,10 @@ The user's decisions:
   `m_lanes` (positions, widths, directions, types), the half-width, the elevated, bridge, slope and
   tunnel variants and the props (arrows, lights). Build the segment mesh procedurally from
   cross-section pieces (asphalt, curb, sidewalk, median), CS2 style. Saved in the city and recreated
-  on load. Without the mod those roads fall back to the vanilla road they were cloned from.
+  on load. Without the mod those roads are missing, so a "Convert to vanilla" button swaps them back to the road
+  they were cloned from.
 - The R2 junction renderer draws these roads' junctions too, so custom roads get CS2 junctions.
+- Full design and milestones: [R3_ROAD_BUILDER.md](R3_ROAD_BUILDER.md).
 
 **R4 – Merges and splits with proper road types.**
 - Use R3 to generate the transition road types a split or merge needs (e.g. 3 lanes to 2+1, a 3+1
