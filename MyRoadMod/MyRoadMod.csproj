@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- CS1 runs on Unity's Mono, which needs .NET Framework 3.5 -->
+    <TargetFramework>net35</TargetFramework>
+    <AssemblyName>MyRoadMod</AssemblyName>
+    <RootNamespace>MyRoadMod</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>false</Deterministic>
+    <AssemblyVersion>0.1.*</AssemblyVersion>
+
+    <!-- CHANGE THIS if your game is installed somewhere else -->
+    <GameDir>C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines</GameDir>
+    <ManagedDir>$(GameDir)\Cities_Data\Managed</ManagedDir>
+
+    <!-- Where CS1 looks for local mods -->
+    <ModDir>$(LOCALAPPDATA)\Colossal Order\Cities_Skylines\Addons\Mods\$(AssemblyName)</ModDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lets you build net35 without installing the old framework -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <!-- Safe way to use Harmony in CS1 (needs the "Harmony 2" Workshop item subscribed) -->
+    <PackageReference Include="CitiesHarmony.API" Version="2.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ColossalManaged">
+      <HintPath>$(ManagedDir)\ColossalManaged.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ICities">
+      <HintPath>$(ManagedDir)\ICities.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- After every build, copy the mod into the game's Mods folder -->
+  <Target Name="DeployToGame" AfterTargets="Build">
+    <MakeDir Directories="$(ModDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ModDir)" />
+    <Copy SourceFiles="$(OutDir)CitiesHarmony.API.dll" DestinationFolder="$(ModDir)" />
+    <Message Importance="high" Text="Mod copied to $(ModDir)" />
+  </Target>
+
+</Project>

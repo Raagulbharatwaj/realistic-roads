@@ -1,0 +1,12 @@
+# Build output
+bin/
+obj/
+*.dll
+*.pdb
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
