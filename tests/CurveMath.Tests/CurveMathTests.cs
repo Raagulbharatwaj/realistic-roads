@@ -247,4 +247,86 @@ public class CurveMathTests
             if (h[i] > ground[i] + 0.5f || h[i - 1] > ground[i - 1] + 0.5f)
                 Assert.True(Mathf.Abs(h[i] - h[i - 1]) <= 0.06f * 60f + 0.06f);
     }
+
+    // --- code review fixes -------------------------------------------------
+
+    [Fact]
+    public void Heights_GroundJunctionOnAHill_StaysOnTheGround()
+    {
+        // Snapped to an existing junction at the top of a 10 % hill: a plain
+        // ground road must follow the hill, not lift off it.
+        var d = Spaced(6, 40f);
+        var ground = d.Select(x => -0.1f * x).ToArray();
+        var min = Fill(6, -1000); var max = Fill(6, 1000);
+        min[0] = max[0] = 0f;
+        var isFixed = new[] { true, false, false, false, false, false };
+        Assert.True(CurveMath.SolveHeights(d, ground, min, max, isFixed, 0.06f, out var h));
+        for (int i = 0; i < 6; i++) Assert.Equal(ground[i], h[i], 2);
+    }
+
+    [Fact]
+    public void Spline_UnevenlySpacedStart_HasNoHook()
+    {
+        // 15 m then 300 m in a straight line: the even-spacing extrapolation put
+        // the phantom point ahead of the start and the curve hooked backwards.
+        var line = CurveMath.SampleSpline(new List<Vector3> { V(0, 0), V(15, 0), V(315, 0) });
+        for (int i = 1; i < line.Count; i++) Assert.True(line[i].x >= line[i - 1].x - 0.01f);
+        Assert.All(line, p => Assert.InRange(p.x, -0.01f, 315.01f));
+    }
+
+    [Fact]
+    public void Extrapolate_EvenSpacing_MatchesTheParabola()
+    {
+        // Both spans 10 m: the general formula must give the even-spacing one.
+        var p = CurveMath.Extrapolate(V(0, 0), V(10, 0), V(18, 6));
+        var even = V(0, 0) * 3f - V(10, 0) * 3f + V(18, 6);
+        Assert.Equal(even.x, p.x, 3);
+        Assert.Equal(even.z, p.z, 3);
+    }
+
+    [Fact]
+    public void DivideAdaptive_LongStraightWithOneTightCorner_KeepsTheStraightLong()
+    {
+        var polyline = new List<Vector3>();
+        for (int i = 0; i <= 100; i++) polyline.Add(V(i * 10f, 0));          // 1 km straight
+        for (int i = 1; i <= 30; i++)                                        // tight quarter turn, r = 60 m, tangent to it
+        {
+            double a = Math.PI / 2 * i / 30;
+            polyline.Add(V(1000f + 60f * (float)Math.Sin(a), 60f - 60f * (float)Math.Cos(a)));
+        }
+        CurveMath.DivideAdaptive(polyline, 80f, 24f, 30f, out var points, out var tangents, out bool ok);
+        Assert.True(ok);
+        int onStraight = points.Count(p => p.x < 990f);
+        Assert.InRange(onStraight, 12, 15);                                  // ~80 m pieces, not 24 m
+        Assert.True(CurveMath.MaxBend(tangents) <= 30f);
+        for (int i = 1; i < points.Count; i++)
+            Assert.True(CurveMath.FlatDistance(points[i - 1], points[i]) >= 20f);
+    }
+
+    [Fact]
+    public void Heights_DryGorge_GetsALevelViaduct()
+    {
+        // 40 m deep ravine with no water: the road used to plunge down the cliff.
+        var d = Spaced(9, 40f);
+        var ground = new float[] { 40, 40, 40, 5, 0, 5, 40, 40, 40 };
+        var min = Fill(9, -1000); var max = Fill(9, 1000);
+        var isFixed = new bool[9];
+        Assert.True(CurveMath.SolveHeights(d, ground, min, max, isFixed, 0.06f, out var h));
+        Assert.True(CurveMath.LiftValleys(d, h, isFixed, 0.25f, 0.06f, 400f, min));
+        Assert.True(CurveMath.SolveHeights(d, ground, min, max, isFixed, 0.06f, out h));
+        CurveMath.LevelSpans(d, ground, h, isFixed, min);
+        Assert.True(CurveMath.SolveHeights(d, ground, min, max, isFixed, 0.06f, out h));
+        for (int i = 2; i <= 6; i++) Assert.Equal(40f, h[i], 1);
+    }
+
+    [Fact]
+    public void LiftValleys_SteadyHill_IsLeftAlone()
+    {
+        // One-way slope steeper than the limit is not a gorge: no viaduct
+        // (the planner reports it as too steep instead).
+        var d = Spaced(5, 40f);
+        var ground = new float[] { 0, 15, 30, 45, 60 };
+        var min = Fill(5, -1000);
+        Assert.False(CurveMath.LiftValleys(d, ground, new bool[5], 0.25f, 0.06f, 400f, min));
+    }
 }

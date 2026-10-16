@@ -504,13 +504,21 @@ namespace RealisticRoads
                 float from = stops[c - 1].Key, to = stops[c].Key;
                 var slice = CurveMath.Slice(polyline, from, to);
                 bool overWater = InWater(division.WaterRuns, (from + to) * 0.5f);
-                bool ignored;
-                int count = CurveMath.ChoosePieceCount(slice, overWater ? BridgeSpacing : Spacing,
-                    overWater ? BridgeMinSpacing : MinSpacing, MaxBend, out ignored);
-                // Suspension bridges: an even number of spans, so both ends get a tower.
-                if (overWater && doubleLength && count % 2 == 1) count++;
                 List<Vector3> slicePoints, sliceTangents;
-                CurveMath.Divide(slice, count, out slicePoints, out sliceTangents);
+                bool ignored;
+                if (overWater)
+                {
+                    // Bridges: equal spans so the bridge model repeats evenly.
+                    int count = CurveMath.ChoosePieceCount(slice, BridgeSpacing, BridgeMinSpacing, MaxBend, out ignored);
+                    // Suspension bridges: an even number of spans, so both ends get a tower.
+                    if (doubleLength && count % 2 == 1) count++;
+                    CurveMath.Divide(slice, count, out slicePoints, out sliceTangents);
+                }
+                else
+                {
+                    // Land: long pieces on straights, shorter only in bends.
+                    CurveMath.DivideAdaptive(slice, Spacing, MinSpacing, MaxBend, out slicePoints, out sliceTangents, out ignored);
+                }
                 int skip = division.Points.Count == 0 ? 0 : 1;
                 for (int i = skip; i < slicePoints.Count; i++)
                 {
