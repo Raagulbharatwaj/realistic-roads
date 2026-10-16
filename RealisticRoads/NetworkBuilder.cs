@@ -31,6 +31,8 @@ namespace RealisticRoads
             public readonly List<ushort> Segments = new List<ushort>();
             public readonly List<ushort> Nodes = new List<ushort>();   // nodes we created (not snapped ones)
             public readonly List<Split> Splits = new List<Split>();
+            // Existing nodes we moved (overpass lowering) and where they were.
+            public readonly List<KeyValuePair<ushort, Vector3>> Moves = new List<KeyValuePair<ushort, Vector3>>();
         }
 
         // Only touched on the simulation thread.
@@ -79,8 +81,9 @@ namespace RealisticRoads
                 for (int c = 0; c < plan.Crossings.Count; c++)
                 {
                     var crossing = plan.Crossings[c];
-                    bool underpass = crossing.Level == CrossingLevel.Under && !crossing.SameType && crossing.ExistingAtGround;
-                    if (!crossing.Connects && !underpass) continue;
+                    bool underpass = crossing.Type == CrossingType.Underpass && crossing.ExistingAtGround;
+                    bool overpass = crossing.Type == CrossingType.Overpass && plan.Lowerings.ContainsKey(c);
+                    if (!crossing.Connects && !underpass && !overpass) continue;
                     if (!touched.Add(crossing.Segment))
                     {
                         Mod.Log("  Crossing " + (c + 1) + " is a second crossing of the same segment; left as is");
@@ -88,6 +91,32 @@ namespace RealisticRoads
                     }
                     if ((net.m_segments.m_buffer[crossing.Segment].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None)
                         throw new Exception("the road at crossing " + (c + 1) + " no longer exists");
+
+                    if (overpass)
+                    {
+                        // Lower the existing road: three new nodes around the crossing, all
+                        // dropped into the cutting, and its nodes on both sides moved down
+                        // along the ramp.
+                        var lowering = plan.Lowerings[c];
+                        var split = SplitSegment(crossing.Segment, lowering.SplitAt, null);
+                        build.Splits.Add(split);
+                        for (int i = 0; i < split.Nodes.Count; i++)
+                        {
+                            Vector3 position = net.m_nodes.m_buffer[split.Nodes[i]].m_position;
+                            position.y = lowering.SplitHeights[i];
+                            net.MoveNode(split.Nodes[i], position);
+                        }
+                        for (int i = 0; i < lowering.Nodes.Count; i++)
+                        {
+                            ushort node = lowering.Nodes[i];
+                            if (!NodeExists(node)) continue;
+                            Vector3 position = net.m_nodes.m_buffer[node].m_position;
+                            build.Moves.Add(new KeyValuePair<ushort, Vector3>(node, position));
+                            position.y = lowering.NodeHeights[i];
+                            net.MoveNode(node, position);
+                        }
+                        continue;
+                    }
 
                     if (crossing.Connects)
                     {
@@ -128,7 +157,7 @@ namespace RealisticRoads
                     sim.m_currentBuildIndex++;
                     // Height above (or depth below) the ground: the game uses it for pillars
                     // and tunnels. Ground and cutting nodes keep 0 like vanilla ground roads.
-                    if (kind == NodeKind.Elevated || kind == NodeKind.Bridge || kind == NodeKind.Tunnel)
+                    if (kind == NodeKind.Elevated || kind == NodeKind.Bridge || kind == NodeKind.Tunnel || kind == NodeKind.Slope)
                     {
                         float elevation = points[i].y - TerrainManager.instance.SampleRawHeightSmooth(points[i]);
                         net.m_nodes.m_buffer[node].m_elevation = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(elevation)), 0, 255);
@@ -150,7 +179,8 @@ namespace RealisticRoads
                     if (segmentInfo != info)
                     {
                         if (plan.Kinds[i - 1] == NodeKind.Bridge || plan.Kinds[i] == NodeKind.Bridge) bridges++;
-                        else if (plan.Kinds[i - 1] == NodeKind.Tunnel || plan.Kinds[i] == NodeKind.Tunnel) tunnels++;
+                        else if (plan.Kinds[i - 1] == NodeKind.Tunnel || plan.Kinds[i] == NodeKind.Tunnel ||
+                                 plan.Kinds[i - 1] == NodeKind.Slope || plan.Kinds[i] == NodeKind.Slope) tunnels++;
                         else elevated++;
                     }
 
@@ -208,6 +238,10 @@ namespace RealisticRoads
             foreach (var segment in build.Segments) ReleaseSegmentIfExists(segment);
             foreach (var node in build.Nodes)
                 if (NodeExists(node) && SegmentCount(node) == 0) net.ReleaseNode(node);
+
+            // Existing nodes we lowered go back up.
+            for (int i = build.Moves.Count - 1; i >= 0; i--)
+                if (NodeExists(build.Moves[i].Key)) net.MoveNode(build.Moves[i].Key, build.Moves[i].Value);
 
             for (int i = build.Splits.Count - 1; i >= 0; i--)
             {
@@ -364,7 +398,7 @@ namespace RealisticRoads
             public float RunIn;       // how far the branch runs parallel before it may curve away
         }
 
-        private const float MinHalfRunIn = 16f;
+        private const float MinHalfRunIn = 24f;
 
         // Can a 'branch' road attach to a half of the road ending at 'node'?
         // True for a dead end of a road at least ~1.33x as wide as the branch,
@@ -409,7 +443,9 @@ namespace RealisticRoads
 
             if (count == 2)
             {
-                // The other road must be a branch already leaving this end.
+                // The other road must be a narrower branch already leaving this
+                // end, not the same road carrying on (a node mid-road).
+                if (segments[other].Info.m_halfWidth > trunkHalf * 0.75f) return false;
                 if (Vector3.Dot(CurveMath.FlatNormal(DirectionAway(other, node)), forward) < Mathf.Cos(45f * Mathf.Deg2Rad))
                     return false;
                 ushort far = segments[other].m_startNode == node ? segments[other].m_endNode : segments[other].m_startNode;
@@ -421,7 +457,8 @@ namespace RealisticRoads
             snap.Forward = forward;
             // Branches side by side without overlapping; outer edge at least at the trunk's edge.
             snap.Offset = Mathf.Max(branchHalf, trunkHalf - branchHalf);
-            snap.RunIn = Mathf.Max(MinHalfRunIn, snap.Offset * 4f);
+            // A long, gentle taper before the branch curves away.
+            snap.RunIn = Mathf.Max(MinHalfRunIn, snap.Offset * 8f);
             return true;
         }
 

@@ -18,9 +18,11 @@ namespace RealisticRoads
     //   Esc               clear the points; Esc again leaves the tool
     // The preview follows the mouse: green on the ground, blue raised (bridge /
     // flyover), orange lowered (tunnel / cutting), red where a bend is too sharp.
-    // Where it crosses an existing road or track, UP/DN buttons choose how:
-    //   same type:      tunnel  < junction (default) < flyover
-    //   different type: underpass (cutting, existing on a short bridge) < level crossing (default) < overpass
+    // Where it crosses an existing road or track, icons next to the crossing
+    // choose how: junction / level crossing (default), bridge (ours over),
+    // overpass (existing lowered, ours over at ground), underpass (existing
+    // on a short bridge, ours lowered), tunnel (ours under). Bridges and
+    // water crossings get +/- to set their height.
     public class CurveTool : ToolBase
     {
         public const float Spacing = 40f;       // target segment length
@@ -39,13 +41,23 @@ namespace RealisticRoads
         private static readonly Color BridgeColor = new Color(0.25f, 0.6f, 1f, 0.55f);
         private static readonly Color LowColor = new Color(1f, 0.6f, 0.15f, 0.55f);
         private static readonly Color JunctionColor = new Color(1f, 1f, 1f, 0.8f);
-        private const int MaxCrossingButtons = 12;
+        public const float BridgeSpacing = 90f;      // long spans over water so bridge models look whole
+        public const float BridgeMinSpacing = 40f;
+        private const float HeightStep = 5f;
+        private const float MaxExtraHeight = 60f;
+        private const float IconSize = 34f;
 
-        // Chosen level per crossed existing segment (default: Same).
-        private readonly Dictionary<ushort, CrossingLevel> crossingLevels = new Dictionary<ushort, CrossingLevel>();
-        private readonly List<UIButton> upButtons = new List<UIButton>();
-        private readonly List<UIButton> downButtons = new List<UIButton>();
-        private readonly ushort[] buttonSegments = new ushort[MaxCrossingButtons];
+        private static readonly CrossingType[] AllTypes =
+            { CrossingType.Junction, CrossingType.Bridge, CrossingType.Overpass, CrossingType.Underpass, CrossingType.Tunnel };
+
+        // The player's choices, kept while the curve is being edited.
+        private readonly Dictionary<ushort, CrossingType> crossingTypes = new Dictionary<ushort, CrossingType>();
+        private readonly Dictionary<ushort, float> crossingExtra = new Dictionary<ushort, float>();
+        private readonly Dictionary<int, float> waterExtra = new Dictionary<int, float>();
+
+        // On-screen buttons, reused every frame: button i runs buttonActions[i].
+        private readonly List<UIButton> buttons = new List<UIButton>();
+        private readonly List<System.Action> buttonActions = new List<System.Action>();
 
         // Clicked control points and, for each, the existing node it snapped to
         // (or 0), the half of that road end it attaches to (+1 left, -1 right,
@@ -87,6 +99,7 @@ namespace RealisticRoads
             public Plan Plan;            // heights, road versions, crossings, problems
             public List<Crossing> Crossings = new List<Crossing>();
             public List<int> CrossingIndex = new List<int>();
+            public List<WaterRun> WaterRuns = new List<WaterRun>();
             public ushort StartSplit;    // trunk end the start is half-snapped to (or 0)
             public ushort EndSplit;      // trunk end the end is half-snapped to (or 0)
         }
@@ -104,7 +117,7 @@ namespace RealisticRoads
             hoverValid = false;
             mouseRayValid = false;
             ToolActivator.SetInfo(null);
-            HideCrossingButtons();
+            HideButtons(0);
         }
 
         // Main thread, every frame while the tool is active.
@@ -135,7 +148,7 @@ namespace RealisticRoads
             }
             preview = Divide(live, liveNodes, liveSides);
             ToolActivator.SetInfo(InfoText());
-            PlaceCrossingButtons();
+            PlaceButtons();
         }
 
         // Simulation thread. Raycasting is done here, like the vanilla tools do.
@@ -328,8 +341,8 @@ namespace RealisticRoads
                 foreach (var crossing in division.Crossings)
                 {
                     Color color = problems ? BadColor
-                        : crossing.Level == CrossingLevel.Over ? BridgeColor
-                        : crossing.Level == CrossingLevel.Under ? LowColor
+                        : crossing.Type == CrossingType.Bridge || crossing.Type == CrossingType.Overpass ? BridgeColor
+                        : crossing.Type == CrossingType.Underpass || crossing.Type == CrossingType.Tunnel ? LowColor
                         : JunctionColor;
                     overlay.DrawCircle(cameraInfo, color, crossing.Point, width + 6f, -1f, 1280f, false, true);
                 }
@@ -436,8 +449,10 @@ namespace RealisticRoads
                 division.EndSplit = nodes[n];
             }
 
+            if (halfStart)
+                foreach (var run in division.WaterRuns) { run.From += CurveMath.FlatDistance(division.Points[0], division.Points[1]); run.To += CurveMath.FlatDistance(division.Points[0], division.Points[1]); }
             division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
-                division.Crossings, division.CrossingIndex, nodes[0], nodes[n]);
+                division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n]);
             return division;
         }
 
@@ -448,25 +463,48 @@ namespace RealisticRoads
             division.Length = CurveMath.Length(polyline);
             if (division.Length < 1f) return division;
 
-            // Crossings become fixed nodes; the curve is divided between them.
-            var crossings = CrossingFinder.Find(polyline, SelectedNetwork, startNode, endNode);
-            var cuts = new List<float> { 0f };
-            foreach (var crossing in crossings)
+            // Stretches over water get long bridge spans; crossings become fixed nodes.
+            division.WaterRuns = FindWater(polyline);
+            var cuts = new List<KeyValuePair<float, Crossing>>();
+            foreach (var run in division.WaterRuns)
+            {
+                cuts.Add(new KeyValuePair<float, Crossing>(run.From, null));
+                cuts.Add(new KeyValuePair<float, Crossing>(run.To, null));
+            }
+            foreach (var crossing in CrossingFinder.Find(polyline, SelectedNetwork, startNode, endNode))
             {
                 if (crossing.Distance < MinSpacing * 0.5f || crossing.Distance > division.Length - MinSpacing * 0.5f) continue;
-                if (crossing.Distance - cuts[cuts.Count - 1] < 4f) continue;
-                CrossingLevel level;
-                crossing.Level = crossingLevels.TryGetValue(crossing.Segment, out level) ? level : CrossingLevel.Same;
-                division.Crossings.Add(crossing);
-                cuts.Add(crossing.Distance);
+                CrossingType type;
+                crossing.Type = crossingTypes.TryGetValue(crossing.Segment, out type) && crossing.Allows(type) ? type : CrossingType.Junction;
+                float extra;
+                crossing.ExtraHeight = crossingExtra.TryGetValue(crossing.Segment, out extra) ? extra : 0f;
+                cuts.Add(new KeyValuePair<float, Crossing>(crossing.Distance, crossing));
             }
-            cuts.Add(division.Length);
+            cuts.Sort((p, q) => p.Key.CompareTo(q.Key));
 
-            for (int c = 1; c < cuts.Count; c++)
+            var stops = new List<KeyValuePair<float, Crossing>> { new KeyValuePair<float, Crossing>(0f, null) };
+            foreach (var cut in cuts)
             {
-                var slice = CurveMath.Slice(polyline, cuts[c - 1], cuts[c]);
+                if (cut.Key < 4f || cut.Key > division.Length - 4f) continue;
+                if (cut.Key - stops[stops.Count - 1].Key < 4f)
+                {
+                    // Too close to the previous stop: keep the crossing if there is one.
+                    if (cut.Value != null && stops[stops.Count - 1].Value == null && stops.Count > 1)
+                        stops[stops.Count - 1] = cut;
+                    continue;
+                }
+                stops.Add(cut);
+            }
+            stops.Add(new KeyValuePair<float, Crossing>(division.Length, null));
+
+            for (int c = 1; c < stops.Count; c++)
+            {
+                float from = stops[c - 1].Key, to = stops[c].Key;
+                var slice = CurveMath.Slice(polyline, from, to);
+                bool overWater = InWater(division.WaterRuns, (from + to) * 0.5f);
                 bool ignored;
-                int count = CurveMath.ChoosePieceCount(slice, Spacing, MinSpacing, MaxBend, out ignored);
+                int count = CurveMath.ChoosePieceCount(slice, overWater ? BridgeSpacing : Spacing,
+                    overWater ? BridgeMinSpacing : MinSpacing, MaxBend, out ignored);
                 List<Vector3> slicePoints, sliceTangents;
                 CurveMath.Divide(slice, count, out slicePoints, out sliceTangents);
                 int skip = division.Points.Count == 0 ? 0 : 1;
@@ -475,14 +513,18 @@ namespace RealisticRoads
                     division.Points.Add(slicePoints[i]);
                     division.Tangents.Add(sliceTangents[i]);
                 }
-                if (c < cuts.Count - 1)
+                if (c < stops.Count - 1)
                 {
-                    // Node on the crossing: direction from the whole curve, not one side of it.
+                    // Direction at a stop comes from the whole curve, not one side of it.
                     int index = division.Points.Count - 1;
                     Vector3 point, tangent;
-                    CurveMath.PointAt(polyline, cuts[c], out point, out tangent);
+                    CurveMath.PointAt(polyline, to, out point, out tangent);
                     if (tangent != Vector3.zero) division.Tangents[index] = tangent;
-                    division.CrossingIndex.Add(index);
+                    if (stops[c].Value != null)
+                    {
+                        division.Crossings.Add(stops[c].Value);
+                        division.CrossingIndex.Add(index);
+                    }
                 }
             }
 
@@ -492,72 +534,147 @@ namespace RealisticRoads
             return division;
         }
 
-        // --- crossing buttons ----------------------------------------------------
-
-        // Main thread. UP/DN buttons next to each crossing in the preview.
-        private void PlaceCrossingButtons()
+        // Stretches of the curve over water (gaps under 20 m are joined).
+        private List<WaterRun> FindWater(List<Vector3> polyline)
         {
+            var runs = new List<WaterRun>();
+            float along = 0f;
+            WaterRun current = null;
+            for (int i = 0; i < polyline.Count; i++)
+            {
+                if (i > 0) along += CurveMath.FlatDistance(polyline[i - 1], polyline[i]);
+                bool wet = NetworkBuilder.IsOverWater(polyline[i]);
+                if (wet)
+                {
+                    if (current != null && along - current.To < 20f) current.To = along;
+                    else
+                    {
+                        current = new WaterRun { From = along, To = along };
+                        runs.Add(current);
+                    }
+                }
+            }
+            foreach (var run in runs)
+            {
+                Vector3 middle, tangent;
+                CurveMath.PointAt(polyline, (run.From + run.To) * 0.5f, out middle, out tangent);
+                run.Middle = middle;
+                // Remembered by roughly where it is, so the +/- survives small edits.
+                run.Key = Mathf.RoundToInt(middle.x / 64f) * 100003 + Mathf.RoundToInt(middle.z / 64f);
+                float extra;
+                run.Extra = waterExtra.TryGetValue(run.Key, out extra) ? extra : 0f;
+            }
+            return runs;
+        }
+
+        private static bool InWater(List<WaterRun> runs, float at)
+        {
+            foreach (var run in runs) if (at > run.From && at < run.To) return true;
+            return false;
+        }
+
+        // --- on-screen buttons ---------------------------------------------------
+
+        // Main thread. Icons next to each crossing, +/- next to each bridge and
+        // water crossing. Buttons are reused; each frame says what they do.
+        private void PlaceButtons()
+        {
+            int used = 0;
             var division = preview;
             var camera = Camera.main;
             var view = UIView.GetAView();
-            int shown = 0;
-            if (division != null && camera != null && view != null)
+            if (division != null && division.Plan != null && camera != null && view != null)
             {
                 foreach (var crossing in division.Crossings)
                 {
-                    if (shown >= MaxCrossingButtons) break;
-                    Vector3 screen = camera.WorldToScreenPoint(crossing.Point);
-                    if (screen.z <= 0f) continue;
-                    Vector2 gui = view.ScreenPointToGUI(screen / view.inputScale);
-                    EnsureButtons(shown);
-                    buttonSegments[shown] = crossing.Segment;
-                    upButtons[shown].relativePosition = new Vector3(gui.x + 16f, gui.y - 26f);
-                    downButtons[shown].relativePosition = new Vector3(gui.x + 16f, gui.y + 2f);
-                    upButtons[shown].tooltip = "Raise: " + Next(crossing, 1);
-                    downButtons[shown].tooltip = "Lower: " + Next(crossing, -1);
-                    upButtons[shown].isVisible = crossing.Level != CrossingLevel.Over;
-                    downButtons[shown].isVisible = crossing.Level != CrossingLevel.Under;
-                    shown++;
+                    Vector2 gui;
+                    if (!ToGui(camera, view, crossing.Point, out gui)) continue;
+                    var allowed = new List<CrossingType>();
+                    foreach (var type in AllTypes) if (crossing.Allows(type)) allowed.Add(type);
+                    float x = gui.x - allowed.Count * (IconSize + 2f) * 0.5f;
+                    float y = gui.y - IconSize - 24f;
+                    var c = crossing;
+                    foreach (var type in allowed)
+                    {
+                        var t = type;
+                        UseButton(used++, IconFor(t), Letter(t), crossing.Describe(t), new Vector2(x, y), crossing.Type == t,
+                            () => SetType(c, t));
+                        x += IconSize + 2f;
+                    }
+                    if (crossing.Type == CrossingType.Bridge)
+                    {
+                        UseButton(used++, Icons.Plus, "+", "Higher (+" + HeightStep + " m)", new Vector2(x + 4f, y), false, () => AddExtra(c, HeightStep));
+                        UseButton(used++, Icons.Minus, "-", "Lower (-" + HeightStep + " m)", new Vector2(x + 4f + IconSize + 2f, y), false, () => AddExtra(c, -HeightStep));
+                    }
+                }
+                foreach (var run in division.WaterRuns)
+                {
+                    Vector2 gui;
+                    if (!ToGui(camera, view, run.Middle, out gui)) continue;
+                    var r = run;
+                    UseButton(used++, Icons.Plus, "+", "Bridge higher over the water (+" + HeightStep + " m)",
+                        new Vector2(gui.x - IconSize - 1f, gui.y - IconSize - 24f), false, () => AddWaterExtra(r, HeightStep));
+                    UseButton(used++, Icons.Minus, "-", "Bridge lower over the water (-" + HeightStep + " m)",
+                        new Vector2(gui.x + 1f, gui.y - IconSize - 24f), false, () => AddWaterExtra(r, -HeightStep));
                 }
             }
-            for (int i = shown; i < upButtons.Count; i++)
-            {
-                upButtons[i].isVisible = false;
-                downButtons[i].isVisible = false;
-            }
+            HideButtons(used);
         }
 
-        private static string Next(Crossing crossing, int step)
+        private static bool ToGui(Camera camera, UIView view, Vector3 world, out Vector2 gui)
         {
-            var copy = new Crossing
-            {
-                SameType = crossing.SameType,
-                ExistingElevation = crossing.ExistingElevation,
-                ExistingName = crossing.ExistingName,
-                Level = (CrossingLevel)Mathf.Clamp((int)crossing.Level + step, -1, 1),
-            };
-            return copy.Describe();
+            Vector3 screen = camera.WorldToScreenPoint(world);
+            gui = Vector2.zero;
+            if (screen.z <= 0f) return false;
+            gui = view.ScreenPointToGUI(screen / view.inputScale);
+            return true;
         }
 
-        private void EnsureButtons(int index)
+        private void UseButton(int index, string icon, string letter, string tooltip, Vector2 position, bool selected, System.Action action)
         {
-            while (upButtons.Count <= index)
+            while (buttons.Count <= index)
             {
-                int i = upButtons.Count;
-                upButtons.Add(CrossingButton("UP", () => ChangeLevel(i, 1)));
-                downButtons.Add(CrossingButton("DN", () => ChangeLevel(i, -1)));
+                int i = buttons.Count;
+                buttons.Add(CreateButton(() => { if (i < buttonActions.Count && buttonActions[i] != null) buttonActions[i](); }));
+                buttonActions.Add(null);
             }
+            var button = buttons[index];
+            buttonActions[index] = action;
+            button.relativePosition = new Vector3(position.x, position.y);
+            button.tooltip = tooltip;
+            if (button.atlas == Icons.Atlas && Icons.Atlas != null)
+            {
+                button.normalFgSprite = icon;
+                button.hoveredFgSprite = icon;
+                button.pressedFgSprite = icon;
+                button.normalBgSprite = selected ? Icons.BackgroundSelected : Icons.Background;
+                button.hoveredBgSprite = selected ? Icons.BackgroundSelected : Icons.BackgroundHover;
+                button.text = "";
+            }
+            else
+            {
+                button.text = selected ? "[" + letter + "]" : letter;
+            }
+            button.isVisible = true;
         }
 
-        private static UIButton CrossingButton(string text, System.Action onClick)
+        private static UIButton CreateButton(System.Action onClick)
         {
             var button = (UIButton)UIView.GetAView().AddUIComponent(typeof(UIButton));
-            button.text = text;
-            button.textScale = 0.75f;
-            button.size = new Vector2(36f, 24f);
-            button.normalBgSprite = "ButtonMenu";
-            button.hoveredBgSprite = "ButtonMenuHovered";
-            button.pressedBgSprite = "ButtonMenuPressed";
+            button.size = new Vector2(IconSize, IconSize);
+            var atlas = Icons.Atlas;
+            if (atlas != null)
+            {
+                button.atlas = atlas;
+                button.pressedBgSprite = Icons.BackgroundSelected;
+            }
+            else
+            {
+                button.normalBgSprite = "ButtonMenu";
+                button.hoveredBgSprite = "ButtonMenuHovered";
+                button.pressedBgSprite = "ButtonMenuPressed";
+                button.textScale = 0.8f;
+            }
             button.isVisible = false;
             button.eventClick += (component, param) =>
             {
@@ -566,33 +683,65 @@ namespace RealisticRoads
             return button;
         }
 
-        private void ChangeLevel(int button, int step)
+        private void HideButtons(int from)
         {
-            ushort segment = buttonSegments[button];
-            if (segment == 0) return;
-            CrossingLevel current;
-            if (!crossingLevels.TryGetValue(segment, out current)) current = CrossingLevel.Same;
-            var level = (CrossingLevel)Mathf.Clamp((int)current + step, -1, 1);
-            crossingLevels[segment] = level;
-            Mod.Log("Crossing with segment #" + segment + " set to " + level);
+            for (int i = from; i < buttons.Count; i++)
+            {
+                buttons[i].isVisible = false;
+                buttonActions[i] = null;
+            }
         }
 
-        private void HideCrossingButtons()
+        private static string IconFor(CrossingType type)
         {
-            for (int i = 0; i < upButtons.Count; i++)
+            switch (type)
             {
-                upButtons[i].isVisible = false;
-                downButtons[i].isVisible = false;
+                case CrossingType.Bridge: return Icons.Bridge;
+                case CrossingType.Overpass: return Icons.Overpass;
+                case CrossingType.Underpass: return Icons.Underpass;
+                case CrossingType.Tunnel: return Icons.Tunnel;
+                default: return Icons.Junction;
             }
+        }
+
+        private static string Letter(CrossingType type)
+        {
+            switch (type)
+            {
+                case CrossingType.Bridge: return "B";
+                case CrossingType.Overpass: return "O";
+                case CrossingType.Underpass: return "U";
+                case CrossingType.Tunnel: return "T";
+                default: return "J";
+            }
+        }
+
+        private void SetType(Crossing crossing, CrossingType type)
+        {
+            crossingTypes[crossing.Segment] = type;
+            Mod.Log("Crossing with " + crossing.ExistingName + " (#" + crossing.Segment + "): " + crossing.Describe(type));
+        }
+
+        private void AddExtra(Crossing crossing, float step)
+        {
+            float extra;
+            crossingExtra.TryGetValue(crossing.Segment, out extra);
+            crossingExtra[crossing.Segment] = Mathf.Clamp(extra + step, 0f, MaxExtraHeight);
+        }
+
+        private void AddWaterExtra(WaterRun run, float step)
+        {
+            float extra;
+            waterExtra.TryGetValue(run.Key, out extra);
+            waterExtra[run.Key] = Mathf.Clamp(extra + step, -5f, MaxExtraHeight);
         }
 
         // Called by ToolActivator before the tool is destroyed.
         public void DestroyButtons()
         {
-            foreach (var button in upButtons) if (button != null) Destroy(button.gameObject);
-            foreach (var button in downButtons) if (button != null) Destroy(button.gameObject);
-            upButtons.Clear();
-            downButtons.Clear();
+            foreach (var button in buttons) if (button != null) Destroy(button.gameObject);
+            buttons.Clear();
+            buttonActions.Clear();
         }
 
         // The Bezier the game will build for piece i (between points i-1 and i).
@@ -638,9 +787,22 @@ namespace RealisticRoads
                         (relative >= 1f ? ", " + relative.ToString("F0") + " m up" :
                          relative <= -1f ? ", " + (-relative).ToString("F0") + " m deep" : "");
             }
+            for (int w = 0; w < division.WaterRuns.Count; w++)
+            {
+                float deck = 0f;
+                var run = division.WaterRuns[w];
+                float along = 0f;
+                for (int i = 0; i < plan.Points.Count; i++)
+                {
+                    if (i > 0) along += CurveMath.FlatDistance(plan.Points[i - 1], plan.Points[i]);
+                    if (along < run.From || along > run.To) continue;
+                    deck = Mathf.Max(deck, plan.Points[i].y - terrain.SampleRawHeightSmoothWithWater(plan.Points[i], false, 0f));
+                }
+                text += "\nWater " + (w + 1) + ": bridge deck " + deck.ToString("F0") + " m above the water (+/- to change)";
+            }
             foreach (var problem in plan.Problems) text += "\n! " + problem;
 
-            return text + "\nEnter / double-click: build   Ctrl+Z: undo   Esc: clear   UP/DN: change a crossing";
+            return text + "\nEnter / double-click: build   Ctrl+Z: undo   Esc: clear   Icons: choose each crossing";
         }
 
         private void ClearPoints()
@@ -649,7 +811,9 @@ namespace RealisticRoads
             pointNodes.Clear();
             pointSides.Clear();
             pointMarkers.Clear();
-            crossingLevels.Clear();
+            crossingTypes.Clear();
+            crossingExtra.Clear();
+            waterExtra.Clear();
             preview = null;
         }
 

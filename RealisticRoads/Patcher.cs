@@ -14,20 +14,26 @@ namespace RealisticRoads
         public static void PatchAll()
         {
             if (patched) return;
-            try
+            var harmony = new Harmony(HarmonyId);
+            int failures = 0;
+            // One class at a time, so a patch that can't find its target (e.g.
+            // after a game update) only switches off that one feature.
+            foreach (var type in typeof(Patcher).Assembly.GetTypes())
             {
-                var harmony = new Harmony(HarmonyId);
-                harmony.PatchAll(typeof(Patcher).Assembly);
-                patched = true;
-                foreach (var method in harmony.GetPatchedMethods()) Mod.Log("Patched " + Describe(method));
-                Mod.Log("Harmony patches applied");
+                if (type.GetCustomAttributes(typeof(HarmonyPatch), false).Length == 0) continue;
+                try
+                {
+                    harmony.CreateClassProcessor(type).Patch();
+                }
+                catch (Exception e)
+                {
+                    failures++;
+                    Mod.LogError("Patch " + type.Name + " failed, that feature is off", e);
+                }
             }
-            catch (Exception e)
-            {
-                // A failed patch must not take the game down; log it and run vanilla.
-                Mod.LogError("Applying Harmony patches failed, running without them", e);
-                UnpatchAll();
-            }
+            patched = true;
+            foreach (var method in harmony.GetPatchedMethods()) Mod.Log("Patched " + Describe(method));
+            Mod.Log("Harmony patches applied" + (failures > 0 ? " (" + failures + " failed)" : ""));
         }
 
         public static void UnpatchAll()
@@ -135,6 +141,44 @@ namespace RealisticRoads
                 // Corners are asked for constantly; log once and fall back to vanilla.
                 failed = true;
                 Mod.LogError("Smooth split corner failed, smooth splits disabled until restart", e);
+            }
+        }
+    }
+
+    // Smooth splits: don't draw the junction piece at a marked node. The
+    // branches already meet the trunk edge to edge, and the junction piece
+    // is what shows the seam strip and crosswalk lines there.
+    [HarmonyPatch]
+    public static class NodeRenderPatch
+    {
+        private static bool failed;
+
+        // NetNode.RenderInstance(RenderManager.CameraInfo, ushort nodeID, NetInfo info, int iter,
+        //     NetNode.Flags flags, ref uint instanceIndex, ref RenderManager.Instance data)
+        public static MethodBase TargetMethod()
+        {
+            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (method.Name != "RenderInstance") continue;
+                var parameters = method.GetParameters();
+                if (parameters.Length > 1 && parameters[1].Name == "nodeID" && parameters[1].ParameterType == typeof(ushort))
+                    return method;
+            }
+            throw new Exception("NetNode.RenderInstance(cameraInfo, nodeID, ...) not found");
+        }
+
+        public static bool Prefix(ushort nodeID)
+        {
+            if (failed) return true;
+            try
+            {
+                return !SmoothSplits.IsEnabled(nodeID);
+            }
+            catch (Exception e)
+            {
+                failed = true;
+                Mod.LogError("Smooth split node drawing failed, drawing vanilla junctions", e);
+                return true;
             }
         }
     }
