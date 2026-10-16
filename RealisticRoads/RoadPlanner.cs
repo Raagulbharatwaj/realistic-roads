@@ -41,6 +41,7 @@ namespace RealisticRoads
         public List<Vector3> Points;          // y = planned height
         public List<Vector3> Tangents;
         public NodeKind[] Kinds;
+        public bool[] Middle;                 // suspension bridges: the node between two towers
         public List<Crossing> Crossings = new List<Crossing>();
         public List<int> CrossingIndex = new List<int>();   // node index of each crossing
         public Dictionary<int, Lowering> Lowerings = new Dictionary<int, Lowering>();  // by crossing number
@@ -77,6 +78,7 @@ namespace RealisticRoads
             };
             int n = points.Count;
             plan.Kinds = new NodeKind[n];
+            plan.Middle = new bool[n];
             if (n < 2 || info == null) return plan;
 
             var terrain = TerrainManager.instance;
@@ -140,7 +142,20 @@ namespace RealisticRoads
             }
 
             float[] heights;
-            if (!CurveMath.SolveHeights(distance, ground, minH, maxH, isFixed, MaxGrade, out heights))
+            bool solved = CurveMath.SolveHeights(distance, ground, minH, maxH, isFixed, MaxGrade, out heights);
+            // Level the bridges between their banks, then solve again with that.
+            var levelled = (float[])minH.Clone();
+            if (CurveMath.LevelSpans(distance, ground, heights, isFixed, levelled))
+            {
+                float[] again;
+                bool solvedAgain = CurveMath.SolveHeights(distance, ground, levelled, maxH, isFixed, MaxGrade, out again);
+                if (solvedAgain || !solved)
+                {
+                    heights = again;
+                    solved = solvedAgain;
+                }
+            }
+            if (!solved)
                 plan.Problems.Add("Not enough room to ramp up/down at " + MaxGrade * 100f + "% slope: spread the points out or move the crossing away from the ends");
 
             for (int i = 0; i < n; i++)
@@ -156,6 +171,8 @@ namespace RealisticRoads
                     plan.Kinds[i] = cutting[i] ? NodeKind.Cut : elevation <= -TunnelMinDepth ? NodeKind.Tunnel : NodeKind.Slope;
                 else plan.Kinds[i] = NodeKind.Ground;
             }
+
+            if (IsDoubleLength(info)) MarkMiddles(plan);
 
             CheckVariants(info, plan, hasElevated);
             CheckUnderground(info, plan, water, ground);
@@ -185,6 +202,33 @@ namespace RealisticRoads
             if (a == NodeKind.Tunnel || b == NodeKind.Tunnel || a == NodeKind.Slope || b == NodeKind.Slope)
                 return InfoFor(info, NodeKind.Slope);
             return info;
+        }
+
+        // Suspension bridges (the vanilla six-lane road's, for one) are made
+        // for a tower on every other node, with a plain "middle" node between
+        // two towers where the cables hang lowest. The game's own tool builds
+        // them that way; evenly spaced towers on every node look broken.
+        public static bool IsDoubleLength(NetInfo info)
+        {
+            var bridge = Variant(info, "m_bridgeInfo");
+            if (bridge == null || bridge.m_netAI == null) return false;
+            var f = bridge.m_netAI.GetType().GetField("m_doubleLength", BindingFlags.Public | BindingFlags.Instance);
+            return f != null && f.FieldType == typeof(bool) && (bool)f.GetValue(bridge.m_netAI);
+        }
+
+        // Every second node of each bridge run is a middle node; the run's
+        // first and last nodes keep their towers.
+        private static void MarkMiddles(Plan plan)
+        {
+            int n = plan.Kinds.Length;
+            int i = 0;
+            while (i < n)
+            {
+                if (plan.Kinds[i] != NodeKind.Bridge) { i++; continue; }
+                int first = i;
+                while (i < n && plan.Kinds[i] == NodeKind.Bridge) i++;
+                for (int k = first + 1; k < i - 1; k += 2) plan.Middle[k] = true;
+            }
         }
 
         // A road's other version (m_elevatedInfo, m_bridgeInfo, m_tunnelInfo,

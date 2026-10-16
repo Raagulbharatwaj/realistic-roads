@@ -43,6 +43,7 @@ namespace RealisticRoads
         private static readonly Color JunctionColor = new Color(1f, 1f, 1f, 0.8f);
         public const float BridgeSpacing = 90f;      // long spans over water so bridge models look whole
         public const float BridgeMinSpacing = 40f;
+        private const float WaterJoin = 60f;         // wet patches closer than this are one water crossing
         private const float HeightStep = 5f;
         private const float MaxExtraHeight = 60f;
         private const float IconSize = 34f;
@@ -465,6 +466,7 @@ namespace RealisticRoads
 
             // Stretches over water get long bridge spans; crossings become fixed nodes.
             division.WaterRuns = FindWater(polyline);
+            bool doubleLength = RoadPlanner.IsDoubleLength(SelectedNetwork);
             var cuts = new List<KeyValuePair<float, Crossing>>();
             foreach (var run in division.WaterRuns)
             {
@@ -505,6 +507,8 @@ namespace RealisticRoads
                 bool ignored;
                 int count = CurveMath.ChoosePieceCount(slice, overWater ? BridgeSpacing : Spacing,
                     overWater ? BridgeMinSpacing : MinSpacing, MaxBend, out ignored);
+                // Suspension bridges: an even number of spans, so both ends get a tower.
+                if (overWater && doubleLength && count % 2 == 1) count++;
                 List<Vector3> slicePoints, sliceTangents;
                 CurveMath.Divide(slice, count, out slicePoints, out sliceTangents);
                 int skip = division.Points.Count == 0 ? 0 : 1;
@@ -534,7 +538,9 @@ namespace RealisticRoads
             return division;
         }
 
-        // Stretches of the curve over water (gaps under 20 m are joined).
+        // Stretches of the curve over water. Wet patches less than WaterJoin
+        // apart are one crossing: a stream with gravel banks, a river with an
+        // islet, the bottom of a gorge.
         private List<WaterRun> FindWater(List<Vector3> polyline)
         {
             var runs = new List<WaterRun>();
@@ -546,7 +552,7 @@ namespace RealisticRoads
                 bool wet = NetworkBuilder.IsOverWater(polyline[i]);
                 if (wet)
                 {
-                    if (current != null && along - current.To < 20f) current.To = along;
+                    if (current != null && along - current.To < WaterJoin) current.To = along;
                     else
                     {
                         current = new WaterRun { From = along, To = along };
@@ -789,20 +795,28 @@ namespace RealisticRoads
             }
             for (int w = 0; w < division.WaterRuns.Count; w++)
             {
-                float deck = 0f;
                 var run = division.WaterRuns[w];
-                float along = 0f;
-                for (int i = 0; i < plan.Points.Count; i++)
-                {
-                    if (i > 0) along += CurveMath.FlatDistance(plan.Points[i - 1], plan.Points[i]);
-                    if (along < run.From || along > run.To) continue;
-                    deck = Mathf.Max(deck, plan.Points[i].y - terrain.SampleRawHeightSmoothWithWater(plan.Points[i], false, 0f));
-                }
-                text += "\nWater " + (w + 1) + ": bridge deck " + deck.ToString("F0") + " m above the water (+/- to change)";
+                float deck = HeightAt(plan, (run.From + run.To) * 0.5f) - terrain.SampleRawHeightSmoothWithWater(run.Middle, false, 0f);
+                text += "\nWater " + (w + 1) + " (" + (run.To - run.From).ToString("F0") + " m wide): bridge deck " +
+                        deck.ToString("F0") + " m above the water (+/- to change)";
             }
             foreach (var problem in plan.Problems) text += "\n! " + problem;
 
             return text + "\nEnter / double-click: build   Ctrl+Z: undo   Esc: clear   Icons: choose each crossing";
+        }
+
+        // The planned road height 'at' metres along the curve.
+        private static float HeightAt(Plan plan, float at)
+        {
+            float along = 0f;
+            for (int i = 1; i < plan.Points.Count; i++)
+            {
+                float piece = CurveMath.FlatDistance(plan.Points[i - 1], plan.Points[i]);
+                if (along + piece >= at || i == plan.Points.Count - 1)
+                    return Mathf.Lerp(plan.Points[i - 1].y, plan.Points[i].y, piece > 0.01f ? Mathf.Clamp01((at - along) / piece) : 0f);
+                along += piece;
+            }
+            return plan.Points.Count > 0 ? plan.Points[0].y : 0f;
         }
 
         private void ClearPoints()

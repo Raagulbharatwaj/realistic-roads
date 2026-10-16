@@ -163,6 +163,7 @@ namespace RealisticRoads
                         net.m_nodes.m_buffer[node].m_elevation = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(elevation)), 0, 255);
                     }
                     if (kind == NodeKind.Tunnel) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Underground;
+                    if (plan.Middle != null && plan.Middle[i]) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Double;
                     nodeIds[i] = node;
                     build.Nodes.Add(node);
                 }
@@ -192,6 +193,9 @@ namespace RealisticRoads
                     build.Segments.Add(segment);
                 }
 
+                int middles = 0;
+                if (plan.Middle != null) foreach (bool m in plan.Middle) if (m) middles++;
+                if (middles > 0) Mod.Log("  Suspension bridge: towers on every other node, " + middles + " middle node(s)");
                 if (bridges + elevated + tunnels > 0)
                     Mod.Log("  " + bridges + " bridge, " + elevated + " elevated, " + tunnels + " tunnel/slope segment(s)");
                 for (int c = 0; c < plan.Crossings.Count; c++)

@@ -66,6 +66,12 @@ Tip: launch with `-noWorkshop` in Steam launch options to test with only local m
    - **tunnel**: ours goes 12 m under through a tunnel with proper portals.
    Over water the preview shows **+/-** at the middle of the river: the bridge deck is 10 m above the water by
    default, 5 m per click (up to +60 m) so ships fit. Bridges over water use ~90 m spans.
+   Bridges and flyovers span level between their banks: over a gorge or a river with high banks the deck stays at
+   the top of the banks instead of dipping down to the water, and a ramp next to rising ground follows it up.
+   Wet patches less than 60 m apart count as one water crossing (one +/- pair).
+   Suspension bridges (e.g. the six-lane road's) get a tower on every other node, like the vanilla tool builds them;
+   the log lists each such segment as `tower`/`middle`. If one still looks wrong, build the same bridge with the
+   vanilla tool too and send the log, so the two can be compared.
    The panel lists each crossing and water bridge with its height/depth; problems are listed with "!" and the
    curve won't build until they are fixed. Preview colours: green ground, blue raised, orange lowered, red too sharp.
 4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
@@ -86,6 +92,9 @@ TM:PE settings or custom names on them are lost). Long curves are cut into ~40 m
 4. Click a yellow junction: it turns green, the junction block and its crosswalks should disappear, and the two
    branches should run back into the trunk side by side, with a gore nose where they part.
    The log shows `Smooth split ON at node #...` with the branch angle and each branch's share of the trunk.
+   If one branch is as wide as the trunk (the road carrying on) and the other is narrower (a ramp), the wide one
+   keeps the trunk's full width and the ramp starts inside the trunk's outer edge and peels off; the log says
+   `carries on at full width`.
 5. Click it again to go back to the vanilla junction. Clicking a red one logs why it is not a split.
 6. Watch a few cars drive through, then save, quit, reload the city and check the shape is still there.
 

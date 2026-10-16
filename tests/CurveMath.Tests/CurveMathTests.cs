@@ -213,5 +213,38 @@ public class CurveMathTests
         var isFixed = new[] { true, false, false };
         Assert.False(CurveMath.SolveHeights(d, Fill(3, 0), min, max, isFixed, 0.06f, out _));
     }
-}
 
+    [Fact]
+    public void Heights_GorgeBridge_SpansLevelBetweenTheCliffTops()
+    {
+        // Cliff tops at 40 m, a stream at the bottom of a 270 m wide gorge.
+        var d = new float[] { 0, 40, 80, 170, 260, 350, 390, 430 };
+        var ground = new float[] { 40, 40, 40, 2, 0, 2, 40, 40 };
+        var min = Fill(8, -1000);
+        for (int i = 3; i <= 5; i++) min[i] = 12f;              // over the water: 10 m clearance
+        var isFixed = new bool[8];
+        Assert.True(CurveMath.SolveHeights(d, ground, min, Fill(8, 1000), isFixed, 0.06f, out var h));
+        Assert.True(CurveMath.LevelSpans(d, ground, h, isFixed, min));
+        Assert.True(CurveMath.SolveHeights(d, ground, min, Fill(8, 1000), isFixed, 0.06f, out h));
+        for (int i = 2; i <= 6; i++) Assert.Equal(40f, h[i], 1); // a level deck, no dip to the stream
+    }
+
+    [Fact]
+    public void Heights_BridgeMeetsAHighBank_InsteadOfDippingBelowIt()
+    {
+        // Low bank on the left, a 20 m bank on the right, river between.
+        var d = Spaced(8, 60f);
+        var ground = new float[] { 0, 0, -3, -3, -3, 20, 20, 20 };
+        var min = Fill(8, -1000);
+        for (int i = 2; i <= 4; i++) min[i] = 10f;
+        var isFixed = new bool[8];
+        Assert.True(CurveMath.SolveHeights(d, ground, min, Fill(8, 1000), isFixed, 0.06f, out var h));
+        CurveMath.LevelSpans(d, ground, h, isFixed, min);
+        Assert.True(CurveMath.SolveHeights(d, ground, min, Fill(8, 1000), isFixed, 0.06f, out h));
+        Assert.True(h[4] >= 20f - 0.06f * 60f - 0.01f);           // climbs to the high bank, no sag
+        for (int i = 1; i < 8; i++) Assert.True(h[i] >= ground[i] - 0.01f);
+        for (int i = 1; i < 8; i++)
+            if (h[i] > ground[i] + 0.5f || h[i - 1] > ground[i - 1] + 0.5f)
+                Assert.True(Mathf.Abs(h[i] - h[i - 1]) <= 0.06f * 60f + 0.06f);
+    }
+}

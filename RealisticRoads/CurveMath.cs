@@ -263,7 +263,7 @@ namespace RealisticRoads
             for (int i = 0; i < n; i++)
                 heights[i] = isFixed[i] ? minH[i] : Mathf.Clamp(ground[i], minH[i], maxH[i]);
 
-            for (int pass = 0; pass < 12; pass++)
+            for (int pass = 0; pass < 24; pass++)
             {
                 bool changed = false;
                 // Up and down, both directions: lifted/fixed nodes raise their neighbours,
@@ -277,9 +277,14 @@ namespace RealisticRoads
                         if (isFixed[i]) continue;
                         float run = Mathf.Abs(distance[i] - distance[j]);
                         float h = heights[i];
-                        if (isFixed[j] || heights[j] > ground[j] + 0.5f)
+                        // A lifted node also follows higher ground next to it (a bridge
+                        // meets a cliff top instead of dipping below it), and a lowered
+                        // node follows lower ground (a tunnel comes out into a valley).
+                        bool lifted = heights[i] > ground[i] + 0.5f;
+                        bool lowered = heights[i] < ground[i] - 0.5f;
+                        if (isFixed[j] || heights[j] > ground[j] + 0.5f || (lifted && heights[j] > heights[i]))
                             h = Mathf.Max(h, heights[j] - maxGrade * run);
-                        if (isFixed[j] || heights[j] < ground[j] - 0.5f)
+                        if (isFixed[j] || heights[j] < ground[j] - 0.5f || (lowered && heights[j] < heights[i]))
                             h = Mathf.Min(h, heights[j] + maxGrade * run);
                         h = Mathf.Clamp(h, minH[i], maxH[i]);
                         if (Mathf.Abs(h - heights[i]) > 0.001f)
@@ -303,6 +308,38 @@ namespace RealisticRoads
                 if (shaped && Mathf.Abs(heights[i] - heights[i - 1]) > maxGrade * run + 0.05f) return false;
             }
             return true;
+        }
+
+        // Bridges span: every run of lifted nodes between two nodes on the
+        // ground (or fixed) gets a lower limit on the straight line between
+        // those two, so a deck crosses a gorge or valley level with its banks
+        // instead of sagging down to the water and climbing back out. Returns
+        // true if any limit was raised (solve the heights again then).
+        public static bool LevelSpans(float[] distance, float[] ground, float[] heights, bool[] isFixed, float[] minH)
+        {
+            int n = heights.Length;
+            bool raised = false;
+            int i = 0;
+            while (i < n)
+            {
+                if (isFixed[i] || heights[i] <= ground[i] + 0.5f) { i++; continue; }
+                int first = i;
+                while (i < n && !isFixed[i] && heights[i] > ground[i] + 0.5f) i++;
+                int a = first - 1, b = i;     // the anchors on both sides
+                if (a < 0 || b >= n) continue; // runs off the end of the curve: nothing to span to
+                float span = distance[b] - distance[a];
+                if (span < 0.01f) continue;
+                for (int k = first; k < b; k++)
+                {
+                    float line = heights[a] + (heights[b] - heights[a]) * (distance[k] - distance[a]) / span;
+                    if (line > minH[k] + 0.01f)
+                    {
+                        minH[k] = line;
+                        raised = true;
+                    }
+                }
+            }
+            return raised;
         }
 
         // The left-hand direction on the ground when facing 'd' (same side the
