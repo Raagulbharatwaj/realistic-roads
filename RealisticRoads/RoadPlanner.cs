@@ -47,6 +47,8 @@ namespace RealisticRoads
         public Dictionary<int, Lowering> Lowerings = new Dictionary<int, Lowering>();  // by crossing number
         public List<WaterRun> WaterRuns = new List<WaterRun>();
         public List<string> Problems = new List<string>();
+        public List<string> Warnings = new List<string>();   // shown, but don't stop building
+        public bool[] Steep;                  // piece i (between points i-1 and i) steeper than the road allows
         public ushort StartNode, EndNode;
         public bool Ok => Problems.Count == 0;
     }
@@ -68,6 +70,7 @@ namespace RealisticRoads
         private const float RunTolerance = 3f;        // node distances are chords, water runs follow the curve
         private const float DefaultMaxSlope = 0.25f;  // roads without their own limit
         private const float RimReach = 400f;          // how far a gorge's other side may be
+        private const float MaxEmbankment = 6f;       // plain road raised or lowered at most this much to ease a slope
         private const int ProbesPerPiece = 4;         // underground check points per lowered piece
         private static string lastLoweringFailure;
 
@@ -197,8 +200,26 @@ namespace RealisticRoads
             }
             if (!solved)
                 plan.Problems.Add("Not enough room to ramp up/down at " + MaxGrade * 100f + "% slope: spread the points out or move the crossing away from the ends");
-            else
-                CheckSteepGround(plan, distance, ground, heights, maxSlope);
+
+            // Plain ground: small embankments and cuttings keep the road within its
+            // own slope limit; what is still steeper is built anyway and marked.
+            var embanked = new bool[n];
+            plan.Steep = new bool[n];
+            if (solved)
+            {
+                float steepest = CurveMath.SmoothGrades(distance, ground, heights, isFixed, minH, maxH, maxSlope, MaxEmbankment, embanked);
+                for (int i = 1; i < n; i++)
+                {
+                    float run = Mathf.Max(distance[i] - distance[i - 1], 0.01f);
+                    bool plain = !isFixed[i] || !isFixed[i - 1];
+                    plan.Steep[i] = plain && Mathf.Abs(heights[i] - heights[i - 1]) / run > maxSlope + 0.001f &&
+                                    Mathf.Abs(heights[i] - ground[i]) <= MaxEmbankment + 0.5f &&
+                                    Mathf.Abs(heights[i - 1] - ground[i - 1]) <= MaxEmbankment + 0.5f;
+                }
+                if (steepest > 0f)
+                    plan.Warnings.Add("Steeper than this road allows in places (up to " + (steepest * 100f).ToString("F0") + "%, it allows " +
+                                      (maxSlope * 100f).ToString("F0") + "%): marked purple, builds anyway");
+            }
 
             for (int i = 0; i < n; i++)
             {
@@ -207,7 +228,8 @@ namespace RealisticRoads
                 plan.Points[i] = p;
 
                 float elevation = heights[i] - ground[i];
-                if (forceBridge[i] && elevation > -1f) plan.Kinds[i] = NodeKind.Bridge;
+                if (embanked[i]) plan.Kinds[i] = NodeKind.Ground;    // on an embankment / in a cutting, normal road
+                else if (forceBridge[i] && elevation > -1f) plan.Kinds[i] = NodeKind.Bridge;
                 else if (elevation >= 1f) plan.Kinds[i] = water[i] && hasBridge ? NodeKind.Bridge : NodeKind.Elevated;
                 else if (elevation <= -1f)
                     plan.Kinds[i] = !cutting[i] && elevation <= -TunnelMinDepth ? NodeKind.Tunnel : NodeKind.Cut;
@@ -224,7 +246,7 @@ namespace RealisticRoads
                 if (!before && !after) plan.Kinds[i] = NodeKind.Cut;
             }
 
-            if (IsDoubleLength(info)) MarkMiddles(plan);
+            // (No suspension-bridge middle nodes: raised parts use elevated pieces.)
 
             CheckVariants(info, plan, hasElevated);
             CheckUnderground(info, plan, water, ground);
@@ -237,7 +259,11 @@ namespace RealisticRoads
         {
             switch (kind)
             {
-                case NodeKind.Bridge: return Variant(info, "m_bridgeInfo") ?? Variant(info, "m_elevatedInfo");
+                // Raised parts always use the elevated version (concrete deck and
+                // pillars): bridge versions bring towers, cables and trusses that
+                // look wrong at most crossings. A fancy bridge can be drawn over it
+                // afterwards with the vanilla tool.
+                case NodeKind.Bridge: return Variant(info, "m_elevatedInfo") ?? Variant(info, "m_bridgeInfo");
                 case NodeKind.Elevated: return Variant(info, "m_elevatedInfo") ?? Variant(info, "m_bridgeInfo");
                 case NodeKind.Slope: return Variant(info, "m_slopeInfo");
                 case NodeKind.Tunnel: return Variant(info, "m_tunnelInfo");
@@ -538,21 +564,6 @@ namespace RealisticRoads
             foreach (var run in runs)
                 if (at >= run.From - tolerance && at <= run.To + tolerance) return run;
             return null;
-        }
-
-        // Plain ground steeper than the road allows (the vanilla tool refuses those too).
-        private static void CheckSteepGround(Plan plan, float[] distance, float[] ground, float[] heights, float maxSlope)
-        {
-            for (int i = 1; i < heights.Length; i++)
-            {
-                bool onGround = Mathf.Abs(heights[i] - ground[i]) <= 0.5f && Mathf.Abs(heights[i - 1] - ground[i - 1]) <= 0.5f;
-                float run = Mathf.Max(distance[i] - distance[i - 1], 0.01f);
-                float grade = Mathf.Abs(heights[i] - heights[i - 1]) / run;
-                if (!onGround || grade <= maxSlope) continue;
-                plan.Problems.Add("Too steep for this road: " + (grade * 100f).ToString("F0") + "% (it allows " +
-                                  (maxSlope * 100f).ToString("F0") + "%) about " + distance[i - 1].ToString("F0") + " m along");
-                return;
-            }
         }
 
         // A curve that crosses the same piece of road twice can make junctions,

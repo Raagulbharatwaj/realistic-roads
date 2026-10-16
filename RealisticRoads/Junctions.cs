@@ -223,6 +223,7 @@ namespace RealisticRoads
             public Vector3 Position;
             public Matrix4x4 Left, Right;
             public bool Sidewalk;
+            public bool Flipped;                   // the edges run the other way round: use the mirrored mesh
             public float Offset;                   // y offset when drawn
         }
 
@@ -244,10 +245,43 @@ namespace RealisticRoads
 
         // Main thread only (rendering).
         private static readonly Dictionary<ushort, Shape> shapes = new Dictionary<ushort, Shape>();
-        private static Mesh flatMesh, sidewalkMesh;
+        private static Mesh flatMesh, sidewalkMesh, flatMeshFlipped, sidewalkMeshFlipped;
         private static Material asphalt, pavement;
-        private static Texture2D asphaltA, asphaltB, pavementA, pavementB;
+        private static Texture2D pavementA, pavementB;
         private static bool failed;
+
+        // Asphalt tint (0 black .. 1 like the sidewalk). Adjustable in the JN
+        // tool (Page Up / Page Down) until the default matches the roads.
+        private const string ShadeKey = "RealisticRoads.AsphaltShade";
+        private const float DefaultShade = 0.3f;
+        private static float shade = -1f;
+
+        public static float Shade
+        {
+            get
+            {
+                if (shade < 0f)
+                {
+                    try { shade = PlayerPrefs.HasKey(ShadeKey) ? PlayerPrefs.GetFloat(ShadeKey) : DefaultShade; }
+                    catch { shade = DefaultShade; }
+                }
+                return shade;
+            }
+        }
+
+        // Main thread.
+        public static void AdjustShade(float step)
+        {
+            shade = Mathf.Clamp(Shade + step, 0.05f, 1f);
+            if (asphalt != null) asphalt.color = new Color(shade, shade, shade, 0f);
+            try
+            {
+                PlayerPrefs.SetFloat(ShadeKey, shade);
+                PlayerPrefs.Save();
+            }
+            catch { }
+            Mod.Log("Junction asphalt shade " + shade.ToString("F2"));
+        }
 
         public static void Forget(ushort node)
         {
@@ -277,9 +311,11 @@ namespace RealisticRoads
                     block.SetMatrix(net.ID_LeftMatrix, strip.Left);
                     block.SetMatrix(net.ID_RightMatrix, strip.Right);
                     block.SetVector(net.ID_MeshScale, new Vector4(1f, 1f, 1f, 1f));
-                    block.SetTexture(net.ID_SurfaceTexA, strip.Sidewalk ? pavementA : asphaltA);
-                    block.SetTexture(net.ID_SurfaceTexB, strip.Sidewalk ? pavementB : asphaltB);
-                    Graphics.DrawMesh(strip.Sidewalk ? sidewalkMesh : flatMesh,
+                    block.SetTexture(net.ID_SurfaceTexA, pavementA);
+                    block.SetTexture(net.ID_SurfaceTexB, pavementB);
+                    Mesh mesh = strip.Sidewalk ? (strip.Flipped ? sidewalkMeshFlipped : sidewalkMesh)
+                                               : (strip.Flipped ? flatMeshFlipped : flatMesh);
+                    Graphics.DrawMesh(mesh,
                         strip.Position + Vector3.up * strip.Offset, Quaternion.identity,
                         strip.Sidewalk ? pavement : asphalt, RoadLayer, null, 0, block);
                 }
@@ -407,9 +443,15 @@ namespace RealisticRoads
         private static void AddStrip(Shape shape, Bezier3 left, Bezier3 right, bool sidewalk, float offset)
         {
             Vector3 position = (left.a + left.d + right.a + right.d) * 0.25f;
+            // The mesh faces up when "along the left edge" turned towards "across
+            // to the right edge" points up; otherwise draw the mirrored mesh.
+            Vector3 along = left.d - left.a;
+            Vector3 across = (right.a + right.d) * 0.5f - (left.a + left.d) * 0.5f;
+            bool flipped = along.z * across.x - along.x * across.z < 0f;
             shape.Strips.Add(new Strip
             {
                 Position = position,
+                Flipped = flipped,
                 Left = NetSegment.CalculateControlMatrix(left.a, left.b, left.c, left.d, right.a, right.b, right.c, right.d, position, 0.05f),
                 Right = NetSegment.CalculateControlMatrix(right.a, right.b, right.c, right.d, left.a, left.b, left.c, left.d, position, 0.05f),
                 Sidewalk = sidewalk,
@@ -429,14 +471,16 @@ namespace RealisticRoads
                 Mod.LogError("CS2-style junctions: road shader not found", null);
                 return false;
             }
-            asphalt = RoadMaterial(shader, "RealisticRoadsAsphalt", Texture(128, new Color32(0, 255, 255, 255)));
+            // The asphalt is the sidewalk surface (which renders correctly) tinted dark.
             pavement = RoadMaterial(shader, "RealisticRoadsPavement", Texture(128, new Color32(0, 0, 0, 255)));
-            asphaltA = Texture(512, new Color32(0, 0, 0, 127));
-            asphaltB = Texture(512, new Color32(0, 0, 0, 0));
+            asphalt = RoadMaterial(shader, "RealisticRoadsAsphalt", Texture(128, new Color32(0, 0, 0, 255)));
+            asphalt.color = new Color(Shade, Shade, Shade, 0f);
             pavementA = Texture(512, new Color32(255, 255, 127, 127));
             pavementB = Texture(512, new Color32(0, 0, 0, 0));
-            flatMesh = StripMesh(false);
-            sidewalkMesh = StripMesh(true);
+            flatMesh = StripMesh(false, false);
+            sidewalkMesh = StripMesh(true, false);
+            flatMeshFlipped = StripMesh(false, true);
+            sidewalkMeshFlipped = StripMesh(true, true);
             Mod.Log("CS2-style junction materials ready");
             return true;
         }
@@ -468,16 +512,16 @@ namespace RealisticRoads
         // A strip x in [-0.5, 0.5] (left edge curve to right edge curve),
         // z in [-0.5, 0.5] (along the curves). The sidewalk version is the
         // same at sidewalk height, with a curb face down along the right edge.
-        // Both sides of every face, so the winding never hides a piece.
-        private static Mesh StripMesh(bool sidewalk)
+        // 'flipped' mirrors the winding for strips whose edges run the other way.
+        private static Mesh StripMesh(bool sidewalk, bool flipped)
         {
             var vertices = new List<Vector3>();
             var normals = new List<Vector3>();
             var uvs = new List<Vector2>();
             var triangles = new List<int>();
 
-            AddGrid(vertices, normals, uvs, triangles, -0.5f, 0f, 0.5f, 0f, Vector3.up);
-            if (sidewalk) AddGrid(vertices, normals, uvs, triangles, 0.5f, 0f, 0.5f, -CurbDrop, new Vector3(1f, 0f, 0f));
+            AddGrid(vertices, normals, uvs, triangles, -0.5f, 0f, 0.5f, 0f, Vector3.up, flipped);
+            if (sidewalk) AddGrid(vertices, normals, uvs, triangles, 0.5f, 0f, 0.5f, -CurbDrop, new Vector3(1f, 0f, 0f), flipped);
 
             var mesh = new Mesh { name = sidewalk ? "RealisticRoadsSidewalk" : "RealisticRoadsAsphalt" };
             mesh.vertices = vertices.ToArray();
@@ -492,7 +536,7 @@ namespace RealisticRoads
 
         // A band of Steps rows from (x0, y0) to (x1, y1) across, -0.5..0.5 along.
         private static void AddGrid(List<Vector3> vertices, List<Vector3> normals, List<Vector2> uvs, List<int> triangles,
-            float x0, float y0, float x1, float y1, Vector3 normal)
+            float x0, float y0, float x1, float y1, Vector3 normal, bool flipped)
         {
             int first = vertices.Count;
             for (int row = 0; row <= Steps; row++)
@@ -508,10 +552,16 @@ namespace RealisticRoads
             for (int row = 0; row < Steps; row++)
             {
                 int a = first + row * 2, b = a + 1, c = a + 2, d = a + 3;
-                triangles.Add(a); triangles.Add(c); triangles.Add(b);
-                triangles.Add(b); triangles.Add(c); triangles.Add(d);
-                triangles.Add(a); triangles.Add(b); triangles.Add(c);
-                triangles.Add(b); triangles.Add(d); triangles.Add(c);
+                if (!flipped)
+                {
+                    triangles.Add(a); triangles.Add(c); triangles.Add(b);
+                    triangles.Add(b); triangles.Add(c); triangles.Add(d);
+                }
+                else
+                {
+                    triangles.Add(a); triangles.Add(b); triangles.Add(c);
+                    triangles.Add(b); triangles.Add(d); triangles.Add(c);
+                }
             }
         }
     }

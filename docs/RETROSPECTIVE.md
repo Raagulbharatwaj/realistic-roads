@@ -7,7 +7,7 @@ research into CS2 and existing CS1 mods taught us, and the plan from here.
 
 | Feature | State in game | Notes |
 |---|---|---|
-| RR curve tool (spline, snapping, continue a road) | Works | Segments now ~80 m (was 40 m, too crowded). |
+| RR curve tool (spline, snapping, continue a road) | Works | Segments now ~120 m (was 40 m, then 80 m: too crowded). |
 | Bridges over water, level between banks, long spans | Works | Gorge bridges build since the deck was levelled between banks. |
 | Suspension bridge (6-lane) | Built with towers on alternate nodes | Logged as tower/middle; still to be confirmed visually. |
 | Level crossing / junction at a crossing | Works | |

@@ -25,9 +25,9 @@ namespace RealisticRoads
     // water crossings get +/- to set their height.
     public class CurveTool : ToolBase
     {
-        public const float Spacing = 80f;       // target segment length (CS1 segments look best long)
-        public const float MinSpacing = 24f;    // shortest segment used to fit a tight bend
-        public const float MaxBend = 30f;       // degrees one segment may turn
+        public const float Spacing = 120f;      // target segment length (CS1 segments look best long)
+        public const float MinSpacing = 30f;    // shortest segment used to fit a tight bend
+        public const float MaxBend = 40f;       // degrees one segment may turn
         private const float PointSize = 6f;
         private const float HoverSize = 4f;
         private const float MinPointSpacing = 2f;
@@ -40,8 +40,9 @@ namespace RealisticRoads
         private static readonly Color BadColor = new Color(1f, 0.2f, 0.15f, 0.6f);
         private static readonly Color BridgeColor = new Color(0.25f, 0.6f, 1f, 0.55f);
         private static readonly Color LowColor = new Color(1f, 0.6f, 0.15f, 0.55f);
+        private static readonly Color SteepColor = new Color(0.75f, 0.3f, 1f, 0.6f);
         private static readonly Color JunctionColor = new Color(1f, 1f, 1f, 0.8f);
-        public const float BridgeSpacing = 90f;      // long spans over water so bridge models look whole
+        public const float BridgeSpacing = 100f;     // spans over water (elevated pieces, pillars at each node)
         public const float BridgeMinSpacing = 40f;
         private const float WaterJoin = 60f;         // wet patches closer than this are one water crossing
         private const float HeightStep = 5f;
@@ -344,6 +345,7 @@ namespace RealisticRoads
                     float bend = CurveMath.BendAngle(division.Tangents[i - 1], division.Tangents[i]);
                     Color color;
                     if (bend > MaxBend) color = BadColor;
+                    else if (division.Plan.Steep != null && division.Plan.Steep[i]) color = SteepColor;
                     else if (IsRaised(kinds[i - 1]) || IsRaised(kinds[i])) color = BridgeColor;
                     else if (IsLowered(kinds[i - 1]) || IsLowered(kinds[i])) color = LowColor;
                     else color = GoodColor;
@@ -478,7 +480,6 @@ namespace RealisticRoads
 
             // Stretches over water get long bridge spans; crossings become fixed nodes.
             division.WaterRuns = FindWater(polyline);
-            bool doubleLength = RoadPlanner.IsDoubleLength(SelectedNetwork);
             var cuts = new List<KeyValuePair<float, Crossing>>();
             foreach (var run in division.WaterRuns)
             {
@@ -524,8 +525,6 @@ namespace RealisticRoads
                 {
                     // Bridges: equal spans so the bridge model repeats evenly.
                     int count = CurveMath.ChoosePieceCount(slice, BridgeSpacing, BridgeMinSpacing, MaxBend, out ignored);
-                    // Suspension bridges: an even number of spans, so both ends get a tower.
-                    if (doubleLength && count % 2 == 1) count++;
                     CurveMath.Divide(slice, count, out slicePoints, out sliceTangents);
                 }
                 else
@@ -823,6 +822,7 @@ namespace RealisticRoads
                         deck.ToString("F0") + " m above the water (+/- to change)";
             }
             foreach (var problem in plan.Problems) text += "\n! " + problem;
+            foreach (var warning in plan.Warnings) text += "\n~ " + warning;
 
             return text + "\nEnter / double-click: build   Ctrl+Z: undo   Esc: clear   Icons: choose each crossing";
         }

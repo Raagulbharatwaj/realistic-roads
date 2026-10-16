@@ -112,6 +112,12 @@ namespace RealisticRoads
                     e.Use();
                     SimulationManager.instance.AddAction(() => Junctions.AdjustCorner(node, CornerStep));
                 }
+                else if (e.keyCode == KeyCode.PageUp || e.keyCode == KeyCode.PageDown)
+                {
+                    // Asphalt tint, for all CS2-style junctions.
+                    e.Use();
+                    JunctionRenderer.AdjustShade(e.keyCode == KeyCode.PageUp ? 0.05f : -0.05f);
+                }
                 else if (node != 0 && (e.keyCode == KeyCode.Minus || e.keyCode == KeyCode.KeypadMinus))
                 {
                     e.Use();
@@ -142,7 +148,8 @@ namespace RealisticRoads
         {
             ushort node = hoverNode;
             string text = "Junction tool: click a junction for the CS2 look (no crosswalks or median blocks,\n" +
-                          "rounded sidewalk corners); click again for vanilla. + / -: bigger / smaller corners";
+                          "rounded sidewalk corners); click again for vanilla. + / -: bigger / smaller corners\n" +
+                          "Page Up / Down: lighter / darker asphalt (now " + JunctionRenderer.Shade.ToString("F2") + ")";
             if (node == 0) return text;
             string reason;
             if (Junctions.IsEnabled(node))

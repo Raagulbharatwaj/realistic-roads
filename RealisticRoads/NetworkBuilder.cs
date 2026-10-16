@@ -178,7 +178,9 @@ namespace RealisticRoads
                     else
                     {
                         NetInfo existing = net.m_segments.m_buffer[crossing.Segment].Info;
-                        NetInfo bridge = RoadPlanner.Variant(existing, "m_bridgeInfo") ?? RoadPlanner.Variant(existing, "m_elevatedInfo");
+                        // Elevated piece (not the bridge one): no trusses, and no holes cut
+                        // in the ground beside its ends.
+                        NetInfo bridge = RoadPlanner.Variant(existing, "m_elevatedInfo") ?? RoadPlanner.Variant(existing, "m_bridgeInfo");
                         if (bridge == null) throw new Exception(existing.name + " has no bridge version for the underpass");
                         float length = Mathf.Max(net.m_segments.m_buffer[crossing.Segment].m_averageLength, 1f);
                         float half = (info.m_halfWidth / crossing.Skew + UnderpassBridgeExtra) / length;
@@ -206,7 +208,10 @@ namespace RealisticRoads
                     }
                     if (kind == NodeKind.Tunnel) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Underground;
                     // Like the vanilla tool: nodes on (or dug into) the ground follow the terrain.
-                    if (kind == NodeKind.Ground || kind == NodeKind.Cut) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.OnGround;
+                    // Not on an embankment or in a shallow cut: there the game would snap the
+                    // node back onto the terrain, while the road itself reshapes the ground.
+                    bool onTerrain = Mathf.Abs(points[i].y - TerrainManager.instance.SampleRawHeightSmooth(points[i])) < 0.5f;
+                    if ((kind == NodeKind.Ground && onTerrain) || kind == NodeKind.Cut) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.OnGround;
                     if (plan.Middle != null && plan.Middle[i]) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Double;
                     nodeIds[i] = node;
                     build.Nodes.Add(node);

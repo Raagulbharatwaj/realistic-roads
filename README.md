@@ -79,24 +79,28 @@ Tip: launch with `-noWorkshop` in Steam launch options to test with only local m
    If an overpass can't lower the other road, the log lists that road's nodes and heights (`Overpass: lowering ...
    failed`); please send it.
    Over water the preview shows **+/-** at the middle of the river: the bridge deck is 10 m above the water by
-   default, 5 m per click (up to +60 m) so ships fit. Bridges over water use ~90 m spans.
+   default, 5 m per click (up to +60 m) so ships fit. Bridges over water use ~100 m spans.
    Bridges and flyovers span level between their banks: over a gorge or a river with high banks the deck stays at
    the top of the banks instead of dipping down to the water, and a ramp next to rising ground follows it up.
    Wet patches less than 60 m apart count as one water crossing (one +/- pair).
-   Suspension bridges (e.g. the six-lane road's) get a tower on every other node, like the vanilla tool builds them;
-   the log lists each such segment as `tower`/`middle`. If one still looks wrong, build the same bridge with the
-   vanilla tool too and send the log, so the two can be compared.
+   Everything raised (bridges over water, flyovers, overpass decks, the short bridge of an underpass) is built from
+   the road's **elevated** pieces (plain deck on pillars), never its bridge pieces (suspension towers, arches),
+   however long the span. Once it's built you can redraw a span as a fancy bridge with the vanilla tool.
+   **Steep ground:** where the ground is steeper than the road allows, the road is raised on an embankment or dug
+   into a cutting by up to 6 m to even it out. If it is still too steep after that, the stretch is shown **purple**
+   and the panel lists it with "~" (a warning): the curve still builds, the game will just draw it steep.
    The panel lists each crossing and water bridge with its height/depth; problems are listed with "!" and the
-   curve won't build until they are fixed. Preview colours: green ground, blue raised, orange lowered, red too sharp.
+   curve won't build until they are fixed; warnings ("~") don't stop it. Preview colours: green ground, blue raised,
+   orange lowered, purple steep, red too sharp.
 4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
-   bridge, 10 m above the water, with elevated ramps (pillars) on land at a gentle 6 % slope.
+   elevated road (deck on pillars), 10 m above the water, with ramps on land at a gentle 6 % slope.
 5. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.
 6. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
 
 Notes for this version: it does not charge money yet and does not bulldoze trees/buildings in the way.
 Bridges work; flyovers, tunnels, cuttings and level crossings are new: check them and send screenshots.
 Ctrl+Z undoes a curve including any junctions/bridges it put into existing roads (those segments are rebuilt, so
-TM:PE settings or custom names on them are lost). Long curves are cut into ~80 m segments (shorter in tight bends, ~90 m over water).
+TM:PE settings or custom names on them are lost). Long curves are cut into ~120 m segments (shorter only in tight bends, ~100 m over water).
 
 ## 6. Test smooth splits (milestone S1)
 1. Load a city with a road that splits in two (e.g. a one-way road splitting into two one-way roads).
@@ -122,6 +126,8 @@ Junctions built with RR get the CS2 look automatically; JN changes any other jun
    floor and raised sidewalk corners that curve from road to road. The road ends move 3 m back for rounder corners.
 3. With the mouse over a CS2-style junction, **+** / **-** make the corners bigger / smaller (1 m steps, 0-20 m).
    Click again to go back to vanilla.
+   **Page Up / Page Down** make the junction asphalt lighter / darker (all junctions, saved between games). The log
+   shows `Junction asphalt shade X`: if you find a value that matches the roads, send it and it becomes the default.
 4. Traffic is unchanged; cars follow the new road ends. Saves keep the junctions; without the mod they are vanilla.
 
 Please check and screenshot: the asphalt and sidewalk colours (they use the game's road shader, like Intersection
