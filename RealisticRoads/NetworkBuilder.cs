@@ -105,6 +105,7 @@ namespace RealisticRoads
                             Vector3 position = net.m_nodes.m_buffer[split.Nodes[i]].m_position;
                             position.y = lowering.SplitHeights[i];
                             net.MoveNode(split.Nodes[i], position);
+                            RefreshDirections(split.Nodes[i]);
                         }
                         for (int i = 0; i < lowering.Nodes.Count; i++)
                         {
@@ -114,6 +115,7 @@ namespace RealisticRoads
                             build.Moves.Add(new KeyValuePair<ushort, Vector3>(node, position));
                             position.y = lowering.NodeHeights[i];
                             net.MoveNode(node, position);
+                            RefreshDirections(node);
                         }
                         continue;
                     }
@@ -163,6 +165,8 @@ namespace RealisticRoads
                         net.m_nodes.m_buffer[node].m_elevation = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(elevation)), 0, 255);
                     }
                     if (kind == NodeKind.Tunnel) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Underground;
+                    // Like the vanilla tool: nodes on (or dug into) the ground follow the terrain.
+                    if (kind == NodeKind.Ground || kind == NodeKind.Cut) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.OnGround;
                     if (plan.Middle != null && plan.Middle[i]) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Double;
                     nodeIds[i] = node;
                     build.Nodes.Add(node);
@@ -185,10 +189,23 @@ namespace RealisticRoads
                         else elevated++;
                     }
 
+                    // A tunnel ramp (slope) runs from its underground end up to the
+                    // surface, like the vanilla tool builds it, so the portal faces
+                    // the right way; 'invert' keeps the traffic direction.
+                    ushort from = nodeIds[i - 1], to = nodeIds[i];
+                    bool invert = false;
+                    if (plan.Kinds[i] == NodeKind.Tunnel && plan.Kinds[i - 1] != NodeKind.Tunnel)
+                    {
+                        ushort t = from; from = to; to = t;
+                        Vector3 d = startDir; startDir = endDir; endDir = d;
+                        invert = true;
+                    }
+
                     ushort segment;
-                    if (!net.CreateSegment(out segment, ref sim.m_randomizer, segmentInfo, nodeIds[i - 1], nodeIds[i],
-                            startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex, false))
+                    if (!net.CreateSegment(out segment, ref sim.m_randomizer, segmentInfo, from, to,
+                            startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex, invert))
                         throw new Exception("CreateSegment failed for piece " + i);
+                    CalculateSegmentDirections(segment);
                     sim.m_currentBuildIndex++;
                     build.Segments.Add(segment);
                 }
@@ -245,7 +262,11 @@ namespace RealisticRoads
 
             // Existing nodes we lowered go back up.
             for (int i = build.Moves.Count - 1; i >= 0; i--)
-                if (NodeExists(build.Moves[i].Key)) net.MoveNode(build.Moves[i].Key, build.Moves[i].Value);
+            {
+                if (!NodeExists(build.Moves[i].Key)) continue;
+                net.MoveNode(build.Moves[i].Key, build.Moves[i].Value);
+                RefreshDirections(build.Moves[i].Key);
+            }
 
             for (int i = build.Splits.Count - 1; i >= 0; i--)
             {
@@ -477,6 +498,30 @@ namespace RealisticRoads
         public static Vector3 HalfSnapRunIn(ushort node, HalfSnap snap)
         {
             return HalfSnapMarker(node, snap) + snap.Forward * snap.RunIn;
+        }
+
+        // Flat directions, then the game works out the slope between the two
+        // nodes itself (as Network Multitool and Move It do).
+        private static void CalculateSegmentDirections(ushort segment)
+        {
+            var segments = NetManager.instance.m_segments.m_buffer;
+            segments[segment].m_startDirection = CurveMath.FlatNormal(segments[segment].m_startDirection);
+            segments[segment].m_endDirection = CurveMath.FlatNormal(segments[segment].m_endDirection);
+            segments[segment].m_startDirection = segments[segment].FindDirection(segment, segments[segment].m_startNode);
+            segments[segment].m_endDirection = segments[segment].FindDirection(segment, segments[segment].m_endNode);
+        }
+
+        // After a node moved up or down: fix the slope of its roads and redraw them.
+        private static void RefreshDirections(ushort node)
+        {
+            var net = NetManager.instance;
+            for (int i = 0; i < 8; i++)
+            {
+                ushort segment = net.m_nodes.m_buffer[node].GetSegment(i);
+                if (segment == 0) continue;
+                CalculateSegmentDirections(segment);
+                net.UpdateSegment(segment);
+            }
         }
 
         private static Vector3 DirectionAway(ushort segment, ushort node)
