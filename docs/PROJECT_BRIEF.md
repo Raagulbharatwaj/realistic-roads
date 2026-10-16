@@ -117,8 +117,8 @@ Build in this order; each milestone must work in game before the next starts.
 | 2 | Tool skeleton | Button/hotkey activates `CurveTool`; clicks place control points shown as circles; Esc returns to the vanilla tool. |
 | S1 | Smooth existing splits (prototype) | Clicking a split junction turns it into a taper with a gore; vehicles still use all lanes; works on one-way and two-way roads; survives save/reload; clicking again restores the vanilla junction. **Done before milestone 3 at the player's request.** |
 | S2 | Tidy smooth splits | No crosswalks or junction markings at smoothed splits; lanes flow straight into their branch; works with TM:PE and NCR installed. |
-| 3 | Curve preview | Spline and arc previews follow the mouse, show length, turn red where the bend is too sharp. |
-| 4 | Build the curve | Enter builds the curve with the selected road; vehicles drive it end to end; it connects to existing roads at snapped ends. |
+| 3 | Curve preview *(spline mode done, arc/parallel later)* | Spline and arc previews follow the mouse, show length, turn red where the bend is too sharp. |
+| 4 | Build the curve *(first version: ground roads, snaps to nodes, Ctrl+Z undo)* | Enter builds the curve with the selected road; vehicles drive it end to end; it connects to existing roads at snapped ends. |
 | 5 | Undo, slopes, settings | One undo removes a whole curve; start/end heights work; settings save and reload. |
 | S3 | Automatic smooth splits | The curve tool smooths a split automatically when it joins a road at a shallow angle. |
 | 6 | Flyover follow mode | Elevated road/monorail built over 500 m of an existing curved road, matching its path. |

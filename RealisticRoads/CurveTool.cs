@@ -1,22 +1,36 @@
 using System.Collections.Generic;
 using ColossalFramework;
+using ColossalFramework.Math;
 using UnityEngine;
 
 namespace RealisticRoads
 {
-    // Milestone 2: the tool skeleton. Left-click places control points on the
-    // ground, right-click removes the last one, Esc returns to the vanilla tool.
-    // Points are drawn as circles; no curve or road building yet.
+    // CS2-style curve tool.
+    //   Left-click        add a control point (snaps to an existing road end/junction)
+    //   Right-click       remove the last point
+    //   Enter/double-click build the curve with the road picked in the Roads menu
+    //   Ctrl+Z            undo the last curve built
+    //   Esc               clear the points; Esc again leaves the tool
+    // The preview follows the mouse: green where it can be built, red where a
+    // bend is too sharp.
     public class CurveTool : ToolBase
     {
+        public const float Spacing = 40f;       // target segment length
+        public const float MinSpacing = 16f;    // shortest segment used to fit a tight bend
+        public const float MaxBend = 30f;       // degrees one segment may turn
         private const float PointSize = 6f;
         private const float HoverSize = 4f;
         private const float MinPointSpacing = 2f;
 
         private static readonly Color PointColor = new Color(0.2f, 0.8f, 1f, 0.9f);
+        private static readonly Color SnapColor = new Color(1f, 0.85f, 0.1f, 0.9f);
         private static readonly Color HoverColor = new Color(1f, 1f, 1f, 0.6f);
+        private static readonly Color GoodColor = new Color(0.25f, 0.9f, 0.35f, 0.55f);
+        private static readonly Color BadColor = new Color(1f, 0.2f, 0.15f, 0.6f);
 
+        // Clicked control points and, for each, the existing node it snapped to (or 0).
         private readonly List<Vector3> points = new List<Vector3>();
+        private readonly List<ushort> pointNodes = new List<ushort>();
 
         // Written on the main thread in OnToolUpdate, read by SimulationStep.
         private Ray mouseRay;
@@ -26,27 +40,39 @@ namespace RealisticRoads
         // Written by SimulationStep (simulation thread), read on the main thread.
         private Vector3 hoverPosition;
         private volatile bool hoverValid;
+        private volatile ushort hoverNode;
+
+        // Preview, recomputed on the main thread every frame.
+        private Division preview;
 
         // The road/track the player last picked in the vanilla Roads menu.
-        // Not used until milestone 4; logged so we can see what we'd build with.
         public NetInfo SelectedNetwork { get; set; }
 
         public bool IsActive => ToolsModifierControl.toolController != null &&
                                 ToolsModifierControl.toolController.CurrentTool == this;
 
+        // A curve cut into buildable pieces.
+        private class Division
+        {
+            public List<Vector3> Points;
+            public List<Vector3> Tangents;
+            public float Length;
+            public bool Ok;
+        }
+
         protected override void OnEnable()
         {
             base.OnEnable();
-            points.Clear();
-            hoverValid = false;
+            ClearPoints();
         }
 
         protected override void OnDisable()
         {
             base.OnDisable();
-            points.Clear();
+            ClearPoints();
             hoverValid = false;
             mouseRayValid = false;
+            ToolActivator.SetInfo(null);
         }
 
         // Main thread, every frame while the tool is active.
@@ -54,14 +80,27 @@ namespace RealisticRoads
         {
             base.OnToolUpdate();
             var camera = Camera.main;
-            if (camera == null)
+            if (camera != null)
+            {
+                mouseRay = camera.ScreenPointToRay(Input.mousePosition);
+                mouseRayLength = camera.farClipPlane;
+                mouseRayValid = !m_toolController.IsInsideUI && Cursor.visible;
+            }
+            else
             {
                 mouseRayValid = false;
-                return;
             }
-            mouseRay = camera.ScreenPointToRay(Input.mousePosition);
-            mouseRayLength = camera.farClipPlane;
-            mouseRayValid = !m_toolController.IsInsideUI && Cursor.visible;
+
+            // Live preview: the clicked points plus the mouse position.
+            var live = new List<Vector3>(points);
+            var liveNodes = new List<ushort>(pointNodes);
+            if (hoverValid && mouseRayValid)
+            {
+                live.Add(hoverPosition);
+                liveNodes.Add(hoverNode);
+            }
+            preview = Divide(live, liveNodes);
+            ToolActivator.SetInfo(InfoText());
         }
 
         // Simulation thread. Raycasting is done here, like the vanilla tools do.
@@ -71,20 +110,36 @@ namespace RealisticRoads
             if (!mouseRayValid)
             {
                 hoverValid = false;
+                hoverNode = 0;
+                return;
+            }
+
+            // Snap to an existing node under the mouse.
+            var nodeInput = new RaycastInput(mouseRay, mouseRayLength);
+            nodeInput.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
+            nodeInput.m_ignoreTerrain = true;
+            nodeInput.m_ignoreNodeFlags = NetNode.Flags.None;
+            RaycastOutput output;
+            if (RayCast(nodeInput, out output) && output.m_netNode != 0)
+            {
+                hoverPosition = NetManager.instance.m_nodes.m_buffer[output.m_netNode].m_position;
+                hoverNode = output.m_netNode;
+                hoverValid = true;
                 return;
             }
 
             var input = new RaycastInput(mouseRay, mouseRayLength);
             input.m_ignoreTerrain = false;
-            RaycastOutput output;
             if (RayCast(input, out output))
             {
                 hoverPosition = output.m_hitPos;
+                hoverNode = 0;
                 hoverValid = true;
             }
             else
             {
                 hoverValid = false;
+                hoverNode = 0;
             }
         }
 
@@ -93,11 +148,32 @@ namespace RealisticRoads
         {
             base.OnToolGUI(e);
 
-            if (e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape)
+            if (e.type == EventType.KeyDown)
             {
-                e.Use();
-                Mod.Log("Esc pressed, back to the vanilla tool");
-                ToolsModifierControl.SetTool<DefaultTool>();
+                if (e.keyCode == KeyCode.Escape)
+                {
+                    e.Use();
+                    if (points.Count > 0)
+                    {
+                        ClearPoints();
+                        Mod.Log("Curve cleared (Esc again leaves the tool)");
+                    }
+                    else
+                    {
+                        Mod.Log("Esc pressed, back to the vanilla tool");
+                        ToolsModifierControl.SetTool<DefaultTool>();
+                    }
+                }
+                else if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
+                {
+                    e.Use();
+                    BuildCurrent();
+                }
+                else if (e.keyCode == KeyCode.Z && e.control)
+                {
+                    e.Use();
+                    NetworkBuilder.UndoLast();
+                }
                 return;
             }
 
@@ -105,36 +181,133 @@ namespace RealisticRoads
 
             if (e.button == 0 && hoverValid)
             {
+                e.Use();
                 var p = hoverPosition;
                 if (points.Count > 0 && (p - points[points.Count - 1]).sqrMagnitude < MinPointSpacing * MinPointSpacing)
                 {
-                    // A double-click or a second click on the same spot: ignore it.
-                    e.Use();
+                    // Double-click (or a second click on the last point): build.
+                    BuildCurrent();
                     return;
                 }
                 points.Add(p);
-                Mod.Log("Point " + points.Count + " at " + Format(p));
-                e.Use();
+                pointNodes.Add(hoverNode);
+                Mod.Log("Point " + points.Count + " at " + Format(p) + (hoverNode != 0 ? " (on node #" + hoverNode + ")" : ""));
             }
             else if (e.button == 1 && points.Count > 0)
             {
-                points.RemoveAt(points.Count - 1);
-                Mod.Log("Removed last point, " + points.Count + " left");
                 e.Use();
+                points.RemoveAt(points.Count - 1);
+                pointNodes.RemoveAt(pointNodes.Count - 1);
+                Mod.Log("Removed last point, " + points.Count + " left");
             }
         }
 
-        // Main thread. Draws the points onto the terrain.
+        // Main thread. Draws the curve as it will be built, and the points.
         public override void RenderOverlay(RenderManager.CameraInfo cameraInfo)
         {
             base.RenderOverlay(cameraInfo);
             var overlay = Singleton<RenderManager>.instance.OverlayEffect;
+            var division = preview;
 
-            foreach (var p in points)
-                overlay.DrawCircle(cameraInfo, PointColor, p, PointSize, -1f, 1280f, false, true);
+            if (division != null && division.Points.Count >= 2)
+            {
+                float width = SelectedNetwork != null ? SelectedNetwork.m_halfWidth * 2f : 8f;
+                for (int i = 1; i < division.Points.Count; i++)
+                {
+                    var bezier = PieceBezier(division, i);
+                    float bend = CurveMath.BendAngle(division.Tangents[i - 1], division.Tangents[i]);
+                    var color = bend <= MaxBend ? GoodColor : BadColor;
+                    overlay.DrawBezier(cameraInfo, color, bezier, width, 100000f, -100000f, -1f, 1280f, false, true);
+                }
+            }
 
-            if (hoverValid)
-                overlay.DrawCircle(cameraInfo, HoverColor, hoverPosition, HoverSize, -1f, 1280f, false, true);
+            for (int i = 0; i < points.Count; i++)
+                overlay.DrawCircle(cameraInfo, pointNodes[i] != 0 ? SnapColor : PointColor, points[i], PointSize, -1f, 1280f, false, true);
+
+            if (hoverValid && mouseRayValid)
+                overlay.DrawCircle(cameraInfo, hoverNode != 0 ? SnapColor : HoverColor, hoverPosition, HoverSize, -1f, 1280f, false, true);
+        }
+
+        private void BuildCurrent()
+        {
+            if (SelectedNetwork == null)
+            {
+                Mod.Log("Pick a road in the vanilla Roads menu first, then open the curve tool again");
+                return;
+            }
+            if (points.Count < 2)
+            {
+                Mod.Log("Need at least 2 points to build");
+                return;
+            }
+
+            var division = Divide(points, pointNodes);
+            if (!division.Ok)
+            {
+                Mod.Log("Not built: a bend is too sharp (over " + MaxBend + " degrees per segment). Spread the points out.");
+                return;
+            }
+
+            ushort startNode = pointNodes[0];
+            ushort endNode = pointNodes[pointNodes.Count - 1];
+            Mod.Log("Building " + SelectedNetwork.name + ": " + division.Length.ToString("F0") + " m in " +
+                    (division.Points.Count - 1) + " segment(s)");
+            NetworkBuilder.BuildCurve(SelectedNetwork, division.Points, division.Tangents, startNode, endNode);
+            ClearPoints();
+        }
+
+        // Cuts the curve through 'controls' into buildable pieces. Where a
+        // point is snapped to a dead end, the curve continues that road smoothly.
+        private static Division Divide(List<Vector3> controls, List<ushort> nodes)
+        {
+            var division = new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>() };
+            if (controls.Count < 2) return division;
+
+            var polyline = CurveMath.SampleSpline(controls);
+            division.Length = CurveMath.Length(polyline);
+            if (division.Length < 1f) return division;
+
+            bool ok;
+            int count = CurveMath.ChoosePieceCount(polyline, Spacing, MinSpacing, MaxBend, out ok);
+            CurveMath.Divide(polyline, count, out division.Points, out division.Tangents);
+
+            Vector3 startDir = NetworkBuilder.DeadEndDirection(nodes[0]);
+            if (startDir != Vector3.zero) division.Tangents[0] = -startDir;
+            Vector3 endDir = NetworkBuilder.DeadEndDirection(nodes[nodes.Count - 1]);
+            if (endDir != Vector3.zero) division.Tangents[division.Tangents.Count - 1] = endDir;
+
+            division.Ok = CurveMath.MaxBend(division.Tangents) <= MaxBend;
+            return division;
+        }
+
+        // The Bezier the game will build for piece i (between points i-1 and i).
+        private static Bezier3 PieceBezier(Division division, int i)
+        {
+            var bezier = new Bezier3();
+            bezier.a = division.Points[i - 1];
+            bezier.d = division.Points[i];
+            NetSegment.CalculateMiddlePoints(bezier.a, division.Tangents[i - 1], bezier.d, -division.Tangents[i],
+                false, false, out bezier.b, out bezier.c);
+            return bezier;
+        }
+
+        private string InfoText()
+        {
+            string road = SelectedNetwork != null ? SelectedNetwork.name : "no road picked (choose one in the Roads menu)";
+            var division = preview;
+            if (division == null || division.Points.Count < 2)
+                return "Curve tool: " + road + "\nClick to place points";
+            return "Curve tool: " + road +
+                   "\n" + division.Length.ToString("F0") + " m, " + (division.Points.Count - 1) + " segment(s)" +
+                   (division.Ok ? "" : "  -  TOO SHARP") +
+                   "\nEnter / double-click: build   Ctrl+Z: undo   Esc: clear";
+        }
+
+        private void ClearPoints()
+        {
+            points.Clear();
+            pointNodes.Clear();
+            preview = null;
         }
 
         private static string Format(Vector3 v)

@@ -14,6 +14,7 @@ namespace RealisticRoads
         private static SplitTool splitTool;
         private static UIButton curveButton;
         private static UIButton splitButton;
+        private static UILabel infoLabel;
 
         public static void Create(LoadMode mode)
         {
@@ -36,6 +37,9 @@ namespace RealisticRoads
                     "Realistic Roads curve tool (Ctrl+Shift+C)", 120f, ToggleCurveTool);
                 splitButton = CreateButton("RealisticRoadsSplitButton", "SPL",
                     "Realistic Roads smooth split tool (Ctrl+Shift+J)\nClick a junction where a road splits in two", 172f, ToggleSplitTool);
+
+                infoLabel = CreateInfoLabel(224f);
+                NetworkBuilder.ClearUndo();
 
                 Mod.Log("Tools ready: RR / Ctrl+Shift+C = curve tool, SPL / Ctrl+Shift+J = smooth split tool");
                 SmoothSplits.RefreshAll();
@@ -60,6 +64,7 @@ namespace RealisticRoads
                 if (splitTool != null) UnityEngine.Object.Destroy(splitTool);
                 if (curveButton != null) UnityEngine.Object.Destroy(curveButton.gameObject);
                 if (splitButton != null) UnityEngine.Object.Destroy(splitButton.gameObject);
+                if (infoLabel != null) UnityEngine.Object.Destroy(infoLabel.gameObject);
             }
             catch (Exception e)
             {
@@ -69,6 +74,7 @@ namespace RealisticRoads
             splitTool = null;
             curveButton = null;
             splitButton = null;
+            infoLabel = null;
         }
 
         public static void ToggleCurveTool()
@@ -113,6 +119,32 @@ namespace RealisticRoads
             {
                 Mod.LogError("Switching the smooth split tool failed", e);
             }
+        }
+
+        // Main thread. Shows text under the buttons; null hides it.
+        public static void SetInfo(string text)
+        {
+            if (infoLabel == null) return;
+            if (string.IsNullOrEmpty(text))
+            {
+                infoLabel.isVisible = false;
+                return;
+            }
+            if (infoLabel.text != text) infoLabel.text = text;
+            infoLabel.isVisible = true;
+        }
+
+        private static UILabel CreateInfoLabel(float y)
+        {
+            var label = (UILabel)UIView.GetAView().AddUIComponent(typeof(UILabel));
+            label.name = "RealisticRoadsInfo";
+            label.backgroundSprite = "GenericPanel";
+            label.padding = new RectOffset(8, 8, 6, 6);
+            label.textScale = 0.8f;
+            label.autoSize = true;
+            label.relativePosition = new Vector3(10f, y);
+            label.isVisible = false;
+            return label;
         }
 
         private static UIButton CreateButton(string name, string text, string tooltip, float y, Action onClick)
