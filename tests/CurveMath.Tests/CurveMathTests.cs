@@ -99,4 +99,40 @@ public class CurveMathTests
         CurveMath.Divide(line, 2, out var points, out _);
         Assert.Equal(20f, points[1].y, 1);
     }
+
+    [Fact]
+    public void ShapeEnds_LeavesAndArrivesInTheGivenDirections()
+    {
+        // Points go north-east, but the road must leave heading east (continuing
+        // a road) and arrive heading north (into another road).
+        var control = new List<Vector3> { V(0, 0), V(150, 60), V(200, 200) };
+        var line = CurveMath.SampleShaped(control, V(1, 0), V(0, 1));
+        int count = CurveMath.ChoosePieceCount(line, 40f, 16f, 30f, out bool ok);
+        CurveMath.Divide(line, count, out var points, out var tangents);
+
+        Assert.True(ok, "max bend " + CurveMath.MaxBend(tangents));
+        Assert.Equal(V(0, 0), points.First());
+        Assert.Equal(V(200, 200), points.Last());
+        Assert.True(CurveMath.BendAngle(tangents.First(), V(1, 0)) < 5f, "start " + tangents.First());
+        Assert.True(CurveMath.BendAngle(tangents.Last(), V(0, 1)) < 5f, "end " + tangents.Last());
+    }
+
+    [Fact]
+    public void ShapeEnds_WithNoDirections_ChangesNothing()
+    {
+        var control = new List<Vector3> { V(0, 0), V(100, 50) };
+        Assert.Equal(control, CurveMath.ShapeEnds(control, Vector3.zero, Vector3.zero));
+    }
+
+    [Fact]
+    public void ShapeEnds_TwoPointsBothDirections_StaysInOrder()
+    {
+        // A short straight continuation: guides must not cross each other.
+        var shaped = CurveMath.ShapeEnds(new List<Vector3> { V(0, 0), V(100, 0) }, V(1, 0), V(1, 0));
+        Assert.Equal(4, shaped.Count);
+        for (int i = 1; i < shaped.Count; i++) Assert.True(shaped[i].x > shaped[i - 1].x);
+        var line = CurveMath.SampleSpline(shaped);
+        Assert.InRange(CurveMath.Length(line), 99.5f, 100.5f);
+    }
 }
+

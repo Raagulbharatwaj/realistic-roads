@@ -49,13 +49,16 @@ Tip: launch with `-noWorkshop` in Steam launch options to test with only local m
    The panel under the buttons shows the road, length and segment count.
 2. Click points on the ground. The curve follows the mouse as a road-width band through all of them:
    **green** = can be built, **red** = a bend is too tight (spread the points out).
-3. Clicking on an existing road end or junction snaps to it (yellow circle) so the new road connects there.
-   On a dead end the curve continues that road smoothly.
-4. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.
-5. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
+3. Clicking on (or near the end of) an existing road snaps to it (yellow circle) so the new road connects there,
+   at the start or the end of the curve. Where it can, the curve continues that road smoothly ("continues the road"
+   in the panel); otherwise it meets it at an angle like a normal junction.
+4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
+   bridge, 10 m above the water, with elevated ramps (pillars) on land at a gentle 6 % slope.
+5. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.
+6. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
 
-Notes for this version: it builds on the ground only, follows the terrain, does not charge money yet, and
-does not bulldoze trees/buildings in the way. Long curves are cut into ~40 m segments (shorter in tight bends).
+Notes for this version: it does not charge money yet and does not bulldoze trees/buildings in the way.
+Bridges are new and untested: check pillars and the ramps. Long curves are cut into ~40 m segments (shorter in tight bends).
 
 ## 6. Test smooth splits (milestone S1)
 1. Load a city with a road that splits in two (e.g. a one-way road splitting into two one-way roads).

@@ -150,10 +150,12 @@ namespace RealisticRoads
                 return false;
             }
 
-            // Looking from the trunk towards the branches, which one is on the left?
+            // Looking from the trunk towards the branches, which one is on the
+            // left? Judged by where each branch goes (its far end), which still
+            // works when a branch leaves parallel to the trunk.
             var forward = -dirs[t];
-            float sideA = Vector3.Dot(dirs[a], Left(forward));
-            float sideB = Vector3.Dot(dirs[b], Left(forward));
+            float sideA = Vector3.Dot(FarDirection(ref segments[ids[a]], node), Left(forward));
+            float sideB = Vector3.Dot(FarDirection(ref segments[ids[b]], node), Left(forward));
             if (sideA < sideB)
             {
                 int tmp = a; a = b; b = tmp;
@@ -286,6 +288,14 @@ namespace RealisticRoads
         private static Vector3 DirectionAway(ref NetSegment segment, ushort node)
         {
             return segment.m_startNode == node ? segment.m_startDirection : segment.m_endDirection;
+        }
+
+        // Direction from this node to the segment's other end.
+        private static Vector3 FarDirection(ref NetSegment segment, ushort node)
+        {
+            var nodes = NetManager.instance.m_nodes.m_buffer;
+            ushort other = segment.m_startNode == node ? segment.m_endNode : segment.m_startNode;
+            return FlatNormal(nodes[other].m_position - nodes[node].m_position);
         }
 
         // The left-hand direction when facing 'd' (matches the game's leftSide).
