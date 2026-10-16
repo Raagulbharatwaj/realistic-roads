@@ -62,6 +62,18 @@ Expected log lines:
 
 Nothing is built yet; that comes in milestone 4.
 
-## 6. What's next
+## 6. Test smooth splits (milestone S1)
+1. Load a city with a road that splits in two (e.g. a one-way road splitting into two one-way roads).
+2. Click **SPL** (below RR) or press **Ctrl+Shift+J**.
+3. Hover over junctions. The circle shows: **green** = smoothed, **yellow** = a split that can be smoothed, **red** = not a split.
+   On a yellow/green junction, small blue dots show where the road edges will start.
+4. Click a yellow junction: it turns green and the junction should become a taper with a pointed gore.
+   The log shows `Smooth split ON at node #...` with the branch angle and how far from the node the branches start.
+5. Click it again to go back to the vanilla junction. Clicking a red one logs why it is not a split.
+6. Watch a few cars drive through, then save, quit, reload the city and check the shape is still there.
+
+Screenshots of before/after help a lot: the shape is computed, and the numbers may need tuning.
+
+## 7. What's next
 See the milestones in [docs/PROJECT_BRIEF.md](../docs/PROJECT_BRIEF.md). Next up is milestone 3:
 a live spline/arc preview between the points, showing length and turning red where a bend is too sharp.

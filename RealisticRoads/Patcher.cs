@@ -95,4 +95,48 @@ namespace RealisticRoads
             }
         }
     }
+
+    // Smooth splits: replaces the corners of the three road ends at a node the
+    // player marked (see SmoothSplits). Every other node is left untouched.
+    // Runs last so it wins over other corner patches (e.g. Node Controller) on
+    // marked nodes only. Called from several threads; must stay thread-safe.
+    [HarmonyPatch(typeof(NetSegment), nameof(NetSegment.CalculateCorner),
+        new[] { typeof(ushort), typeof(bool), typeof(bool), typeof(bool), typeof(UnityEngine.Vector3), typeof(UnityEngine.Vector3), typeof(bool) },
+        new[] { ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Out, ArgumentType.Out, ArgumentType.Out })]
+    [HarmonyPriority(Priority.Last)]
+    public static class CalculateCornerPatch
+    {
+        private static bool failed;
+
+        public static void Postfix(ushort segmentID, bool start, bool leftSide,
+            ref UnityEngine.Vector3 cornerPos, ref UnityEngine.Vector3 cornerDirection)
+        {
+            if (failed) return;
+            try
+            {
+                var segments = NetManager.instance.m_segments.m_buffer;
+                ushort node = start ? segments[segmentID].m_startNode : segments[segmentID].m_endNode;
+                if (!SmoothSplits.IsEnabled(node)) return;
+
+                UnityEngine.Vector3 position, direction;
+                if (!SmoothSplits.TryGetCorner(segmentID, node, leftSide, out position, out direction)) return;
+
+                // Keep the game's height handling: same height above the road
+                // centre as the vanilla corner had above the node.
+                float nodeY = NetManager.instance.m_nodes.m_buffer[node].m_position.y;
+                position.y += cornerPos.y - nodeY;
+                direction.y = cornerDirection.y;
+
+                cornerPos = position;
+                cornerDirection = direction;
+            }
+            catch (Exception e)
+            {
+                // Corners are asked for constantly; log once and fall back to vanilla.
+                failed = true;
+                Mod.LogError("Smooth split corner failed, smooth splits disabled until restart", e);
+            }
+        }
+    }
 }
+

@@ -11,6 +11,7 @@ namespace RealisticRoads
     {
         private const float PointSize = 6f;
         private const float HoverSize = 4f;
+        private const float MinPointSpacing = 2f;
 
         private static readonly Color PointColor = new Color(0.2f, 0.8f, 1f, 0.9f);
         private static readonly Color HoverColor = new Color(1f, 1f, 1f, 0.6f);
@@ -105,6 +106,12 @@ namespace RealisticRoads
             if (e.button == 0 && hoverValid)
             {
                 var p = hoverPosition;
+                if (points.Count > 0 && (p - points[points.Count - 1]).sqrMagnitude < MinPointSpacing * MinPointSpacing)
+                {
+                    // A double-click or a second click on the same spot: ignore it.
+                    e.Use();
+                    return;
+                }
                 points.Add(p);
                 Mod.Log("Point " + points.Count + " at " + Format(p));
                 e.Use();
