@@ -12,11 +12,10 @@ namespace RealisticRoads
     // the vanilla meshes to the new width (milestone R3.2: markings still come
     // from the vanilla road; generated meshes are R3.3).
     //
-    // When: a saved city remembers its roads by prefab name, so our road types
-    // must exist before the game matches the city's roads to prefabs. They are
-    // added to the vanilla road collection when it starts up (NetCollection.Awake
-    // patch below), so the game initialises them along with its own roads. Roads
-    // made in the panel during a game are registered straight away.
+    // When: after a city has loaded (CreateMissing), and straight away for
+    // roads made in the panel. Nothing runs while the city loads: hooking the
+    // game's road collections then stopped cities from loading. So a saved
+    // city's roads of these types are missing on load for now.
     // Main thread only.
     public static class RoadTypes
     {
@@ -80,62 +79,11 @@ namespace RealisticRoads
             }
         }
 
-        // NetCollection.Awake prefix: if this collection holds the base road of a
-        // library road, add that road's types to it.
-        internal static void OnCollectionAwake(MonoBehaviour collection)
-        {
-            var field = AccessTools.Field(collection.GetType(), "m_prefabs");
-            var prefabs = field != null ? field.GetValue(collection) as NetInfo[] : null;
-            if (prefabs == null || prefabs.Length == 0) return;
-
-            var added = new List<NetInfo>();
-            foreach (var config in RoadLibrary.All())
-            {
-                if (Find(config) != null) continue;
-                var cs = CrossSection.Compose(config);
-                if (!cs.Ok)
-                {
-                    ReportOnce(config, "can't be built: " + string.Join("; ", cs.Errors.ToArray()));
-                    continue;
-                }
-                NetInfo baseInfo = null;
-                foreach (var name in cs.BaseCandidates(false))
-                {
-                    foreach (var prefab in prefabs)
-                        if (prefab != null && prefab.name == name) { baseInfo = prefab; break; }
-                    if (baseInfo != null) break;
-                }
-                if (baseInfo == null) continue;   // another collection has it
-                try
-                {
-                    added.AddRange(Build(config, cs, baseInfo, Holder(collection.transform)));
-                }
-                catch (Exception e)
-                {
-                    Mod.LogError("Road builder: making '" + config.Name + "' failed", e);
-                }
-            }
-            if (added.Count == 0) return;
-
-            var all = new List<NetInfo>(prefabs);
-            all.AddRange(added);
-            field.SetValue(collection, all.ToArray());
-            // Keep the replaced-names list lined up with the prefabs, if it is.
-            var replacedField = AccessTools.Field(collection.GetType(), "m_replacedNames");
-            var replaced = replacedField != null ? replacedField.GetValue(collection) as string[] : null;
-            if (replaced != null && replaced.Length == prefabs.Length)
-            {
-                var longer = new string[all.Count];
-                Array.Copy(replaced, longer, replaced.Length);
-                replacedField.SetValue(collection, longer);
-            }
-            Mod.Log("Road builder: added " + added.Count + " road type(s) to the '" + collection.name + "' collection");
-        }
-
-        // After a city loads: library roads that no collection picked up (their
-        // base road is missing, or they came with this city) are registered now.
-        // Too late for this city's roads of that type, which the game already
-        // reported missing; reloading the city fixes that.
+        // After a city loads: every library road is registered (main thread).
+        // Registering while the city loads (a NetCollection.Awake patch) kept
+        // the city from finishing loading next to Loading Screen Mod, so this
+        // runs after loading: a saved city's roads of these types are missing
+        // until that is solved (see docs/R3_ROAD_BUILDER.md).
         public static void CreateMissing()
         {
             foreach (var config in RoadLibrary.All())
@@ -613,29 +561,6 @@ namespace RealisticRoads
             catch (Exception e)
             {
                 if (reported.Add("locale")) Mod.LogError("Road builder: naming roads in the menu failed (they show their internal name)", e);
-            }
-        }
-    }
-
-    // Adds library roads to the vanilla road collection as the game starts it.
-    [HarmonyPatch]
-    public static class NetCollectionAwakePatch
-    {
-        public static MethodBase TargetMethod()
-        {
-            var type = AccessTools.TypeByName("NetCollection");
-            return type != null ? AccessTools.Method(type, "Awake") : null;
-        }
-
-        public static void Prefix(MonoBehaviour __instance)
-        {
-            try
-            {
-                RoadTypes.OnCollectionAwake(__instance);
-            }
-            catch (Exception e)
-            {
-                Mod.LogError("Road builder: adding road types to a collection failed", e);
             }
         }
     }

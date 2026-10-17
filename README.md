@@ -157,7 +157,8 @@ markings won't match your lanes yet (generated road surfaces are the next step, 
 Please check and send the log (search for `Road builder` and `Mesh `):
 - the panel works and Create says the road is selected; build it with RR (with a bridge and a tunnel);
 - cars, buses and bikes use the lanes you made (TM:PE's lane view helps);
-- save, quit to the menu, load the city again: the roads are still there and the road is in the roads menu;
+- for now, don't save cities with road builder roads you want to keep: they are missing when the city loads again (the
+  load-time hook that kept them stopped cities from loading; it is being reworked);
 - if the log says `prefab indices changed`, don't save that city and send the log.
 Saved cities need the mod for these roads: without it the game reports them missing.
 

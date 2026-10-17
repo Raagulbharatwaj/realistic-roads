@@ -289,3 +289,11 @@ Each milestone is one PR, and each ends with something to check in game.
 - Tram wires, monorail and train tracks. These are road pieces only for now. Tram lanes come later, if the copied
   tram lane props work.
 - Custom textures beyond generated lane lines.
+
+### Update after the first test in game
+
+Registering road types in a `NetCollection.Awake` prefix stopped cities from finishing loading (empty cyan
+world, no `City loaded` in the log) next to Loading Screen Mod Revisited, which takes over prefab loading.
+The hook is removed: road builder roads are registered after a city loads and when created in the panel.
+Until a safe load-time hook is found (LSM-compatible, e.g. how Network Extensions 2 registers its roads),
+a saved city's road builder roads are missing when it loads again.
