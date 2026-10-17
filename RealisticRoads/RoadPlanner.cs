@@ -181,12 +181,22 @@ namespace RealisticRoads
                             Limit(distance, k, window, crossing.Point.y + CutDepth, true, minH, false);
                         break;
                     case CrossingType.Bridge:
-                        Limit(distance, k, window, crossing.Point.y + OverClearance + crossing.ExtraHeight, true, minH, false);
+                        // Up to the deck's ends either side (the node on the crossing
+                        // itself is dropped later, so the side nodes carry the height).
+                        Limit(distance, k, SpanHalf(crossing, info.m_halfWidth, false) + 1f,
+                            crossing.Point.y + OverClearance + crossing.ExtraHeight, true, minH, false);
                         break;
                     case CrossingType.Overpass:
                         // We stay at ground level on a bridge deck; the existing road goes down.
                         Fix(k, crossing.Point.y, minH, maxH, isFixed);
-                        Mark(distance, k, window, forceBridge, false);
+                        // The deck spans the lowered road and its cutting's banks.
+                        float deckHalf = SpanHalf(crossing, info.m_halfWidth, true) + 1f;
+                        Mark(distance, k, deckHalf, forceBridge, false);
+                        // The node on the crossing is dropped later; the deck between
+                        // the side nodes must not sag below the height the lowering
+                        // was planned for, or the headroom underneath shrinks.
+                        for (int i = 0; i < n; i++)
+                            if (i != k && Mathf.Abs(distance[i] - distance[k]) <= deckHalf) minH[i] = Mathf.Max(minH[i], crossing.Point.y);
                         string problem;
                         var lowering = PlanLowering(crossing, info.m_halfWidth, plan.Tangents[k], out problem);
                         if (lowering != null) plan.Lowerings[c] = lowering;
@@ -264,8 +274,8 @@ namespace RealisticRoads
                 plan.Points[i] = p;
 
                 float elevation = heights[i] - ground[i];
-                if (embanked[i]) plan.Kinds[i] = NodeKind.Ground;    // on an embankment / in a cutting, normal road
-                else if (forceBridge[i] && elevation > -1f) plan.Kinds[i] = NodeKind.Bridge;
+                if (forceBridge[i] && elevation > -1f) plan.Kinds[i] = NodeKind.Bridge;
+                else if (embanked[i]) plan.Kinds[i] = NodeKind.Ground;    // on an embankment / in a cutting, normal road
                 else if (elevation >= 1f) plan.Kinds[i] = water[i] && hasBridge ? NodeKind.Bridge : NodeKind.Elevated;
                 else if (elevation <= -1f)
                     plan.Kinds[i] = !cutting[i] && elevation <= -TunnelMinDepth ? NodeKind.Tunnel : NodeKind.Cut;
@@ -303,6 +313,46 @@ namespace RealisticRoads
         {
             var service = info != null && info.m_class != null ? info.m_class.m_service.ToString() : "";
             return service == "PublicTransport" ? RailGrade : RoadGrade;
+        }
+
+        // Half the length of our deck over a crossed road or rail, measured along
+        // our road: past its edge and ours with room for a pillar, and for an
+        // overpass past the banks of the cutting it was lowered into.
+        public const float PillarClearance = 4f;
+
+        public static float SpanHalf(Crossing crossing, float ourHalfWidth, bool overpass)
+        {
+            float across = crossing.ExistingHalfWidth + ourHalfWidth + PillarClearance + (overpass ? CutDepth * 1.5f : 0f);
+            return across / Mathf.Max(crossing.Skew, 0.35f);
+        }
+
+        // Removes node 'index' from a finished plan (CrossingIndex is the
+        // caller's to fix).
+        public static void RemoveNode(Plan plan, int index)
+        {
+            plan.Points.RemoveAt(index);
+            plan.Tangents.RemoveAt(index);
+            plan.Kinds = Without(plan.Kinds, index);
+            if (plan.Steep != null)
+            {
+                // Piece index+1 now starts at index-1: steep if either half was.
+                var steep = new bool[plan.Steep.Length - 1];
+                for (int i = 0, j = 0; i < plan.Steep.Length; i++)
+                {
+                    if (i == index) continue;
+                    steep[j] = plan.Steep[i] || (i == index + 1 && plan.Steep[index]);
+                    j++;
+                }
+                plan.Steep = steep;
+            }
+            if (plan.Middle != null) plan.Middle = Without(plan.Middle, index);
+        }
+
+        private static T[] Without<T>(T[] array, int index)
+        {
+            var result = new T[array.Length - 1];
+            for (int i = 0, j = 0; i < array.Length; i++) if (i != index) result[j++] = array[i];
+            return result;
         }
 
         public static NetInfo InfoFor(NetInfo info, NodeKind kind)
@@ -568,7 +618,7 @@ namespace RealisticRoads
 
         // Sine of the angle between the two roads at a crossing (1 = square),
         // not below 0.35 so a very shallow crossing doesn't blow up.
-        private static float Skew(Crossing crossing, Vector3 ourDirection)
+        public static float Skew(Crossing crossing, Vector3 ourDirection)
         {
             Vector3 a, b, c, d;
             CrossingFinder.SegmentBezier(crossing.Segment, out a, out b, out c, out d);

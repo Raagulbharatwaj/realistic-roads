@@ -235,9 +235,15 @@ namespace RealisticRoads
             go.name = name;
             var info = go.GetComponent<NetInfo>();
             // Instantiate points references inside the copied object at the copy;
-            // make sure the AI is the copy's own.
+            // make sure the AI is the copy's own. The AI's m_info isn't copied
+            // (the game sets it when it initializes the prefab), and the AI's
+            // cost and pillar code throws without it, so set it now.
             var ai = go.GetComponent<NetAI>();
-            if (ai != null) info.m_netAI = ai;
+            if (ai != null)
+            {
+                info.m_netAI = ai;
+                ai.m_info = info;
+            }
             return info;
         }
 
