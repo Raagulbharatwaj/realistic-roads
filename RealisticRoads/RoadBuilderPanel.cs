@@ -229,10 +229,25 @@ namespace RealisticRoads
                 var config = editing.Copy();
                 config.Name = nameField != null && !string.IsNullOrEmpty(nameField.text.Trim()) ? nameField.text.Trim() : "Custom road";
                 config.Id = RoadConfig.NewId();
+                config.CreatedTicks = DateTime.UtcNow.Ticks;
                 var cs = CrossSection.Compose(config);
                 if (!cs.Ok)
                 {
                     SetInfo("Can't create it yet:\n! " + string.Join("\n! ", cs.Errors.ToArray()));
+                    return;
+                }
+                // Pressing Create again on the same layout would only fill the library
+                // with copies: select the one that is there instead.
+                foreach (var existing in RoadLibrary.All())
+                {
+                    if (!existing.SameLayout(config)) continue;
+                    var same = RoadTypes.Find(existing) ?? RoadTypes.CreateNow(existing);
+                    var tool = ToolsModifierControl.GetTool<NetTool>();
+                    if (same != null && tool != null) tool.m_prefab = same;
+                    loadedId = existing.Id;
+                    SetInfo("'" + existing.Name + "' in your library already has exactly these lanes" +
+                            (same != null ? "; it is selected, press RR to draw it." : ".") +
+                            " Change something to create a new road.");
                     return;
                 }
                 RoadLibrary.Save(config);
@@ -344,7 +359,9 @@ namespace RealisticRoads
             libraryButtons.Clear();
             float x = 76f;
             int shown = 0;
-            foreach (var config in RoadLibrary.All())
+            var roads = RoadLibrary.All();
+            roads.Sort((a, b) => b.CreatedTicks.CompareTo(a.CreatedTicks));   // newest first
+            foreach (var config in roads)
             {
                 if (shown++ >= MaxLibraryButtons) break;
                 var c = config;

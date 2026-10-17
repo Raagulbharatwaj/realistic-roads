@@ -248,7 +248,8 @@ namespace RealisticRoads
         private static Mesh flatMesh, sidewalkMesh, flatMeshFlipped, sidewalkMeshFlipped;
         private static Material asphalt, pavement;
         private static Texture2D pavementA, pavementB;
-        private static bool failed;
+        private static bool failed;                    // resources can't be made (no road shader): off for the session
+        private static readonly HashSet<ushort> failedNodes = new HashSet<ushort>();   // logged once each, drawn vanilla
 
         // Asphalt tint (0 black .. 1 like the sidewalk). Adjustable in the JN
         // tool (Page Up / Page Down) until the default matches the roads.
@@ -286,17 +287,20 @@ namespace RealisticRoads
         public static void Forget(ushort node)
         {
             lock (shapes) shapes.Remove(node);
+            failedNodes.Remove(node);   // its roads changed: try again
         }
 
         public static void ForgetAll()
         {
             lock (shapes) shapes.Clear();
+            failedNodes.Clear();
         }
 
-        // Postfix of NetNode.RenderInstance(cameraInfo, nodeID, layerMask).
-        public static void Render(ushort node)
+        // Postfix of NetNode.RenderInstance(cameraInfo, nodeID, layerMask): only
+        // when that pass draws the road layer, like the vanilla node meshes.
+        public static void Render(ushort node, int layerMask)
         {
-            if (failed || !Junctions.IsEnabled(node)) return;
+            if (failed || (layerMask & (1 << RoadLayer)) == 0 || !Junctions.IsEnabled(node) || failedNodes.Contains(node)) return;
             try
             {
                 if (!EnsureResources()) return;
@@ -322,8 +326,10 @@ namespace RealisticRoads
             }
             catch (Exception e)
             {
-                failed = true;
-                Mod.LogError("Drawing CS2-style junctions failed; they show as vanilla junctions until restart", e);
+                // Only this junction: the others keep their look.
+                failedNodes.Add(node);
+                if (failedNodes.Count <= 32)
+                    Mod.LogError("Drawing the CS2-style junction at node #" + node + " failed; it shows nothing special until its roads change", e);
             }
         }
 
@@ -393,14 +399,18 @@ namespace RealisticRoads
             // Round the junction anticlockwise; each road's left corner faces the next road.
             ends.Sort((a, b) => a.Angle.CompareTo(b.Angle));
 
-            Vector3 centre = Vector3.zero;
-            float surface = 0f;
+            // Fan the asphalt from the node itself: it is where the roads' centre
+            // lines meet, so the curb curves (half a road width out) stay around
+            // it. The average of the corners can sit outside a skewed junction
+            // with a wide road, folding the wedges over.
+            Vector3 centre = n.m_position;
+            float surface = 0f, height = 0f;
             foreach (var end in ends)
             {
-                centre += end.InnerLeft + end.InnerRight;
+                height += end.InnerLeft.y + end.InnerRight.y;
                 surface += end.SurfaceLevel;
             }
-            centre /= ends.Count * 2;
+            centre.y = height / (ends.Count * 2);
             surface /= ends.Count;
 
             var shape = new Shape();

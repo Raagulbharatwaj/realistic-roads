@@ -143,6 +143,13 @@ namespace RealisticRoads
                 {
                     case CrossingType.Junction:
                         if (crossing.ExistingAtGround) Fix(k, crossing.Point.y, minH, maxH, isFixed);
+                        // Passing under an elevated road or over a sunken one at ground
+                        // level: keep the headroom, so no embankment lifts us into the
+                        // deck above (or a cutting digs us into the road below).
+                        else if (crossing.ExistingElevation > 0f)
+                            Limit(distance, k, window, crossing.Point.y - UnderClearance, false, maxH, false);
+                        else
+                            Limit(distance, k, window, crossing.Point.y + CutDepth, true, minH, false);
                         break;
                     case CrossingType.Bridge:
                         Limit(distance, k, window, crossing.Point.y + OverClearance + crossing.ExtraHeight, true, minH, false);
@@ -539,15 +546,20 @@ namespace RealisticRoads
         // other road's edge is even while ramping away from k. 'neighbours'
         // also holds the nodes either side of k (tunnels must reach past the
         // road above); otherwise they are free to ramp.
+        // Keeps the road above (isMin) or below 'height' over the footprint
+        // 'window' either side of node k. A node d metres from k needs a margin
+        // only for the footprint left beyond it: the road may slope away from it
+        // at MaxGrade over the remaining (window - d). Nodes outside the window
+        // (the neighbours of a tunnel) need none.
         private static void Limit(float[] distance, int k, float window, float height, bool isMin, float[] limits, bool neighbours)
         {
-            float margin = MaxGrade * window;
-            float limit = isMin ? height + margin : height - margin;
             for (int i = 0; i < distance.Length; i++)
             {
-                bool near = i == k || Mathf.Abs(distance[i] - distance[k]) <= window ||
-                            (neighbours && Mathf.Abs(i - k) == 1);
+                float d = Mathf.Abs(distance[i] - distance[k]);
+                bool near = i == k || d <= window || (neighbours && Mathf.Abs(i - k) == 1);
                 if (!near) continue;
+                float margin = MaxGrade * Mathf.Max(0f, window - d);
+                float limit = isMin ? height + margin : height - margin;
                 limits[i] = isMin ? Mathf.Max(limits[i], limit) : Mathf.Min(limits[i], limit);
             }
         }

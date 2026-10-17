@@ -67,6 +67,7 @@ namespace RealisticRoads
                 if (File.Exists(PathOf(config))) File.Delete(PathOf(config));
                 if (cache != null) cache.RemoveAll(c => c.Id == config.Id);
             }
+            RoadTypes.Forget(config);
             Mod.Log("Road builder: deleted '" + config.Name + "' from the library");
         }
 
@@ -149,7 +150,7 @@ namespace RealisticRoads
         {
             try
             {
-                serializableDataManager.SaveData(RoadLibrary.DataId, RoadLibrary.Serialize(RoadTypes.CreatedConfigs()));
+                serializableDataManager.SaveData(RoadLibrary.DataId, RoadLibrary.Serialize(RoadTypes.UsedConfigs()));
             }
             catch (Exception e)
             {

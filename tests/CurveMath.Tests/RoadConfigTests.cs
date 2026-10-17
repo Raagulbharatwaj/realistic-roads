@@ -136,4 +136,47 @@ public class RoadConfigTests
         // Wider sidewalk: scaled, not shifted.
         Assert.Equal(10f, CrossSection.StretchX(6.5f, 5f, 3f, 8f, 4f), 3);
     }
+
+    private static RoadPiece Median(MedianStyle style, float width = 2f) => new RoadPiece(PieceKind.Median, F, width) { Median = style };
+
+    [Fact]
+    public void TwoLaneRoadWithAGrassMedian_StartsFromTheFourLaneRoad()
+    {
+        var cs = CrossSection.Compose(Road(Walk(), Car(B), Median(MedianStyle.Grass), Car(F), Walk()));
+        Assert.True(cs.Ok, string.Join("; ", cs.Errors));
+        Assert.Equal("Medium Road Decoration Grass", cs.BaseName);
+        // A painted median needs no mesh: the two-lane road is fine.
+        Assert.Equal("Basic Road", CrossSection.Compose(Road(Walk(), Car(B), Median(MedianStyle.Painted), Car(F), Walk())).BaseName);
+    }
+
+    [Fact]
+    public void OffCentreGrassMedian_IsAnError()
+    {
+        var cs = CrossSection.Compose(Road(Walk(), Car(B), Median(MedianStyle.Grass), Car(F), Car(F), Car(F), Walk()));
+        Assert.Contains(cs.Errors, e => e.Contains("middle"));
+        // Painted: just a gap between the lanes, anywhere.
+        Assert.True(CrossSection.Compose(Road(Walk(), Car(B), Median(MedianStyle.Painted), Car(F), Car(F), Car(F), Walk())).Ok);
+    }
+
+    [Fact]
+    public void TwoMedians_AreAnError()
+    {
+        var cs = CrossSection.Compose(Road(Walk(), Car(B), Median(MedianStyle.Painted), Median(MedianStyle.Painted), Car(F), Walk()));
+        Assert.Contains(cs.Errors, e => e.Contains("One median"));
+    }
+
+    [Fact]
+    public void SameLayout_IgnoresNamesButNotWidths()
+    {
+        var a = RoadConfig.Presets()[1];
+        var b = a.Copy();
+        b.Name = "Other";
+        b.Id = "x";
+        Assert.True(a.SameLayout(b));
+        b.Pieces[1].Width += 0.5f;
+        Assert.False(a.SameLayout(b));
+        var c = a.Copy();
+        c.SpeedKmh += 10f;
+        Assert.False(a.SameLayout(c));
+    }
 }

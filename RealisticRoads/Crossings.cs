@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -28,6 +29,14 @@ namespace RealisticRoads
         public float ExtraHeight;       // player's +/- on a Bridge crossing
         public float Skew = 1f;         // sine of the crossing angle (1 = square), set by RoadPlanner
         public bool CanConnect;         // the two networks may join (road x road, rail x rail, road x rail)
+        public int Occurrence;          // 0 for the first time our curve crosses this segment, 1 the second, ...
+        public ushort SnapNode;         // an end node of the segment within NodeSnap of the crossing (else 0)
+
+        // A junction this close to an existing node joins at that node instead of cutting the road.
+        public const float NodeSnap = 6f;
+
+        // The crossing's identity while the curve is edited (for the player's choices).
+        public int Key => (Segment << 4) | Mathf.Min(Occurrence, 15);
 
         public bool ExistingAtGround => Mathf.Abs(ExistingElevation) < 2f;
 
@@ -150,6 +159,9 @@ namespace RealisticRoads
                             crossing.SameType = existing.m_class.m_service == info.m_class.m_service &&
                                                 existing.m_class.m_subService == info.m_class.m_subService;
                             crossing.CanConnect = CanJoin(info, existing);
+                            float length = segments[current].m_averageLength;
+                            if (crossing.ExistingT * length < Crossing.NodeSnap) crossing.SnapNode = segments[current].m_startNode;
+                            else if ((1f - crossing.ExistingT) * length < Crossing.NodeSnap) crossing.SnapNode = segments[current].m_endNode;
                             crossing.ExistingElevation = crossing.Point.y - terrain.SampleRawHeightSmooth(crossing.Point);
                             crossing.ExistingHalfWidth = existing.m_halfWidth;
                             crossing.ExistingName = existing.name;
@@ -221,6 +233,15 @@ namespace RealisticRoads
         // May a junction join these two networks? Roads with roads (highways
         // included), rail with rail, and a road over a railway as a level
         // crossing. Paths, canals, power lines and the like never join a road.
+        // Looked up by name once (no boxing or string per call).
+        private static readonly ItemClass.SubService TrainSubService = ParseSubService("PublicTransportTrain");
+
+        private static ItemClass.SubService ParseSubService(string name)
+        {
+            try { return (ItemClass.SubService)Enum.Parse(typeof(ItemClass.SubService), name); }
+            catch { return (ItemClass.SubService)(-1); }
+        }
+
         public static bool CanJoin(NetInfo ours, NetInfo theirs)
         {
             var a = ours.m_class;
@@ -228,8 +249,8 @@ namespace RealisticRoads
             if (a == null || b == null) return false;
             if (a.m_service == b.m_service && a.m_subService == b.m_subService) return true;
             bool aRoad = a.m_service == ItemClass.Service.Road, bRoad = b.m_service == ItemClass.Service.Road;
-            bool aTrain = a.m_subService.ToString() == "PublicTransportTrain";
-            bool bTrain = b.m_subService.ToString() == "PublicTransportTrain";
+            bool aTrain = a.m_subService == TrainSubService;
+            bool bTrain = b.m_subService == TrainSubService;
             return (aRoad && bRoad) || (aRoad && bTrain) || (aTrain && bRoad);
         }
 

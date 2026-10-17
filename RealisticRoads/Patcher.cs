@@ -202,9 +202,12 @@ namespace RealisticRoads
         // After the node is drawn (the public overload, once per node and
         // frame; the private one runs once per junction piece): our own
         // junction surface.
-        public static void Postfix(ushort nodeID, MethodBase __originalMethod)
+        public static void Postfix(ushort nodeID, MethodBase __originalMethod, object[] __args)
         {
-            if (__originalMethod.IsPublic) JunctionRenderer.Render(nodeID);
+            // Public overload: (cameraInfo, nodeID, layerMask). If a game update
+            // changes that, draw in every pass rather than never.
+            if (!__originalMethod.IsPublic) return;
+            JunctionRenderer.Render(nodeID, __args.Length > 2 && __args[2] is int ? (int)__args[2] : -1);
         }
     }
 

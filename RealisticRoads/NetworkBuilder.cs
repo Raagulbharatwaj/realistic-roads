@@ -12,7 +12,6 @@ namespace RealisticRoads
         private const int MaxUndo = 20;
         private const float ContinueAngle = 55f;     // continue an existing road if within this angle
         private const float UnderpassBridgeExtra = 6f; // existing bridge reaches this far past our road's edges
-        private const float NodeSnap = 6f;           // a junction this close to an existing node uses that node
 
         // An existing segment we cut into pieces, so undo can put it back.
         private class Split
@@ -147,7 +146,7 @@ namespace RealisticRoads
                             float fromStart = plan.Crossings[g].ExistingT * existingSegment.m_averageLength;
                             float fromEnd = (1f - plan.Crossings[g].ExistingT) * existingSegment.m_averageLength;
                             int k = plan.CrossingIndex[g];
-                            if (fromStart < NodeSnap || fromEnd < NodeSnap)
+                            if (fromStart < Crossing.NodeSnap || fromEnd < Crossing.NodeSnap)
                             {
                                 nodeIds[k] = fromStart < fromEnd ? existingSegment.m_startNode : existingSegment.m_endNode;
                                 points[k] = net.m_nodes.m_buffer[nodeIds[k]].m_position;
