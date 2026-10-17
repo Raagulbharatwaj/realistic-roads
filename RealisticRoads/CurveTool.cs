@@ -53,8 +53,10 @@ namespace RealisticRoads
             { CrossingType.Junction, CrossingType.Bridge, CrossingType.Overpass, CrossingType.Underpass, CrossingType.Tunnel };
 
         // The player's choices, kept while the curve is being edited.
-        private readonly Dictionary<ushort, CrossingType> crossingTypes = new Dictionary<ushort, CrossingType>();
-        private readonly Dictionary<ushort, float> crossingExtra = new Dictionary<ushort, float>();
+        // Keyed by Crossing.Key: the segment plus which time along our curve it is
+        // crossed, so two crossings of one road each keep their own choice.
+        private readonly Dictionary<int, CrossingType> crossingTypes = new Dictionary<int, CrossingType>();
+        private readonly Dictionary<int, float> crossingExtra = new Dictionary<int, float>();
         private readonly Dictionary<int, float> waterExtra = new Dictionary<int, float>();
 
         // On-screen buttons, reused every frame: button i runs buttonActions[i].
@@ -486,15 +488,21 @@ namespace RealisticRoads
                 cuts.Add(new KeyValuePair<float, Crossing>(run.From, null));
                 cuts.Add(new KeyValuePair<float, Crossing>(run.To, null));
             }
+            var timesCrossed = new Dictionary<ushort, int>();
+            var snapped = new List<int>();
             foreach (var crossing in CrossingFinder.Find(polyline, SelectedNetwork, startNode, endNode))
             {
                 if (crossing.Distance < MinSpacing * 0.5f || crossing.Distance > division.Length - MinSpacing * 0.5f) continue;
+                int times;
+                timesCrossed.TryGetValue(crossing.Segment, out times);
+                timesCrossed[crossing.Segment] = times + 1;
+                crossing.Occurrence = times;
                 CrossingType type;
                 // Default: a junction where the two may join, else a bridge over the other.
                 var fallback = crossing.Allows(CrossingType.Junction) ? CrossingType.Junction : CrossingType.Bridge;
-                crossing.Type = crossingTypes.TryGetValue(crossing.Segment, out type) && crossing.Allows(type) ? type : fallback;
+                crossing.Type = crossingTypes.TryGetValue(crossing.Key, out type) && crossing.Allows(type) ? type : fallback;
                 float extra;
-                crossing.ExtraHeight = crossingExtra.TryGetValue(crossing.Segment, out extra) ? extra : 0f;
+                crossing.ExtraHeight = crossingExtra.TryGetValue(crossing.Key, out extra) ? extra : 0f;
                 cuts.Add(new KeyValuePair<float, Crossing>(crossing.Distance, crossing));
             }
             cuts.Sort((p, q) => p.Key.CompareTo(q.Key));
@@ -547,12 +555,29 @@ namespace RealisticRoads
                     if (tangent != Vector3.zero) division.Tangents[index] = tangent;
                     if (stops[c].Value != null)
                     {
+                        // A junction right next to an existing node joins at that node:
+                        // move our node onto it now, so the planner, the preview and the
+                        // bend check all see the road that will be built.
+                        var snap = stops[c].Value;
+                        if (snap.Connects && snap.SnapNode != 0)
+                        {
+                            Vector3 node = NetManager.instance.m_nodes.m_buffer[snap.SnapNode].m_position;
+                            division.Points[index] = new Vector3(node.x, division.Points[index].y, node.z);
+                            snapped.Add(index);
+                        }
                         division.Crossings.Add(stops[c].Value);
                         division.CrossingIndex.Add(index);
                     }
                 }
             }
 
+            // A snapped node's direction runs from its neighbour before to the one after.
+            foreach (int index in snapped)
+            {
+                if (index <= 0 || index >= division.Points.Count - 1) continue;
+                Vector3 through = CurveMath.FlatNormal(division.Points[index + 1] - division.Points[index - 1]);
+                if (through != Vector3.zero) division.Tangents[index] = through;
+            }
             if (startDir != Vector3.zero) division.Tangents[0] = CurveMath.FlatNormal(startDir);
             if (endDir != Vector3.zero) division.Tangents[division.Tangents.Count - 1] = CurveMath.FlatNormal(endDir);
             division.Ok = CurveMath.MaxBend(division.Tangents) <= MaxBend;
@@ -745,15 +770,15 @@ namespace RealisticRoads
 
         private void SetType(Crossing crossing, CrossingType type)
         {
-            crossingTypes[crossing.Segment] = type;
+            crossingTypes[crossing.Key] = type;
             Mod.Log("Crossing with " + crossing.ExistingName + " (#" + crossing.Segment + "): " + crossing.Describe(type));
         }
 
         private void AddExtra(Crossing crossing, float step)
         {
             float extra;
-            crossingExtra.TryGetValue(crossing.Segment, out extra);
-            crossingExtra[crossing.Segment] = Mathf.Clamp(extra + step, 0f, MaxExtraHeight);
+            crossingExtra.TryGetValue(crossing.Key, out extra);
+            crossingExtra[crossing.Key] = Mathf.Clamp(extra + step, 0f, MaxExtraHeight);
         }
 
         private void AddWaterExtra(WaterRun run, float step)

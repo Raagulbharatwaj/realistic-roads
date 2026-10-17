@@ -355,4 +355,21 @@ public class CurveMathTests
         float steepest = CurveMath.SmoothGrades(d, ground, h, new bool[4], Fill(4, -1000), Fill(4, 1000), 0.25f, 6f, new bool[4]);
         Assert.Equal((60f - 12f) / 40f, steepest, 2);
     }
+
+    [Fact]
+    public void Heights_WideFlatGorge_GetsOneViaductRimToRim()
+    {
+        // Steep walls and a 120 m wide flat floor: the floor nodes are not next to
+        // a wall, but the deck must still span from rim to rim.
+        var d = Spaced(10, 40f);
+        var ground = new float[] { 40, 40, 40, 2, 0, 0, 0, 2, 40, 40 };
+        var min = Fill(10, -1000); var max = Fill(10, 1000);
+        var isFixed = new bool[10];
+        Assert.True(CurveMath.SolveHeights(d, ground, min, max, isFixed, 0.06f, out var h));
+        Assert.True(CurveMath.LiftValleys(d, h, isFixed, 0.25f, 0.06f, 400f, min));
+        Assert.True(CurveMath.SolveHeights(d, ground, min, max, isFixed, 0.06f, out h));
+        CurveMath.LevelSpans(d, ground, h, isFixed, min);
+        Assert.True(CurveMath.SolveHeights(d, ground, min, max, isFixed, 0.06f, out h));
+        for (int i = 2; i <= 8; i++) Assert.Equal(40f, h[i], 1);
+    }
 }
