@@ -175,38 +175,73 @@ namespace RealisticRoads
     }
 
     // Smooth splits and CS2-style junctions: don't draw the vanilla junction
-    // pieces (seam strip, crosswalks, median blocks) close up. Like Node
-    // Controller, the road's list of junction pieces reads as empty for our
-    // nodes inside NetNode.RenderInstance, so everything else the method does
-    // (props, the render list) carries on as normal.
+    // pieces (seam strip, crosswalks, median blocks) close up. The private
+    // NetNode.RenderInstance draws one piece of a node and then steps the
+    // render list on (instanceIndex = data.m_nextInstance); for our nodes we
+    // skip it but still step the list, so the game's loop ends normally. No IL
+    // is rewritten.
+    [HarmonyPatch]
+    public static class NodePieceRenderPatch
+    {
+        private static bool failed;
+
+        public static MethodBase TargetMethod()
+        {
+            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (method.Name != "RenderInstance") continue;
+                var parameters = method.GetParameters();
+                bool hasNode = false, hasIndex = false, hasData = false;
+                foreach (var p in parameters)
+                {
+                    if (p.Name == "nodeID" && p.ParameterType == typeof(ushort)) hasNode = true;
+                    if (p.Name == "instanceIndex" && p.ParameterType == typeof(uint).MakeByRefType()) hasIndex = true;
+                    if (p.Name == "data" && p.ParameterType == typeof(RenderManager.Instance).MakeByRefType()) hasData = true;
+                }
+                if (hasNode && hasIndex && hasData) return method;
+            }
+            throw new Exception("NetNode.RenderInstance(..., nodeID, ..., ref instanceIndex, ref data) not found");
+        }
+
+        public static bool Prefix(ushort nodeID, ref uint instanceIndex, ref RenderManager.Instance data)
+        {
+            if (failed) return true;
+            try
+            {
+                if (!SmoothSplits.IsEnabled(nodeID) && !Junctions.IsEnabled(nodeID)) return true;
+                instanceIndex = data.m_nextInstance;
+                return false;
+            }
+            catch (Exception e)
+            {
+                failed = true;
+                Mod.LogError("Hiding junction pieces failed; vanilla junction pieces are drawn", e);
+                return true;
+            }
+        }
+    }
+
+    // Our own CS2-style junction surface, after the game has drawn the node
+    // (the public RenderInstance: once per node and frame).
     [HarmonyPatch]
     public static class NodeRenderPatch
     {
-        public static IEnumerable<MethodBase> TargetMethods()
+        public static MethodBase TargetMethod()
         {
-            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (method.Name != "RenderInstance") continue;
                 var parameters = method.GetParameters();
                 if (parameters.Length > 1 && parameters[1].Name == "nodeID" && parameters[1].ParameterType == typeof(ushort))
-                    yield return method;
+                    return method;
             }
+            throw new Exception("NetNode.RenderInstance(cameraInfo, nodeID, layerMask) not found");
         }
 
-        public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        public static void Postfix(ushort nodeID, object[] __args)
         {
-            return NodeMeshes.HideNodeMeshes(instructions, OpCodes.Ldarg_2,
-                typeof(NodeMeshes).GetMethod(nameof(NodeMeshes.CloseUpLength), BindingFlags.Public | BindingFlags.Static));
-        }
-
-        // After the node is drawn (the public overload, once per node and
-        // frame; the private one runs once per junction piece): our own
-        // junction surface.
-        public static void Postfix(ushort nodeID, MethodBase __originalMethod, object[] __args)
-        {
-            // Public overload: (cameraInfo, nodeID, layerMask). If a game update
-            // changes that, draw in every pass rather than never.
-            if (!__originalMethod.IsPublic) return;
+            // (cameraInfo, nodeID, layerMask). If a game update changes that,
+            // draw in every pass rather than never.
             JunctionRenderer.Render(nodeID, __args.Length > 2 && __args[2] is int ? (int)__args[2] : -1);
         }
     }
@@ -232,18 +267,6 @@ namespace RealisticRoads
                 previousLoadsNodes = instruction.opcode == OpCodes.Ldfld && Equals(instruction.operand, nodesField);
             }
             Mod.Log("Junction piece lookups redirected: " + count);
-        }
-
-        public static int CloseUpLength(int length, ushort nodeID)
-        {
-            try
-            {
-                return SmoothSplits.IsEnabled(nodeID) || Junctions.IsEnabled(nodeID) ? 0 : length;
-            }
-            catch
-            {
-                return length;
-            }
         }
 
         // Far away only smooth splits are hidden; CS2-style junctions keep the
