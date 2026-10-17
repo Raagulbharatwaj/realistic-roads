@@ -11,7 +11,10 @@ namespace RealisticRoads
     {
         private const int MaxUndo = 20;
         private const float ContinueAngle = 55f;     // continue an existing road if within this angle
-        private const float UnderpassBridgeExtra = 6f; // existing bridge reaches this far past our road's edges
+        // The bridge put into the road above an underpass reaches past our road's
+        // edges and the banks of our cutting (8 m deep, sloping out), so its ends
+        // stand on untouched ground.
+        private const float UnderpassBridgeExtra = RoadPlanner.CutDepth * 1.5f + 6f;
 
         // An existing segment we cut into pieces, so undo can put it back.
         private class Split
@@ -309,6 +312,10 @@ namespace RealisticRoads
                     build.Stamps.Segment(segment);
                 }
 
+                // Pillars under our raised nodes. The vanilla tool adds them as its own
+                // step after building (the game doesn't), so without this the deck floats.
+                foreach (ushort node in build.Nodes) UpdatePillar(node);
+
                 int middles = 0;
                 if (plan.Middle != null) foreach (bool m in plan.Middle) if (m) middles++;
                 if (middles > 0) Mod.Log("  Suspension bridge: towers on every other node, " + middles + " middle node(s)");
@@ -408,6 +415,26 @@ namespace RealisticRoads
                 Mod.LogError("Refunding the road failed", e);
             }
             build.Paid = 0;
+        }
+
+        // The node's pillar (or none), as the road's AI chooses it: by height,
+        // over water, and so on.
+        private static void UpdatePillar(ushort node)
+        {
+            try
+            {
+                var nodes = NetManager.instance.m_nodes.m_buffer;
+                var info = nodes[node].Info;
+                if (info == null || info.m_netAI == null) return;
+                BuildingInfo building;
+                float heightOffset;
+                info.m_netAI.GetNodeBuilding(node, ref nodes[node], out building, out heightOffset);
+                nodes[node].UpdateBuilding(node, building, heightOffset);
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Placing the pillar at node #" + node + " failed", e);
+            }
         }
 
         // Ends placed on the middle of a road: cut that road there and use the
