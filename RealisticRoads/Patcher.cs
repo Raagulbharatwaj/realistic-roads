@@ -92,7 +92,7 @@ namespace RealisticRoads
         {
             try
             {
-                if (!__result || segment == lastLogged) return;
+                if (!__result || !Mod.DebugLogging || segment == lastLogged) return;
                 lastLogged = segment;
                 Mod.Log("Road segment created: #" + segment + DescribeBridge(segment));
             }

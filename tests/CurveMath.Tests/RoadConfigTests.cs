@@ -179,4 +179,11 @@ public class RoadConfigTests
         c.SpeedKmh += 10f;
         Assert.False(a.SameLayout(c));
     }
+
+    [Fact]
+    public void OneWayWithAGrassMedian_IsAnError()
+    {
+        var cs = CrossSection.Compose(Road(Walk(), Car(F), Median(MedianStyle.Grass), Car(F), Walk()));
+        Assert.Contains(cs.Errors, e => e.Contains("One-way"));
+    }
 }

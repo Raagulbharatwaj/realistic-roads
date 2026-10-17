@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
@@ -50,13 +51,23 @@ namespace RealisticRoads
         public List<string> Warnings = new List<string>();   // shown, but don't stop building
         public bool[] Steep;                  // piece i (between points i-1 and i) steeper than the road allows
         public ushort StartNode, EndNode;
+        // An end placed in the middle of an existing road: that road is cut
+        // there at build time and the new road joins it (a T-junction).
+        public ushort StartSegment, EndSegment;
+        public float StartT, EndT;
         public bool Ok => Problems.Count == 0;
     }
 
     // Main thread: works out heights and road versions for a curve.
     public static class RoadPlanner
     {
-        public const float MaxGrade = 0.06f;          // ramps: 6 % slope
+        // Ramp grade for the road being planned: 6 % for roads, 3.5 % for rail
+        // (trains can't climb road grades). Set by Make; one plan at a time per thread.
+        public const float RoadGrade = 0.06f;
+        public const float RailGrade = 0.035f;
+        [ThreadStatic] private static float maxGrade;
+        public static float MaxGrade => maxGrade > 0f ? maxGrade : RoadGrade;
+        private const float MaxDeckHeight = 60f;      // higher than this above the ground: warned
         public const float BridgeClearance = 10f;     // above water (before the player's +/-)
         public const float OverClearance = 9f;        // flyover deck above the road/rail below
         public const float UnderClearance = 7f;       // headroom under an elevated road we pass beneath
@@ -75,7 +86,8 @@ namespace RealisticRoads
         private static string lastLoweringFailure;
 
         public static Plan Make(NetInfo info, List<Vector3> points, List<Vector3> tangents,
-            List<Crossing> crossings, List<int> crossingIndex, List<WaterRun> waterRuns, ushort startNode, ushort endNode)
+            List<Crossing> crossings, List<int> crossingIndex, List<WaterRun> waterRuns, ushort startNode, ushort endNode,
+            ushort startSegment = 0, float startT = 0f, ushort endSegment = 0, float endT = 0f)
         {
             var plan = new Plan
             {
@@ -86,6 +98,10 @@ namespace RealisticRoads
                 WaterRuns = waterRuns,
                 StartNode = startNode,
                 EndNode = endNode,
+                StartSegment = startSegment,
+                StartT = startT,
+                EndSegment = endSegment,
+                EndT = endT,
             };
             int n = points.Count;
             plan.Kinds = new NodeKind[n];
@@ -103,8 +119,11 @@ namespace RealisticRoads
             var cutting = new bool[n];      // lowered for an underpass: never a tunnel
             var forceBridge = new bool[n];  // deck over a lowered road (overpass)
 
-            bool hasBridge = Variant(info, "m_bridgeInfo") != null;
-            bool hasElevated = Variant(info, "m_elevatedInfo") != null || hasBridge;
+            maxGrade = GradeFor(info);
+            // Raised parts use the elevated version, else the bridge one (InfoFor).
+            bool hasBridge = InfoFor(info, NodeKind.Bridge) != null && InfoFor(info, NodeKind.Bridge) != info;
+            bool hasElevated = hasBridge;
+            bool crossesWater = false;
 
             for (int i = 0; i < n; i++)
             {
@@ -131,6 +150,16 @@ namespace RealisticRoads
 
             if (NetworkBuilder.NodeExists(startNode)) Fix(0, nodes[startNode].m_position.y, minH, maxH, isFixed);
             if (NetworkBuilder.NodeExists(endNode)) Fix(n - 1, nodes[endNode].m_position.y, minH, maxH, isFixed);
+            // Ends on the middle of a road join it at its height.
+            if (startSegment != 0) Fix(0, points[0].y, minH, maxH, isFixed);
+            if (endSegment != 0) Fix(n - 1, points[n - 1].y, minH, maxH, isFixed);
+            foreach (var crossing in crossings)
+                if (crossing.Segment != 0 && (crossing.Segment == startSegment || crossing.Segment == endSegment))
+                {
+                    plan.Problems.Add("The curve starts or ends on the " + crossing.ExistingName +
+                                      " and crosses it again: start from its end instead, or move the point");
+                    break;
+                }
 
             for (int c = 0; c < crossings.Count; c++)
             {
@@ -255,6 +284,14 @@ namespace RealisticRoads
 
             // (No suspension-bridge middle nodes: raised parts use elevated pieces.)
 
+            for (int i = 0; i < n; i++) if (water[i]) crossesWater = true;
+            if (crossesWater && !hasBridge)
+                plan.Problems.Add(info.name + " has no bridge or elevated version, so it can't cross water");
+            float highest = 0f;
+            for (int i = 0; i < n; i++) highest = Mathf.Max(highest, heights[i] - ground[i]);
+            if (highest > MaxDeckHeight)
+                plan.Warnings.Add("Up to " + highest.ToString("F0") + " m above the ground: very tall pillars");
+
             CheckVariants(info, plan, hasElevated);
             CheckUnderground(info, plan, water, ground);
             CheckCrossings(plan);
@@ -262,6 +299,12 @@ namespace RealisticRoads
         }
 
         // The road's version for a node kind, or null if it has none.
+        private static float GradeFor(NetInfo info)
+        {
+            var service = info != null && info.m_class != null ? info.m_class.m_service.ToString() : "";
+            return service == "PublicTransport" ? RailGrade : RoadGrade;
+        }
+
         public static NetInfo InfoFor(NetInfo info, NodeKind kind)
         {
             switch (kind)

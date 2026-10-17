@@ -31,33 +31,26 @@ The build copies `RealisticRoads.dll` + `CitiesHarmony.API.dll` to:
 ## 4. Test in game
 1. Close the game before every build (Windows locks loaded DLLs).
 2. Launch CS1 > **Content Manager > Mods** > tick **Realistic Roads**.
-3. Load a city, press **F7** to open the debug panel.
-4. Draw a road. You should see `[RealisticRoads] Road segment created: #1234`.
-5. Options > Mod Settings > Realistic Roads > "Say hello" also logs a message.
+3. Load a city. The **RR**, **SPL**, **JN** and **RB** buttons appear on the left (right-drag to move them).
+4. Options > Mod Settings > Realistic Roads:
+   - **CS2-style look for junctions the curve tool builds** (on by default);
+   - **Detailed logging** (off by default): logs every segment the game creates, from any tool.
 
-What the log should contain (milestone 1 sign-off):
+The log is `C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\output_log.txt`. To see the
+mod's lines and any errors:
 
-    [RealisticRoads] Enabled, version 0.1.x.x
-    [RealisticRoads] Patched NetManager.CreateSegment(UInt16& segment, ...)   (one line per overload)
-    [RealisticRoads] Harmony patches applied
-    [RealisticRoads] City loaded, mode = LoadGame
-    [RealisticRoads] Road segment created: #1234
+    Select-String -Path "C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\output_log.txt" -Pattern "RealisticRoads|Exception" -Context 0,6
 
-If any line is missing, or you see `Applying Harmony patches failed`, paste every
-`[RealisticRoads]` line (plus any exception under it) from `output_log.txt` back into the issue/chat.
-
-Full log: `C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\output_log.txt`
-(search for `[RealisticRoads]`).
-
-Tip: launch with `-noWorkshop` in Steam launch options to test with only local mods
-(remove it afterwards, or Harmony from the Workshop won't load).
+A good start looks like `Enabled, version ...`, one `Patched ...` line per patch, `Harmony patches applied`, then
+`City loaded, mode = ...` when the city is up. If `City loaded` never appears, send that output.
 
 ## 5. Curve tool: build CS2-style curves (milestones 3 + 4)
 1. Pick a road in the vanilla **Roads** menu (e.g. Basic Road or Oneway Road), then click **RR** or press **Ctrl+Shift+C**.
    The panel under the buttons shows the road, length and segment count.
 2. Click points on the ground. The curve follows the mouse as a road-width band through all of them:
    **green** = can be built, **red** = a bend is too tight (spread the points out).
-3. Clicking on (or near the end of) an existing road snaps to it (yellow circle) so the new road connects there,
+3. Clicking on the middle of an existing road starts or ends the curve there: that road is cut and the new one joins
+   it (a T-junction). Clicking on (or near the end of) an existing road snaps to its end (yellow circle) so the new road connects there,
    at the start or the end of the curve. Where it can, the curve continues that road smoothly ("continues the road"
    in the panel); otherwise it meets it at an angle like a normal junction.
    **Splits:** on the end of a road at least ~1.3x wider than the road you are drawing, the snap circle jumps to the
@@ -97,7 +90,9 @@ Tip: launch with `-noWorkshop` in Steam launch options to test with only local m
 5. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.
 6. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
 
-Notes for this version: it does not charge money yet and does not bulldoze trees/buildings in the way.
+Building costs what the vanilla road tool would charge for the same pieces (shown as **Cost** in the panel); Ctrl+Z
+gives it back. Buildings in the way are not removed: the panel warns ("Runs through N building(s)"), bulldoze them
+first. Trees are not checked.
 Bridges work; flyovers, tunnels, cuttings and level crossings are new: check them and send screenshots.
 Ctrl+Z undoes a curve including any junctions/bridges it put into existing roads (those segments are rebuilt, so
 TM:PE settings or custom names on them are lost). Long curves are cut into ~120 m segments (shorter only in tight bends, ~100 m over water).
@@ -157,7 +152,8 @@ markings won't match your lanes yet (generated road surfaces are the next step, 
 Please check and send the log (search for `Road builder` and `Mesh `):
 - the panel works and Create says the road is selected; build it with RR (with a bridge and a tunnel);
 - cars, buses and bikes use the lanes you made (TM:PE's lane view helps);
-- save, quit to the menu, load the city again: the roads are still there and the road is in the roads menu;
+- for now, don't save cities with road builder roads you want to keep: they are missing when the city loads again (the
+  load-time hook that kept them stopped cities from loading; it is being reworked);
 - if the log says `prefab indices changed`, don't save that city and send the log.
 Saved cities need the mod for these roads: without it the game reports them missing.
 

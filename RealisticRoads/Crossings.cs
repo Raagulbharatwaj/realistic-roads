@@ -184,6 +184,35 @@ namespace RealisticRoads
             for (int i = 0; i <= last; i++) samples[i] = CurveMath.Bezier(a, b, c, d, i / (float)last);
         }
 
+        // The point of 'segment' closest to 'near' (flat distance): its
+        // position along the segment (0..1) and where it is (y = road height).
+        public static float ClosestT(ushort segment, Vector3 near, out Vector3 position)
+        {
+            Vector3 a, b, c, d;
+            SegmentBezier(segment, out a, out b, out c, out d);
+            float best = 0f, bestDistance = float.MaxValue;
+            const int steps = 48;
+            for (int i = 0; i <= steps; i++)
+            {
+                float t = i / (float)steps;
+                float distance = CurveMath.FlatDistance(CurveMath.Bezier(a, b, c, d, t), near);
+                if (distance < bestDistance) { bestDistance = distance; best = t; }
+            }
+            // Refine around the best sample.
+            float step = 1f / steps;
+            for (int round = 0; round < 12; round++)
+            {
+                step *= 0.5f;
+                float lower = Mathf.Max(best - step, 0f), upper = Mathf.Min(best + step, 1f);
+                float dl = CurveMath.FlatDistance(CurveMath.Bezier(a, b, c, d, lower), near);
+                float du = CurveMath.FlatDistance(CurveMath.Bezier(a, b, c, d, upper), near);
+                if (dl < bestDistance) { bestDistance = dl; best = lower; }
+                if (du < bestDistance) { bestDistance = du; best = upper; }
+            }
+            position = CurveMath.Bezier(a, b, c, d, best);
+            return best;
+        }
+
         public static void SegmentBezier(ushort segment, out Vector3 a, out Vector3 b, out Vector3 c, out Vector3 d)
         {
             var nodes = NetManager.instance.m_nodes.m_buffer;

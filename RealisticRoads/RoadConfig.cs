@@ -280,6 +280,8 @@ namespace RealisticRoads
                 cs.Errors.Add("Add at least one car or bus lane");
             if (cs.ForwardLanes > MaxLanesPerDirection || cs.BackwardLanes > MaxLanesPerDirection)
                 cs.Errors.Add("At most " + MaxLanesPerDirection + " lanes each way");
+            if (cs.OneWay && cs.HasMedian && cs.MedianStyle != MedianStyle.Painted)
+                cs.Errors.Add("One-way roads can't have a grass or tree median (for now): the one-way roads it is built from have none");
             if (cs.PavementWidth <= 0f && !cs.OneWay)
                 cs.Errors.Add("Two-way roads need sidewalks (for now)");
 

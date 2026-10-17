@@ -372,4 +372,36 @@ public class CurveMathTests
         Assert.True(CurveMath.SolveHeights(d, ground, min, max, isFixed, 0.06f, out h));
         for (int i = 2; i <= 8; i++) Assert.Equal(40f, h[i], 1);
     }
+
+    [Fact]
+    public void DivideAdaptive_TightBendAtTheEnd_LeavesNoStub()
+    {
+        // Random curves ending in a bend (radius 48 m and up, where a 30 m piece
+        // fits the bend limit): almost never a piece shorter than minSpacing
+        // (chords in bends are a little under the arc length, hence 27 m).
+        var random = new System.Random(7);
+        int stubs = 0, tested = 0;
+        for (int run = 0; run < 3000; run++)
+        {
+            var poly = new List<Vector3>();
+            float x = 0, z = 0, heading = 0;
+            float straight = 80f + (float)random.NextDouble() * 300f;
+            float radius = 48f + (float)random.NextDouble() * 80f;   // tighter: a 30 m piece alone bends past the limit
+            float arc = (float)(random.NextDouble() * 2.0);
+            for (float d = 0; d <= straight; d += 2f) poly.Add(new Vector3(d, 0, 0));
+            x = straight;
+            for (float a = 0; a <= arc; a += 2f / radius)
+            {
+                heading = a;
+                poly.Add(new Vector3(x + radius * (float)Math.Sin(a), 0, z + radius * (1 - (float)Math.Cos(a))));
+            }
+            CurveMath.DivideAdaptive(poly, 120f, 30f, 40f, out var points, out var tangents, out bool ok);
+            if (!ok) continue;
+            tested++;
+            for (int i = 1; i < points.Count; i++)
+                if (CurveMath.FlatDistance(points[i - 1], points[i]) < 27f) stubs++;
+        }
+        Assert.True(tested > 1000);
+        Assert.True(stubs <= tested / 500, stubs + " stubs in " + tested + " curves");
+    }
 }

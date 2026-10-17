@@ -245,9 +245,32 @@ namespace RealisticRoads
                 float previous = cuts[cuts.Count - 1] - cuts[cuts.Count - 2];
                 float even = (previous + rest) * 0.5f;
                 float start = cuts[cuts.Count - 2];
-                if (TurnBetween(along, turned, start, start + even) <= budget &&
+                if (even >= minSpacing && TurnBetween(along, turned, start, start + even) <= budget &&
                     TurnBetween(along, turned, start + even, total) <= budget)
                     cuts[cuts.Count - 1] = start + even;
+            }
+            // Still a stub at the end (a tight bend there kept the pieces from
+            // sharing): give the last piece minSpacing, pushing the cuts before it
+            // back while they would leave a piece shorter than that, if the bends
+            // still fit.
+            if (cuts.Count > 1 && total - cuts[cuts.Count - 1] < minSpacing)
+            {
+                var moved = new List<float>(cuts);
+                float end = total;
+                int k = moved.Count - 1;
+                while (k > 0 && end - moved[k] < minSpacing)
+                {
+                    moved[k] = end - minSpacing;
+                    end = moved[k];
+                    k--;
+                }
+                bool fits = k >= 0 && moved[k + 1] - moved[k] >= minSpacing;
+                for (int c = k < 0 ? 0 : k; c < moved.Count && fits; c++)
+                {
+                    float to = c + 1 < moved.Count ? moved[c + 1] : total;
+                    fits = TurnBetween(along, turned, moved[c], to) <= maxBend * 0.95f;
+                }
+                if (fits) cuts = moved;
             }
             cuts.Add(total);
 

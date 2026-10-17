@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using CitiesHarmony.API;
 using ColossalFramework.Plugins;
+using ColossalFramework.UI;
 using ICities;
 using UnityEngine;
 
@@ -13,7 +14,66 @@ namespace RealisticRoads
     public class Mod : IUserMod
     {
         public string Name => "Realistic Roads";
-        public string Description => "CS2-style smooth curves and flyovers with pillars on the road below.";
+        public string Description => "CS2-style road drawing: long curves, bridges, tunnels, overpasses and underpasses at each crossing, smooth splits, CS2-style junctions.";
+
+        // Settings (Options > Mod Settings), kept between games.
+        // Read on the main thread when the mod starts; plain fields after that,
+        // so any thread may read them (PlayerPrefs is main-thread only).
+        private static bool debugLogging, autoJunctions = true;
+
+        public static bool DebugLogging
+        {
+            get { return debugLogging; }
+            set { debugLogging = value; SetSetting("RealisticRoads.DebugLogging", value); }
+        }
+
+        public static bool AutoJunctions
+        {
+            get { return autoJunctions; }
+            set { autoJunctions = value; SetSetting("RealisticRoads.AutoJunctions", value); }
+        }
+
+        private static void LoadSettings()
+        {
+            debugLogging = Setting("RealisticRoads.DebugLogging", false);
+            autoJunctions = Setting("RealisticRoads.AutoJunctions", true);
+        }
+
+        private static bool Setting(string key, bool fallback)
+        {
+            try { return PlayerPrefs.HasKey(key) ? PlayerPrefs.GetInt(key) != 0 : fallback; }
+            catch { return fallback; }
+        }
+
+        private static void SetSetting(string key, bool value)
+        {
+            try { PlayerPrefs.SetInt(key, value ? 1 : 0); PlayerPrefs.Save(); }
+            catch { }
+        }
+
+        // A message box for the player, shown when the city has finished loading.
+        private static string pendingTitle, pendingMessage;
+
+        public static void WarnAfterLoad(string title, string message)
+        {
+            pendingTitle = title;
+            pendingMessage = message;
+            Log(title + ": " + message);
+        }
+
+        internal static void ShowPendingWarning()
+        {
+            if (pendingMessage == null) return;
+            try
+            {
+                UIView.library.ShowModal<ExceptionPanel>("ExceptionPanel").SetMessage("Realistic Roads: " + pendingTitle, pendingMessage, false);
+            }
+            catch (Exception e)
+            {
+                LogError("Showing a warning failed", e);
+            }
+            pendingTitle = pendingMessage = null;
+        }
 
         // Unity's main thread. UI code (like the F7 panel) may only run here.
         private static Thread mainThread;
@@ -24,6 +84,7 @@ namespace RealisticRoads
         public void OnEnabled()
         {
             mainThread = Thread.CurrentThread;
+            LoadSettings();
             Log("Enabled, version " + typeof(Mod).Assembly.GetName().Version);
             HarmonyHelper.DoOnHarmonyReady(Patcher.PatchAll);
         }
@@ -39,7 +100,8 @@ namespace RealisticRoads
         public void OnSettingsUI(UIHelperBase helper)
         {
             var group = helper.AddGroup("Realistic Roads");
-            group.AddButton("Say hello", () => Log("Hello from the settings page!"));
+            group.AddCheckbox("CS2-style look for junctions the curve tool builds", AutoJunctions, value => AutoJunctions = value);
+            group.AddCheckbox("Detailed logging (every segment the game creates)", DebugLogging, value => DebugLogging = value);
         }
 
         // Safe to call from any thread, including the simulation thread.
@@ -99,6 +161,7 @@ namespace RealisticRoads
         public override void OnLevelLoaded(LoadMode mode)
         {
             Mod.Log("City loaded, mode = " + mode);
+            Mod.ShowPendingWarning();
             try
             {
                 RoadTypes.CreateMissing();
