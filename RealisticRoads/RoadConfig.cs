@@ -94,6 +94,7 @@ namespace RealisticRoads
     {
         public int Version = 1;
         public string Id = "";
+        public long CreatedTicks;   // when it was made (the panel lists newest first)
         public string Name = "";
         public float SpeedKmh = 50f;
         public List<RoadPiece> Pieces = new List<RoadPiece>();
@@ -103,6 +104,21 @@ namespace RealisticRoads
         public string PrefabName => "RR " + Id;
 
         public static string NewId() => Guid.NewGuid().ToString("N").Substring(0, 12);
+
+        // Same lanes, widths, directions, medians and speed (names may differ).
+        public bool SameLayout(RoadConfig other)
+        {
+            if (other == null || other.Pieces.Count != Pieces.Count || Math.Abs(other.SpeedKmh - SpeedKmh) > 0.01f) return false;
+            for (int i = 0; i < Pieces.Count; i++)
+            {
+                var a = Pieces[i];
+                var b = other.Pieces[i];
+                if (a.Kind != b.Kind || Math.Abs(a.Width - b.Width) > 0.01f) return false;
+                if (a.HasDirection && a.Direction != b.Direction) return false;
+                if (a.Kind == PieceKind.Median && a.Median != b.Median) return false;
+            }
+            return true;
+        }
 
         public RoadConfig Copy()
         {
@@ -229,6 +245,12 @@ namespace RealisticRoads
                 {
                     if (i == 0 || i == n - 1 || pieces[i - 1].Kind == PieceKind.Sidewalk || pieces[i + 1].Kind == PieceKind.Sidewalk)
                         cs.Errors.Add("A median goes between lanes");
+                    // The raised median comes from the vanilla road's mesh, which has
+                    // one, in the middle (until R3.3 draws our own).
+                    if (cs.HasMedian) cs.Errors.Add("One median per road (for now)");
+                    else if (p.Median != MedianStyle.Painted && Math.Abs(centre) > 0.25f)
+                        cs.Errors.Add("A grass or tree median must be in the middle of the road (for now): " +
+                                      "put the same width of lanes on both sides");
                     cs.HasMedian = true;
                     cs.MedianStyle = p.Median;
                     if (p.Median == MedianStyle.Trees)
@@ -309,8 +331,11 @@ namespace RealisticRoads
             int traffic = cs.ForwardLanes + cs.BackwardLanes;
             if (cs.PavementWidth <= 0f) return "Highway";
             if (cs.OneWay) return traffic <= 2 ? "Oneway Road" : "Large Oneway";
-            string size = traffic <= 2 ? "Basic Road" : traffic <= 4 ? "Medium Road" : "Large Road";
-            if (!cs.HasMedian || cs.MedianStyle == MedianStyle.Painted) return size;
+            bool raisedMedian = cs.HasMedian && cs.MedianStyle != MedianStyle.Painted;
+            // The two-lane road's decorated versions put grass and trees on the
+            // sidewalks, not in the middle: a median needs at least the four-lane road.
+            string size = traffic <= 2 && !raisedMedian ? "Basic Road" : traffic <= 4 ? "Medium Road" : "Large Road";
+            if (!raisedMedian) return size;
             return size + (cs.MedianStyle == MedianStyle.Trees ? " Decoration Trees" : " Decoration Grass");
         }
 

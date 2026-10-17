@@ -41,19 +41,42 @@ namespace RealisticRoads
 
         public static bool IsRoadBuilderRoad(NetInfo info) => info != null && info.name != null && info.name.StartsWith("RR ");
 
-        // Any thread (saving runs off the main thread).
-        public static List<RoadConfig> CreatedConfigs()
+        // The configs of the road builder roads this city has segments of (for
+        // the save). Reads the segment buffer only; any thread.
+        public static List<RoadConfig> UsedConfigs()
+        {
+            var ids = new HashSet<string>();
+            var segments = NetManager.instance.m_segments.m_buffer;
+            for (int i = 1; i < segments.Length; i++)
+            {
+                if ((segments[i].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
+                var info = segments[i].Info;
+                string name = !ReferenceEquals(info, null) ? info.name : null;
+                // "RR <id>" or "RR <id> Elevated" and so on.
+                if (name == null || !name.StartsWith("RR ")) continue;
+                int end = name.IndexOf(' ', 3);
+                ids.Add(end > 0 ? name.Substring(3, end - 3) : name.Substring(3));
+            }
+            var list = new List<RoadConfig>();
+            foreach (var id in ids)
+            {
+                var config = RoadLibrary.Find(id);
+                if (config == null)
+                    lock (created)
+                        foreach (var pair in createdConfigs) if (pair.Value.Id == id) { config = pair.Value; break; }
+                if (config != null) list.Add(config);
+            }
+            return list;
+        }
+
+        // A road deleted from the library: no longer remembered as made (its
+        // prefab stays registered until the game restarts; nothing uses it).
+        public static void Forget(RoadConfig config)
         {
             lock (created)
             {
-                var list = new List<RoadConfig>();
-                foreach (var pair in createdConfigs)
-                {
-                    NetInfo info;
-                    // Plain reference check: Unity's == may not be used off the main thread.
-                    if (created.TryGetValue(pair.Key, out info) && !ReferenceEquals(info, null)) list.Add(pair.Value);
-                }
-                return list;
+                created.Remove(config.PrefabName);
+                createdConfigs.Remove(config.PrefabName);
             }
         }
 
@@ -454,6 +477,14 @@ namespace RealisticRoads
             var copy = new NetInfo.Lane();
             foreach (var field in typeof(NetInfo.Lane).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
                 if (!field.IsNotSerialized) field.SetValue(copy, field.GetValue(source));
+            // Our own copy of the props (lights, signs, arrows), so nothing the game
+            // or we do to them touches the vanilla road's.
+            if (copy.m_laneProps != null)
+            {
+                var props = UnityEngine.Object.Instantiate(copy.m_laneProps);
+                props.name = copy.m_laneProps.name + " RR";
+                copy.m_laneProps = props;
+            }
             return copy;
         }
 
