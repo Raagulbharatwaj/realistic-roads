@@ -70,6 +70,10 @@ namespace RealisticRoads
         private readonly List<ushort> pointNodes = new List<ushort>();
         private readonly List<int> pointSides = new List<int>();
         private readonly List<Vector3> pointMarkers = new List<Vector3>();
+        // A point on the middle of an existing road: that road and where on it
+        // (0..1). The curve's first and last points use it for a T-junction.
+        private readonly List<ushort> pointSegments = new List<ushort>();
+        private readonly List<float> pointTs = new List<float>();
 
         // Written on the main thread in OnToolUpdate, read by SimulationStep.
         // Shared under rayLock: a Ray is too big to be written and read atomically.
@@ -85,10 +89,16 @@ namespace RealisticRoads
         private volatile bool hoverValid;
         private volatile ushort hoverNode;
         private volatile int hoverSide;
+        private volatile ushort hoverSegment;
+        private float hoverT;
         private Vector3 hoverMarker;
 
-        // Preview, recomputed on the main thread every frame.
+        // Preview, recomputed on the main thread when its inputs change.
         private Division preview;
+        private string previewKey;
+        private int framesSincePreview;
+        private int choicesVersion;              // bumped by every edit of points or crossing/water choices
+        private const int PreviewRefreshFrames = 30;
 
         // The road/track the player last picked in the vanilla Roads menu.
         public NetInfo SelectedNetwork { get; set; }
@@ -110,6 +120,7 @@ namespace RealisticRoads
             public List<WaterRun> WaterRuns = new List<WaterRun>();
             public ushort StartSplit;    // trunk end the start is half-snapped to (or 0)
             public ushort EndSplit;      // trunk end the end is half-snapped to (or 0)
+            public int Cost;             // construction cost (game money units, /100 to show)
         }
 
         protected override void OnEnable()
@@ -147,17 +158,38 @@ namespace RealisticRoads
                 mouseRayValid = false;
             }
 
-            // Live preview: the clicked points plus the mouse position.
+            // Live preview: the clicked points plus the mouse position. Only
+            // worked out again when something it depends on changed (the mouse,
+            // the points, a choice), and every half second for changes in the
+            // city around it.
+            bool withHover = hoverValid && mouseRayValid;
+            Vector3 hover = hoverPosition;
+            string key = choicesVersion + "|" + points.Count + "|" + withHover + "|" +
+                         Mathf.RoundToInt(hover.x * 4f) + "," + Mathf.RoundToInt(hover.y * 4f) + "," + Mathf.RoundToInt(hover.z * 4f) + "|" +
+                         hoverNode + "|" + hoverSegment + "|" + hoverSide + "|" + (SelectedNetwork != null ? SelectedNetwork.name : "");
+            if (key == previewKey && ++framesSincePreview < PreviewRefreshFrames)
+            {
+                ToolActivator.SetInfo(InfoText());
+                PlaceButtons();
+                return;
+            }
+            previewKey = key;
+            framesSincePreview = 0;
+
             var live = new List<Vector3>(points);
             var liveNodes = new List<ushort>(pointNodes);
             var liveSides = new List<int>(pointSides);
-            if (hoverValid && mouseRayValid)
+            var liveSegments = new List<ushort>(pointSegments);
+            var liveTs = new List<float>(pointTs);
+            if (withHover)
             {
-                live.Add(hoverPosition);
+                live.Add(hover);
                 liveNodes.Add(hoverNode);
                 liveSides.Add(hoverSide);
+                liveSegments.Add(hoverSegment);
+                liveTs.Add(hoverT);
             }
-            preview = Divide(live, liveNodes, liveSides);
+            preview = Divide(live, liveNodes, liveSides, liveSegments, liveTs);
             ToolActivator.SetInfo(InfoText());
             PlaceButtons();
         }
@@ -176,13 +208,35 @@ namespace RealisticRoads
                 hoverValid = false;
                 hoverNode = 0;
                 hoverSide = 0;
+                hoverSegment = 0;
                 return;
             }
 
             Vector3 ground;
             bool onGround = GroundUnderMouse(out ground);
 
-            ushort node = FindSnapNode();
+            ushort midSegment;
+            Vector3 roadHit;
+            ushort node = FindSnapNode(out midSegment, out roadHit);
+            hoverSegment = 0;
+            if (node == 0 && midSegment != 0)
+            {
+                // On the middle of a road: join it there (cut at build time).
+                Vector3 onRoad;
+                float t = CrossingFinder.ClosestT(midSegment, roadHit, out onRoad);
+                float length = NetManager.instance.m_segments.m_buffer[midSegment].m_averageLength;
+                if (t * length > Crossing.NodeSnap && (1f - t) * length > Crossing.NodeSnap)
+                {
+                    hoverT = t;
+                    hoverSegment = midSegment;
+                    hoverPosition = onRoad;
+                    hoverMarker = onRoad;
+                    hoverNode = 0;
+                    hoverSide = 0;
+                    hoverValid = true;
+                    return;
+                }
+            }
             if (node != 0)
             {
                 Vector3 position = NetManager.instance.m_nodes.m_buffer[node].m_position;
@@ -204,9 +258,12 @@ namespace RealisticRoads
         }
 
         // Simulation thread. A node under the mouse, or the end of the road
-        // under the mouse when the mouse is near that end.
-        private ushort FindSnapNode()
+        // under the mouse when the mouse is near that end. Otherwise 0, with
+        // the road under the mouse (if any) in 'segmentHit'.
+        private ushort FindSnapNode(out ushort segmentHit, out Vector3 hit)
         {
+            segmentHit = 0;
+            hit = Vector3.zero;
             var input = new RaycastInput(simRay, simRayLength);
             input.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
             input.m_ignoreTerrain = true;
@@ -227,6 +284,8 @@ namespace RealisticRoads
             float toEnd = CurveMath.FlatDistance(output.m_hitPos, nodes[segment.m_endNode].m_position);
             if (toStart <= toEnd && toStart <= reach) return segment.m_startNode;
             if (toEnd < toStart && toEnd <= reach) return segment.m_endNode;
+            segmentHit = output.m_netSegment;
+            hit = output.m_hitPos;
             return 0;
         }
 
@@ -316,6 +375,9 @@ namespace RealisticRoads
                 pointNodes.Add(hoverNode);
                 pointSides.Add(side);
                 pointMarkers.Add(hoverMarker);
+                pointSegments.Add(hoverNode == 0 ? hoverSegment : (ushort)0);
+                pointTs.Add(hoverT);
+                choicesVersion++;
                 Mod.Log("Point " + points.Count + " at " + Format(p) +
                         (hoverNode != 0 ? " (on node #" + hoverNode + (side > 0 ? ", left half" : side < 0 ? ", right half" : "") + ")" : ""));
             }
@@ -326,6 +388,9 @@ namespace RealisticRoads
                 pointNodes.RemoveAt(pointNodes.Count - 1);
                 pointSides.RemoveAt(pointSides.Count - 1);
                 pointMarkers.RemoveAt(pointMarkers.Count - 1);
+                pointSegments.RemoveAt(pointSegments.Count - 1);
+                pointTs.RemoveAt(pointTs.Count - 1);
+                choicesVersion++;
                 Mod.Log("Removed last point, " + points.Count + " left");
             }
         }
@@ -366,10 +431,10 @@ namespace RealisticRoads
             }
 
             for (int i = 0; i < points.Count; i++)
-                overlay.DrawCircle(cameraInfo, pointNodes[i] != 0 ? SnapColor : PointColor, pointMarkers[i], PointSize, -1f, 1280f, false, true);
+                overlay.DrawCircle(cameraInfo, pointNodes[i] != 0 || pointSegments[i] != 0 ? SnapColor : PointColor, pointMarkers[i], PointSize, -1f, 1280f, false, true);
 
             if (hoverValid && mouseRayValid)
-                overlay.DrawCircle(cameraInfo, hoverNode != 0 ? SnapColor : HoverColor, hoverMarker, HoverSize, -1f, 1280f, false, true);
+                overlay.DrawCircle(cameraInfo, hoverNode != 0 || hoverSegment != 0 ? SnapColor : HoverColor, hoverMarker, HoverSize, -1f, 1280f, false, true);
         }
 
         private static bool IsRaised(NodeKind kind)
@@ -395,7 +460,7 @@ namespace RealisticRoads
                 return;
             }
 
-            var division = Divide(points, pointNodes, pointSides);
+            var division = Divide(points, pointNodes, pointSides, pointSegments, pointTs);
             if (!division.Ok)
             {
                 Mod.Log("Not built: a bend is too sharp (over " + MaxBend + " degrees per segment). Spread the points out.");
@@ -420,7 +485,7 @@ namespace RealisticRoads
         // wider road, the curve runs parallel from that half first. Crossings
         // with existing roads get a node exactly on them, and RoadPlanner works
         // out the heights.
-        private Division Divide(List<Vector3> controls, List<ushort> nodes, List<int> sides)
+        private Division Divide(List<Vector3> controls, List<ushort> nodes, List<int> sides, List<ushort> segments, List<float> ts)
         {
             if (controls.Count < 2) return new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>() };
 
@@ -468,9 +533,63 @@ namespace RealisticRoads
 
             if (halfStart)
                 foreach (var run in division.WaterRuns) { run.From += CurveMath.FlatDistance(division.Points[0], division.Points[1]); run.To += CurveMath.FlatDistance(division.Points[0], division.Points[1]); }
+            // Ends on the middle of a road (only where the end isn't also half-snapped).
+            ushort startSegment = !halfStart && nodes[0] == 0 ? segments[0] : (ushort)0;
+            ushort endSegment = !halfEnd && nodes[n] == 0 ? segments[n] : (ushort)0;
             division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
-                division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n]);
+                division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
+                startSegment, ts[0], endSegment, ts[n]);
+            division.Cost = NetworkBuilder.Cost(SelectedNetwork, division.Plan);
+            int blocked = BuildingsInTheWay(division);
+            if (blocked > 0)
+                division.Plan.Warnings.Add("Runs through " + blocked + " building(s): bulldoze them first (they are not removed)");
             return division;
+        }
+
+        // Buildings whose footprint the new road's ground-level stretches run
+        // over. Raised and tunnelled stretches pass over or under them.
+        private int BuildingsInTheWay(Division division)
+        {
+            var plan = division.Plan;
+            if (plan == null || SelectedNetwork == null) return 0;
+            var manager = BuildingManager.instance;
+            var buildings = manager.m_buildings.m_buffer;
+            var grid = manager.m_buildingGrid;
+            const int resolution = BuildingManager.BUILDINGGRID_RESOLUTION;
+            const float cell = BuildingManager.BUILDINGGRID_CELL_SIZE;
+            var hit = new HashSet<ushort>();
+            float half = SelectedNetwork.m_halfWidth;
+            for (int i = 1; i < plan.Points.Count; i++)
+            {
+                if (IsRaised(plan.Kinds[i - 1]) && IsRaised(plan.Kinds[i])) continue;
+                if (plan.Kinds[i - 1] == NodeKind.Tunnel && plan.Kinds[i] == NodeKind.Tunnel) continue;
+                var bezier = PieceBezier(division, i);
+                int steps = Mathf.Max(2, Mathf.RoundToInt(CurveMath.FlatDistance(bezier.a, bezier.d) / 8f));
+                for (int k = 0; k <= steps; k++)
+                {
+                    Vector3 p = CurveMath.Bezier(bezier.a, bezier.b, bezier.c, bezier.d, k / (float)steps);
+                    int gx = Mathf.Clamp((int)(p.x / cell + resolution / 2f), 0, resolution - 1);
+                    int gz = Mathf.Clamp((int)(p.z / cell + resolution / 2f), 0, resolution - 1);
+                    for (int z = Mathf.Max(gz - 1, 0); z <= Mathf.Min(gz + 1, resolution - 1); z++)
+                        for (int x = Mathf.Max(gx - 1, 0); x <= Mathf.Min(gx + 1, resolution - 1); x++)
+                        {
+                            ushort id = grid[z * resolution + x];
+                            int guard = 0;
+                            while (id != 0 && guard++ < 49152)
+                            {
+                                var b = buildings[id];
+                                if ((b.m_flags & Building.Flags.Created) != Building.Flags.None && b.Info != null)
+                                {
+                                    // Footprint as a circle: cells are 8 m.
+                                    float radius = Mathf.Min(b.Info.m_cellWidth, b.Info.m_cellLength) * 4f;
+                                    if (CurveMath.FlatDistance(p, b.m_position) < half + radius * 0.8f) hit.Add(id);
+                                }
+                                id = b.m_nextGridBuilding;
+                            }
+                        }
+                }
+            }
+            return hit.Count;
         }
 
         private Division DivideShaped(List<Vector3> controls, Vector3 startDir, Vector3 endDir, ushort startNode, ushort endNode)
@@ -771,6 +890,7 @@ namespace RealisticRoads
         private void SetType(Crossing crossing, CrossingType type)
         {
             crossingTypes[crossing.Key] = type;
+            choicesVersion++;
             Mod.Log("Crossing with " + crossing.ExistingName + " (#" + crossing.Segment + "): " + crossing.Describe(type));
         }
 
@@ -779,6 +899,7 @@ namespace RealisticRoads
             float extra;
             crossingExtra.TryGetValue(crossing.Key, out extra);
             crossingExtra[crossing.Key] = Mathf.Clamp(extra + step, 0f, MaxExtraHeight);
+            choicesVersion++;
         }
 
         private void AddWaterExtra(WaterRun run, float step)
@@ -786,6 +907,7 @@ namespace RealisticRoads
             float extra;
             waterExtra.TryGetValue(run.Key, out extra);
             waterExtra[run.Key] = Mathf.Clamp(extra + step, -5f, MaxExtraHeight);
+            choicesVersion++;
         }
 
         // Called by ToolActivator before the tool is destroyed.
@@ -846,6 +968,7 @@ namespace RealisticRoads
                 text += "\nWater " + (w + 1) + " (" + (run.To - run.From).ToString("F0") + " m wide): bridge deck " +
                         deck.ToString("F0") + " m above the water (+/- to change)";
             }
+            if (division.Cost > 0) text += "\nCost: " + (division.Cost / 100).ToString("N0");
             foreach (var problem in plan.Problems) text += "\n! " + problem;
             foreach (var warning in plan.Warnings) text += "\n~ " + warning;
 
@@ -872,10 +995,13 @@ namespace RealisticRoads
             pointNodes.Clear();
             pointSides.Clear();
             pointMarkers.Clear();
+            pointSegments.Clear();
+            pointTs.Clear();
             crossingTypes.Clear();
             crossingExtra.Clear();
             waterExtra.Clear();
             preview = null;
+            choicesVersion++;
         }
 
         private static string Format(Vector3 v)

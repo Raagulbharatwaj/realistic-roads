@@ -170,3 +170,29 @@ To do, in priority order:
    segments, moved nodes, flags) so redo becomes possible as well as undo.
 6. **Transition curves:** clothoid (Euler spiral) easing for ramps and S-bends, so curvature changes
    gradually instead of jumping between pieces.
+
+## 6. Player-side review (October 2026): what is left
+
+Fixed from that review: undo only touches roads it built (build indices), cutting a road can't lose it, curves can
+start/end mid-road (T-junctions), construction is charged and refunded on undo, buildings in the way are warned
+about, short end segments, preview recomputed only on change, per-network ramp grade (rail 3.5 %), water without a
+bridge version, very tall decks, CS2 junction look limited to new street junctions (setting), quieter logging, an
+on-screen warning for road builder roads a save can't load.
+
+Still open, in rough priority order:
+1. **Road builder roads in saves.** They need a load-time hook that works with Loading Screen Mod; until then they
+   are missing when a city loads (the player is warned). Then "Convert to vanilla" (R3.7) before any public release.
+2. **Registering a road type mid-game** (`RoadTypes.CreateNow`) runs while the simulation reads the prefab lists;
+   needs testing in game, or registration only between loads.
+3. **Collisions:** remove (and pay for) growables in the way like the vanilla tool, refuse on service buildings;
+   detect a new road lying along an existing one; trees.
+4. **TM:PE settings** are lost on roads we cut; keep them through TM:PE's API.
+5. **Picking the road inside RR**, and RR as a mode in the vanilla road tool's options panel.
+6. **Height per control point** (Page Up / Down) for elevated interchanges; arc and parallel modes.
+7. **Elevation profile strip** (height against ground, grades, clearances), cost and tightest radius at the cursor,
+   clearance on each crossing icon; CS2-style guides (lengths, angles, snapping).
+8. **Realism:** design speed sets the minimum radius, construction time (road closed for N days), smooth vertical
+   curves, warnings for junctions too close together or at sharp angles.
+9. **CS2 junctions:** the road's own asphalt texture (drop the shade setting) and drawing them far away too.
+10. Memory: stretched meshes and copied lane props are never freed; redo; settings for hotkeys, grade and spacing.
+11. Check in game: Esc (CS1 may switch tools on the first press).

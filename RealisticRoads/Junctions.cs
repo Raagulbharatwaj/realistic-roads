@@ -95,10 +95,13 @@ namespace RealisticRoads
         }
 
         // Simulation thread: used by the curve tool for the junctions it builds.
+        // Automatic look for a junction the curve tool just made: only when the
+        // setting is on, and only where every road has sidewalks and none is a
+        // highway (ramps don't get curbs).
         public static void EnableIfJunction(ushort node)
         {
             string reason;
-            if (IsEnabled(node) || !CanStyle(node, out reason)) return;
+            if (!Mod.AutoJunctions || IsEnabled(node) || !CanStyle(node, out reason) || !AllStreets(node)) return;
             Enable(node, DefaultCornerExtra);
             Mod.Log("CS2-style junction applied at node #" + node);
         }
@@ -109,6 +112,23 @@ namespace RealisticRoads
             cornerExtra[node] = Mathf.Clamp(cornerExtra[node] + step, 0f, MaxCornerExtra);
             Mod.Log("Junction #" + node + ": corners " + cornerExtra[node].ToString("F0") + " m further out");
             Refresh(node);
+        }
+
+        private static bool AllStreets(ushort node)
+        {
+            var net = NetManager.instance;
+            var n = net.m_nodes.m_buffer[node];
+            for (int i = 0; i < 8; i++)
+            {
+                ushort segment = n.GetSegment(i);
+                if (segment == 0) continue;
+                var info = net.m_segments.m_buffer[segment].Info;
+                if (info == null || info.m_pavementWidth < 0.5f) return false;
+                var ai = info.m_netAI;
+                var rules = ai != null ? ai.GetType().GetField("m_highwayRules") : null;
+                if (rules != null && rules.GetValue(ai) is bool && (bool)rules.GetValue(ai)) return false;
+            }
+            return true;
         }
 
         private static void Enable(ushort node, float extra)
@@ -287,20 +307,21 @@ namespace RealisticRoads
         public static void Forget(ushort node)
         {
             lock (shapes) shapes.Remove(node);
-            failedNodes.Remove(node);   // its roads changed: try again
+            lock (failedNodes) failedNodes.Remove(node);   // its roads changed: try again (any thread)
         }
 
         public static void ForgetAll()
         {
             lock (shapes) shapes.Clear();
-            failedNodes.Clear();
+            lock (failedNodes) failedNodes.Clear();
         }
 
         // Postfix of NetNode.RenderInstance(cameraInfo, nodeID, layerMask): only
         // when that pass draws the road layer, like the vanilla node meshes.
         public static void Render(ushort node, int layerMask)
         {
-            if (failed || (layerMask & (1 << RoadLayer)) == 0 || !Junctions.IsEnabled(node) || failedNodes.Contains(node)) return;
+            if (failed || (layerMask & (1 << RoadLayer)) == 0 || !Junctions.IsEnabled(node)) return;
+            lock (failedNodes) { if (failedNodes.Contains(node)) return; }
             try
             {
                 if (!EnsureResources()) return;
@@ -327,8 +348,9 @@ namespace RealisticRoads
             catch (Exception e)
             {
                 // Only this junction: the others keep their look.
-                failedNodes.Add(node);
-                if (failedNodes.Count <= 32)
+                int count;
+                lock (failedNodes) { failedNodes.Add(node); count = failedNodes.Count; }
+                if (count <= 32)
                     Mod.LogError("Drawing the CS2-style junction at node #" + node + " failed; it shows nothing special until its roads change", e);
             }
         }

@@ -21,8 +21,42 @@ namespace RealisticRoads
             public ushort StartNode, EndNode;
             public Vector3 StartDirection, EndDirection;
             public bool Invert;
+            public bool Released;                   // the original has been removed (undo must rebuild it)
             public readonly List<ushort> Segments = new List<ushort>();
             public readonly List<ushort> Nodes = new List<ushort>();
+            public readonly Stamps Stamps = new Stamps();
+        }
+
+        // The game reuses a freed id for the next road built, so ids alone don't
+        // say a road is still ours: each one's build index (unique per thing
+        // built) is remembered and must still match before undo touches it.
+        private class Stamps
+        {
+            private readonly Dictionary<ushort, uint> segments = new Dictionary<ushort, uint>();
+            private readonly Dictionary<ushort, uint> nodes = new Dictionary<ushort, uint>();
+
+            public void Segment(ushort id) => segments[id] = NetManager.instance.m_segments.m_buffer[id].m_buildIndex;
+            public void Node(ushort id) => nodes[id] = NetManager.instance.m_nodes.m_buffer[id].m_buildIndex;
+
+            public bool OwnsSegment(ushort id)
+            {
+                uint stamp;
+                var s = NetManager.instance.m_segments.m_buffer[id];
+                return segments.TryGetValue(id, out stamp) && (s.m_flags & NetSegment.Flags.Created) != NetSegment.Flags.None &&
+                       s.m_buildIndex == stamp;
+            }
+
+            public bool OwnsNode(ushort id)
+            {
+                uint stamp;
+                return nodes.TryGetValue(id, out stamp) && NodeExists(id) && NetManager.instance.m_nodes.m_buffer[id].m_buildIndex == stamp;
+            }
+
+            public void Replace(ushort oldSegment, ushort newSegment)
+            {
+                if (!segments.Remove(oldSegment)) return;
+                Segment(newSegment);
+            }
         }
 
         // Simulation thread: nodes at both ends of every segment of the last build.
@@ -34,8 +68,11 @@ namespace RealisticRoads
             public readonly List<ushort> Segments = new List<ushort>();
             public readonly List<ushort> Nodes = new List<ushort>();   // nodes we created (not snapped ones)
             public readonly List<Split> Splits = new List<Split>();
+            public readonly Stamps Stamps = new Stamps();
             // Existing nodes we moved (overpass lowering) and where they were.
             public readonly List<KeyValuePair<ushort, Vector3>> Moves = new List<KeyValuePair<ushort, Vector3>>();
+            public int Paid;                         // construction cost charged (refunded on undo)
+            public ItemClass PaidClass;
         }
 
         // Only touched on the simulation thread.
@@ -75,9 +112,21 @@ namespace RealisticRoads
                 var points = plan.Points;
                 int last = points.Count - 1;
 
+                // Room for everything first: running out half way through a cut
+                // would leave the crossed road broken.
+                int needNodes = points.Count + 3 * plan.Crossings.Count + 8;
+                int needSegments = points.Count + 4 * plan.Crossings.Count + 8;
+                if (net.m_nodes.ItemCount() + needNodes > NetManager.MAX_NODE_COUNT - 64 ||
+                    net.m_segments.ItemCount() + needSegments > NetManager.MAX_SEGMENT_COUNT - 64)
+                    throw new Exception("the city has no room for this many more road nodes/segments (the game's limit)");
+
+                // Pay for it first, like the vanilla road tool (not in the editors).
+                if (!Pay(info, plan, build)) return false;
+
                 var nodeIds = new ushort[points.Count];
                 if (NodeExists(plan.StartNode)) nodeIds[0] = plan.StartNode;
                 if (NodeExists(plan.EndNode)) nodeIds[last] = plan.EndNode;
+                JoinMidRoad(plan, nodeIds, points, build);
 
                 // Existing network first: junctions / level crossings split the
                 // existing segment at the crossing; underpasses put a short
@@ -105,8 +154,7 @@ namespace RealisticRoads
                         // dropped into the cutting, and its nodes on both sides moved down
                         // along the ramp.
                         var lowering = plan.Lowerings[c];
-                        var split = SplitSegment(crossing.Segment, lowering.SplitAt, null);
-                        build.Splits.Add(split);
+                        var split = SplitSegment(crossing.Segment, lowering.SplitAt, null, build);
                         for (int i = 0; i < split.Nodes.Count; i++)
                         {
                             Vector3 position = net.m_nodes.m_buffer[split.Nodes[i]].m_position;
@@ -163,8 +211,7 @@ namespace RealisticRoads
                         }
                         if (cutAt.Count > 0)
                         {
-                            var split = SplitSegment(crossing.Segment, cutAt.ToArray(), null);
-                            build.Splits.Add(split);
+                            var split = SplitSegment(crossing.Segment, cutAt.ToArray(), null, build);
                             int next = 0;
                             ushort previous = 0;
                             foreach (int k in cutFor)
@@ -185,7 +232,7 @@ namespace RealisticRoads
                         float half = (info.m_halfWidth / crossing.Skew + UnderpassBridgeExtra) / length;
                         float t0 = Mathf.Max(crossing.ExistingT - half, 0.05f);
                         float t1 = Mathf.Min(crossing.ExistingT + half, 0.95f);
-                        build.Splits.Add(SplitSegment(crossing.Segment, new[] { t0, t1 }, new[] { existing, bridge, existing }));
+                        SplitSegment(crossing.Segment, new[] { t0, t1 }, new[] { existing, bridge, existing }, build);
                     }
                 }
 
@@ -214,6 +261,7 @@ namespace RealisticRoads
                     if (plan.Middle != null && plan.Middle[i]) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Double;
                     nodeIds[i] = node;
                     build.Nodes.Add(node);
+                    build.Stamps.Node(node);
                 }
 
                 // Our segments: directions follow the curve, with the slope between the two nodes.
@@ -258,6 +306,7 @@ namespace RealisticRoads
                     CalculateSegmentDirections(segment);
                     sim.m_currentBuildIndex++;
                     build.Segments.Add(segment);
+                    build.Stamps.Segment(segment);
                 }
 
                 int middles = 0;
@@ -268,12 +317,11 @@ namespace RealisticRoads
                 for (int c = 0; c < plan.Crossings.Count; c++)
                     Mod.Log("  Crossing " + (c + 1) + " with " + plan.Crossings[c].ExistingName + ": " + plan.Crossings[c].Describe());
 
+                // Junctions this build made: our own nodes and the cuts in existing
+                // roads (not existing junctions we only connected to).
                 lastBuiltEnds.Clear();
-                foreach (ushort segment in build.Segments)
-                {
-                    lastBuiltEnds.Add(net.m_segments.m_buffer[segment].m_startNode);
-                    lastBuiltEnds.Add(net.m_segments.m_buffer[segment].m_endNode);
-                }
+                foreach (ushort node in build.Nodes) lastBuiltEnds.Add(node);
+                foreach (var split in build.Splits) foreach (ushort node in split.Nodes) lastBuiltEnds.Add(node);
                 undoStack.Add(build);
                 if (undoStack.Count > MaxUndo) undoStack.RemoveAt(0);
                 Mod.Log("Built " + build.Segments.Count + " segment(s) of " + info.name +
@@ -288,8 +336,107 @@ namespace RealisticRoads
             {
                 Mod.LogError("Building the curve failed; undoing the part that was built", e);
                 Remove(build);
+                Refund(build);
                 return false;
             }
+        }
+
+        // What the vanilla tool would charge for the new segments (the road's
+        // own price per piece, by length and height). Changes to the roads we
+        // cross aren't charged. Any thread.
+        public static int Cost(NetInfo info, Plan plan)
+        {
+            long total = 0;
+            var terrain = TerrainManager.instance;
+            for (int i = 1; i < plan.Points.Count; i++)
+            {
+                NetInfo piece = RoadPlanner.SegmentInfo(info, plan.Kinds[i - 1], plan.Kinds[i]) ?? info;
+                if (piece.m_netAI == null) continue;
+                Vector3 a = plan.Points[i - 1], b = plan.Points[i];
+                float ha = a.y - terrain.SampleRawHeightSmooth(a), hb = b.y - terrain.SampleRawHeightSmooth(b);
+                total += piece.m_netAI.GetConstructionCost(a, b, ha, hb);
+            }
+            return (int)Math.Min(total, int.MaxValue);
+        }
+
+        // Enum values looked up by name: compiled-in numbers could be wrong.
+        private static EconomyManager.Resource ResourceNamed(string name) =>
+            (EconomyManager.Resource)Enum.Parse(typeof(EconomyManager.Resource), name);
+
+        private static bool InGame()
+        {
+            try
+            {
+                var game = (ItemClass.Availability)Enum.Parse(typeof(ItemClass.Availability), "Game");
+                return (ToolManager.instance.m_properties.m_mode & game) != 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool Pay(NetInfo info, Plan plan, Build build)
+        {
+            if (!InGame()) return true;
+            int cost = Cost(info, plan);
+            if (cost <= 0) return true;
+            var economy = EconomyManager.instance;
+            var construction = ResourceNamed("Construction");
+            if (economy.PeekResource(construction, cost) != cost)
+            {
+                Mod.Log("Not built: it costs " + (cost / 100) + " and the city can't afford it");
+                return false;
+            }
+            economy.FetchResource(construction, cost, info.m_class);
+            build.Paid = cost;
+            build.PaidClass = info.m_class;
+            return true;
+        }
+
+        // Undo (or a failed build) gives the money back, like bulldozing a road
+        // the vanilla tool has just built.
+        private static void Refund(Build build)
+        {
+            if (build.Paid <= 0) return;
+            try
+            {
+                EconomyManager.instance.AddResource(ResourceNamed("RefundAmount"), build.Paid, build.PaidClass);
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Refunding the road failed", e);
+            }
+            build.Paid = 0;
+        }
+
+        // Ends placed on the middle of a road: cut that road there and use the
+        // new node as the end (a T-junction). Both ends on the same road: one cut
+        // with two nodes.
+        private static void JoinMidRoad(Plan plan, ushort[] nodeIds, List<Vector3> points, Build build)
+        {
+            int last = points.Count - 1;
+            var net = NetManager.instance;
+            bool start = plan.StartSegment != 0 && nodeIds[0] == 0;
+            bool end = plan.EndSegment != 0 && nodeIds[last] == 0;
+            foreach (ushort segment in new[] { start ? plan.StartSegment : (ushort)0, end ? plan.EndSegment : (ushort)0 })
+                if (segment != 0 && (net.m_segments.m_buffer[segment].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None)
+                    throw new Exception("the road the curve starts or ends on no longer exists");
+
+            if (start && end && plan.StartSegment == plan.EndSegment)
+            {
+                bool startFirst = plan.StartT <= plan.EndT;
+                var split = SplitSegment(plan.StartSegment, startFirst ? new[] { plan.StartT, plan.EndT } : new[] { plan.EndT, plan.StartT }, null, build);
+                nodeIds[0] = split.Nodes[startFirst ? 0 : 1];
+                nodeIds[last] = split.Nodes[startFirst ? 1 : 0];
+            }
+            else
+            {
+                if (start) nodeIds[0] = SplitSegment(plan.StartSegment, new[] { plan.StartT }, null, build).Nodes[0];
+                if (end) nodeIds[last] = SplitSegment(plan.EndSegment, new[] { plan.EndT }, null, build).Nodes[0];
+            }
+            if (start) points[0] = net.m_nodes.m_buffer[nodeIds[0]].m_position;
+            if (end) points[last] = net.m_nodes.m_buffer[nodeIds[last]].m_position;
         }
 
         private static void UndoNow()
@@ -302,6 +449,7 @@ namespace RealisticRoads
             var build = undoStack[undoStack.Count - 1];
             undoStack.RemoveAt(undoStack.Count - 1);
             Remove(build);
+            Refund(build);
             Mod.Log("Undo: removed " + build.Segments.Count + " segment(s)" +
                     (build.Splits.Count > 0 ? " and restored " + build.Splits.Count + " existing segment(s)" : ""));
         }
@@ -312,9 +460,10 @@ namespace RealisticRoads
         private static void Remove(Build build)
         {
             var net = NetManager.instance;
-            foreach (var segment in build.Segments) ReleaseSegmentIfExists(segment);
+            foreach (var segment in build.Segments)
+                if (build.Stamps.OwnsSegment(segment)) net.ReleaseSegment(segment, true);
             foreach (var node in build.Nodes)
-                if (NodeExists(node) && SegmentCount(node) == 0) net.ReleaseNode(node);
+                if (build.Stamps.OwnsNode(node) && SegmentCount(node) == 0) net.ReleaseNode(node);
 
             // Existing nodes we lowered go back up.
             for (int i = build.Moves.Count - 1; i >= 0; i--)
@@ -327,9 +476,20 @@ namespace RealisticRoads
             for (int i = build.Splits.Count - 1; i >= 0; i--)
             {
                 var split = build.Splits[i];
-                foreach (var segment in split.Segments) ReleaseSegmentIfExists(segment);
+                // Only put the original back if its pieces are still the ones we
+                // made: if the player bulldozed or rebuilt any of them, leave it.
+                bool intact = true;
+                foreach (var segment in split.Segments) if (!split.Stamps.OwnsSegment(segment)) intact = false;
+                if (!intact && split.Released)
+                {
+                    Mod.Log("  Left a " + split.Info.name + " as it is: it was changed after this curve was built");
+                    continue;
+                }
+                foreach (var segment in split.Segments)
+                    if (split.Stamps.OwnsSegment(segment)) net.ReleaseSegment(segment, true);
                 foreach (var node in split.Nodes)
-                    if (NodeExists(node) && SegmentCount(node) == 0) net.ReleaseNode(node);
+                    if (split.Stamps.OwnsNode(node) && SegmentCount(node) == 0) net.ReleaseNode(node);
+                if (!split.Released) continue;   // the original was never removed
                 if (!NodeExists(split.StartNode) || !NodeExists(split.EndNode))
                 {
                     Mod.Log("  Could not restore a " + split.Info.name + " segment: its end was removed");
@@ -354,24 +514,25 @@ namespace RealisticRoads
             {
                 for (int i = 0; i < build.Segments.Count; i++)
                     if (build.Segments[i] == oldSegment) build.Segments[i] = newSegment;
+                build.Stamps.Replace(oldSegment, newSegment);
                 foreach (var split in build.Splits)
+                {
                     for (int i = 0; i < split.Segments.Count; i++)
                         if (split.Segments[i] == oldSegment) split.Segments[i] = newSegment;
+                    split.Stamps.Replace(oldSegment, newSegment);
+                    if (split.Original == oldSegment) split.Original = newSegment;
+                }
             }
-        }
-
-        private static void ReleaseSegmentIfExists(ushort segment)
-        {
-            var net = NetManager.instance;
-            if ((net.m_segments.m_buffer[segment].m_flags & NetSegment.Flags.Created) != NetSegment.Flags.None)
-                net.ReleaseSegment(segment, true);
         }
 
         // Simulation thread. Cuts an existing segment at the given positions
         // along it (0..1, increasing): new nodes there, and pieces between
         // them following the original curve. pieceInfos (one per piece) lets a
         // piece become e.g. a bridge; null keeps the original type.
-        private static Split SplitSegment(ushort segment, float[] at, NetInfo[] pieceInfos)
+        // Safe order: the new nodes are made first (a failure there leaves the
+        // road untouched), and the split is in 'build' before the original is
+        // removed, so a failure after that is undone by rebuilding it.
+        private static Split SplitSegment(ushort segment, float[] at, NetInfo[] pieceInfos, Build build)
         {
             var net = NetManager.instance;
             var sim = SimulationManager.instance;
@@ -389,7 +550,8 @@ namespace RealisticRoads
 
             Vector3 a, b, c, d;
             CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
-            net.ReleaseSegment(segment, true);
+            var nodes = net.m_nodes.m_buffer;
+            bool onGround = (nodes[split.StartNode].m_flags & nodes[split.EndNode].m_flags & NetNode.Flags.OnGround) != NetNode.Flags.None;
 
             var chain = new List<ushort> { split.StartNode };
             var directions = new List<Vector3> { split.StartDirection };
@@ -400,17 +562,23 @@ namespace RealisticRoads
                 float flat = Mathf.Max(Mathf.Sqrt(derivative.x * derivative.x + derivative.z * derivative.z), 0.0001f);
                 ushort node;
                 if (!net.CreateNode(out node, ref sim.m_randomizer, split.Info, position, sim.m_currentBuildIndex))
-                    throw new Exception("could not add a node to " + split.Info.name);
+                {
+                    foreach (var made in split.Nodes) net.ReleaseNode(made);
+                    throw new Exception("could not add a node to " + split.Info.name + " (it is left as it was)");
+                }
                 sim.m_currentBuildIndex++;
                 // A cut in a road on the ground stays on the ground.
-                var nodes = net.m_nodes.m_buffer;
-                if ((nodes[split.StartNode].m_flags & nodes[split.EndNode].m_flags & NetNode.Flags.OnGround) != NetNode.Flags.None)
-                    nodes[node].m_flags |= NetNode.Flags.OnGround;
+                if (onGround) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.OnGround;
                 split.Nodes.Add(node);
+                split.Stamps.Node(node);
                 chain.Add(node);
                 directions.Add(new Vector3(derivative.x / flat, 0f, derivative.z / flat));
             }
             chain.Add(split.EndNode);
+
+            build.Splits.Add(split);
+            net.ReleaseSegment(segment, true);
+            split.Released = true;
 
             for (int i = 1; i < chain.Count; i++)
             {
@@ -424,6 +592,7 @@ namespace RealisticRoads
                 sim.m_currentBuildIndex++;
                 CalculateSegmentDirections(piece);
                 split.Segments.Add(piece);
+                split.Stamps.Segment(piece);
             }
             return split;
         }

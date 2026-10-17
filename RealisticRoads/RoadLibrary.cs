@@ -132,13 +132,22 @@ namespace RealisticRoads
             try
             {
                 var configs = RoadLibrary.Deserialize(serializableDataManager.LoadData(RoadLibrary.DataId));
+                var names = new List<string>();
                 foreach (var config in configs)
                 {
+                    names.Add(config.Name);
                     if (RoadLibrary.Find(config.Id) != null) continue;
                     RoadLibrary.Save(config);
-                    Mod.Log("Road builder: '" + config.Name + "' came with this city and was added to your library. " +
-                            "If its roads are missing, don't save: load the city again.");
+                    Mod.Log("Road builder: '" + config.Name + "' came with this city and was added to your library");
                 }
+                // The road types are made only after the city has loaded, so the
+                // game could not match this city's roads of them: they are missing.
+                // Shown on screen once the city is up (Loading.OnLevelLoaded).
+                if (names.Count > 0)
+                    Mod.WarnAfterLoad("Road builder roads missing",
+                        "This city was saved with road builder roads (" + string.Join(", ", names.ToArray()) + "). " +
+                        "This version of Realistic Roads can't load them yet, so those roads are missing now.\n\n" +
+                        "Don't save over this city if you want to keep them: quit without saving.");
             }
             catch (Exception e)
             {
