@@ -175,92 +175,79 @@ namespace RealisticRoads
     }
 
     // Smooth splits and CS2-style junctions: don't draw the vanilla junction
-    // pieces (seam strip, crosswalks, median blocks) close up. Like Node
-    // Controller, only the check "should this piece be drawn here"
-    // (NetInfo.Node.CheckFlags) answers no for our nodes, inside the private
-    // RenderInstance that draws one junction piece. Every loop and the render
-    // list walk stay exactly as the game wrote them: making the piece list look
-    // empty instead broke that walk ("Invalid list detected!" every frame).
+    // pieces (seam strip, crosswalks, median blocks) close up. The private
+    // NetNode.RenderInstance draws one piece of a node and then steps the
+    // render list on (instanceIndex = data.m_nextInstance); for our nodes we
+    // skip it but still step the list, so the game's loop ends normally. No IL
+    // is rewritten.
+    [HarmonyPatch]
+    public static class NodePieceRenderPatch
+    {
+        private static bool failed;
+
+        public static MethodBase TargetMethod()
+        {
+            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (method.Name != "RenderInstance") continue;
+                var parameters = method.GetParameters();
+                bool hasNode = false, hasIndex = false, hasData = false;
+                foreach (var p in parameters)
+                {
+                    if (p.Name == "nodeID" && p.ParameterType == typeof(ushort)) hasNode = true;
+                    if (p.Name == "instanceIndex" && p.ParameterType == typeof(uint).MakeByRefType()) hasIndex = true;
+                    if (p.Name == "data" && p.ParameterType == typeof(RenderManager.Instance).MakeByRefType()) hasData = true;
+                }
+                if (hasNode && hasIndex && hasData) return method;
+            }
+            throw new Exception("NetNode.RenderInstance(..., nodeID, ..., ref instanceIndex, ref data) not found");
+        }
+
+        public static bool Prefix(ushort nodeID, ref uint instanceIndex, ref RenderManager.Instance data)
+        {
+            if (failed) return true;
+            try
+            {
+                if (!SmoothSplits.IsEnabled(nodeID) && !Junctions.IsEnabled(nodeID)) return true;
+                instanceIndex = data.m_nextInstance;
+                return false;
+            }
+            catch (Exception e)
+            {
+                failed = true;
+                Mod.LogError("Hiding junction pieces failed; vanilla junction pieces are drawn", e);
+                return true;
+            }
+        }
+    }
+
+    // Our own CS2-style junction surface, after the game has drawn the node
+    // (the public RenderInstance: once per node and frame).
     [HarmonyPatch]
     public static class NodeRenderPatch
     {
-        public static IEnumerable<MethodBase> TargetMethods()
+        public static MethodBase TargetMethod()
         {
-            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (method.Name != "RenderInstance") continue;
                 var parameters = method.GetParameters();
                 if (parameters.Length > 1 && parameters[1].Name == "nodeID" && parameters[1].ParameterType == typeof(ushort))
-                    yield return method;
+                    return method;
             }
+            throw new Exception("NetNode.RenderInstance(cameraInfo, nodeID, layerMask) not found");
         }
 
-        // Public overload: untouched. Private one: CheckFlags redirected.
-        public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
+        public static void Postfix(ushort nodeID, object[] __args)
         {
-            if (original.IsPublic) return instructions;
-            return NodeMeshes.HidePieces(instructions, original);
-        }
-
-        // After the node is drawn (the public overload, once per node and
-        // frame): our own junction surface.
-        public static void Postfix(ushort nodeID, MethodBase __originalMethod, object[] __args)
-        {
-            // Public overload: (cameraInfo, nodeID, layerMask). If a game update
-            // changes that, draw in every pass rather than never.
-            if (!__originalMethod.IsPublic) return;
+            // (cameraInfo, nodeID, layerMask). If a game update changes that,
+            // draw in every pass rather than never.
             JunctionRenderer.Render(nodeID, __args.Length > 2 && __args[2] is int ? (int)__args[2] : -1);
         }
     }
 
     public static class NodeMeshes
     {
-        // Replaces "node.CheckFlags(flags)" with NodeMeshes.CheckFlags(node,
-        // flags, nodeID): the stack keeps its shape, so nothing else changes.
-        public static IEnumerable<CodeInstruction> HidePieces(IEnumerable<CodeInstruction> instructions, MethodBase method)
-        {
-            var original = typeof(NetInfo.Node).GetMethod("CheckFlags", new[] { typeof(NetNode.Flags) });
-            var replacement = typeof(NodeMeshes).GetMethod(nameof(CheckFlags), BindingFlags.Public | BindingFlags.Static);
-            int nodeIdArg = -1;
-            var parameters = method.GetParameters();
-            for (int i = 0; i < parameters.Length; i++)
-                if (parameters[i].Name == "nodeID" && parameters[i].ParameterType == typeof(ushort)) nodeIdArg = i + 1;   // arg 0 is the node itself
-            var result = new List<CodeInstruction>();
-            int count = 0;
-            foreach (var instruction in instructions)
-            {
-                if (original != null && nodeIdArg > 0 && (instruction.opcode == OpCodes.Call || instruction.opcode == OpCodes.Callvirt) &&
-                    Equals(instruction.operand, original))
-                {
-                    // Jumps to the old call now land on the added load.
-                    var load = new CodeInstruction(OpCodes.Ldarg_S, (byte)nodeIdArg);
-                    load.labels.AddRange(instruction.labels);
-                    load.blocks.AddRange(instruction.blocks);
-                    result.Add(load);
-                    result.Add(new CodeInstruction(OpCodes.Call, replacement));
-                    count++;
-                    continue;
-                }
-                result.Add(instruction);
-            }
-            Mod.Log("Junction piece checks redirected in " + method.Name + ": " + count +
-                    (count == 0 ? " (vanilla junction pieces stay visible under smooth splits and CS2-style junctions)" : ""));
-            return result;
-        }
-
-        public static bool CheckFlags(NetInfo.Node node, NetNode.Flags flags, ushort nodeID)
-        {
-            if (!node.CheckFlags(flags)) return false;
-            try
-            {
-                return !(SmoothSplits.IsEnabled(nodeID) || Junctions.IsEnabled(nodeID));
-            }
-            catch
-            {
-                return true;
-            }
-        }
-
         // After every "info.m_nodes.Length", pass the length and the node
         // through 'filter', which returns 0 for nodes whose pieces we hide.
         public static IEnumerable<CodeInstruction> HideNodeMeshes(IEnumerable<CodeInstruction> instructions, OpCode loadNodeId, MethodInfo filter)
