@@ -176,9 +176,11 @@ namespace RealisticRoads
 
     // Smooth splits and CS2-style junctions: don't draw the vanilla junction
     // pieces (seam strip, crosswalks, median blocks) close up. Like Node
-    // Controller, the road's list of junction pieces reads as empty for our
-    // nodes inside NetNode.RenderInstance, so everything else the method does
-    // (props, the render list) carries on as normal.
+    // Controller, only the check "should this piece be drawn here"
+    // (NetInfo.Node.CheckFlags) answers no for our nodes, inside the private
+    // RenderInstance that draws one junction piece. Every loop and the render
+    // list walk stay exactly as the game wrote them: making the piece list look
+    // empty instead broke that walk ("Invalid list detected!" every frame).
     [HarmonyPatch]
     public static class NodeRenderPatch
     {
@@ -193,15 +195,15 @@ namespace RealisticRoads
             }
         }
 
-        public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        // Public overload: untouched. Private one: CheckFlags redirected.
+        public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
         {
-            return NodeMeshes.HideNodeMeshes(instructions, OpCodes.Ldarg_2,
-                typeof(NodeMeshes).GetMethod(nameof(NodeMeshes.CloseUpLength), BindingFlags.Public | BindingFlags.Static));
+            if (original.IsPublic) return instructions;
+            return NodeMeshes.HidePieces(instructions, original);
         }
 
         // After the node is drawn (the public overload, once per node and
-        // frame; the private one runs once per junction piece): our own
-        // junction surface.
+        // frame): our own junction surface.
         public static void Postfix(ushort nodeID, MethodBase __originalMethod, object[] __args)
         {
             // Public overload: (cameraInfo, nodeID, layerMask). If a game update
@@ -213,6 +215,52 @@ namespace RealisticRoads
 
     public static class NodeMeshes
     {
+        // Replaces "node.CheckFlags(flags)" with NodeMeshes.CheckFlags(node,
+        // flags, nodeID): the stack keeps its shape, so nothing else changes.
+        public static IEnumerable<CodeInstruction> HidePieces(IEnumerable<CodeInstruction> instructions, MethodBase method)
+        {
+            var original = typeof(NetInfo.Node).GetMethod("CheckFlags", new[] { typeof(NetNode.Flags) });
+            var replacement = typeof(NodeMeshes).GetMethod(nameof(CheckFlags), BindingFlags.Public | BindingFlags.Static);
+            int nodeIdArg = -1;
+            var parameters = method.GetParameters();
+            for (int i = 0; i < parameters.Length; i++)
+                if (parameters[i].Name == "nodeID" && parameters[i].ParameterType == typeof(ushort)) nodeIdArg = i + 1;   // arg 0 is the node itself
+            var result = new List<CodeInstruction>();
+            int count = 0;
+            foreach (var instruction in instructions)
+            {
+                if (original != null && nodeIdArg > 0 && (instruction.opcode == OpCodes.Call || instruction.opcode == OpCodes.Callvirt) &&
+                    Equals(instruction.operand, original))
+                {
+                    // Jumps to the old call now land on the added load.
+                    var load = new CodeInstruction(OpCodes.Ldarg_S, (byte)nodeIdArg);
+                    load.labels.AddRange(instruction.labels);
+                    load.blocks.AddRange(instruction.blocks);
+                    result.Add(load);
+                    result.Add(new CodeInstruction(OpCodes.Call, replacement));
+                    count++;
+                    continue;
+                }
+                result.Add(instruction);
+            }
+            Mod.Log("Junction piece checks redirected in " + method.Name + ": " + count +
+                    (count == 0 ? " (vanilla junction pieces stay visible under smooth splits and CS2-style junctions)" : ""));
+            return result;
+        }
+
+        public static bool CheckFlags(NetInfo.Node node, NetNode.Flags flags, ushort nodeID)
+        {
+            if (!node.CheckFlags(flags)) return false;
+            try
+            {
+                return !(SmoothSplits.IsEnabled(nodeID) || Junctions.IsEnabled(nodeID));
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
         // After every "info.m_nodes.Length", pass the length and the node
         // through 'filter', which returns 0 for nodes whose pieces we hide.
         public static IEnumerable<CodeInstruction> HideNodeMeshes(IEnumerable<CodeInstruction> instructions, OpCode loadNodeId, MethodInfo filter)
@@ -232,18 +280,6 @@ namespace RealisticRoads
                 previousLoadsNodes = instruction.opcode == OpCodes.Ldfld && Equals(instruction.operand, nodesField);
             }
             Mod.Log("Junction piece lookups redirected: " + count);
-        }
-
-        public static int CloseUpLength(int length, ushort nodeID)
-        {
-            try
-            {
-                return SmoothSplits.IsEnabled(nodeID) || Junctions.IsEnabled(nodeID) ? 0 : length;
-            }
-            catch
-            {
-                return length;
-            }
         }
 
         // Far away only smooth splits are hidden; CS2-style junctions keep the
