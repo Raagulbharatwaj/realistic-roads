@@ -361,9 +361,35 @@ namespace RealisticRoads
                 if (piece.m_netAI == null) continue;
                 Vector3 a = plan.Points[i - 1], b = plan.Points[i];
                 float ha = a.y - terrain.SampleRawHeightSmooth(a), hb = b.y - terrain.SampleRawHeightSmooth(b);
-                total += piece.m_netAI.GetConstructionCost(a, b, ha, hb);
+                total += PieceCost(piece, info, a, b, ha, hb);
             }
             return (int)Math.Min(total, int.MaxValue);
+        }
+
+        private static readonly HashSet<string> costFailed = new HashSet<string>();
+
+        // A road whose AI can't price itself (a mod's road not fully set up)
+        // is priced as the ground road, or free; logged once per road, not
+        // every preview frame.
+        private static long PieceCost(NetInfo piece, NetInfo ground, Vector3 a, Vector3 b, float ha, float hb)
+        {
+            foreach (var candidate in new[] { piece, ground })
+            {
+                var ai = candidate.m_netAI;
+                if (ai == null) continue;
+                if (ai.m_info == null) ai.m_info = candidate;
+                try
+                {
+                    return ai.GetConstructionCost(a, b, ha, hb);
+                }
+                catch (Exception e)
+                {
+                    bool first;
+                    lock (costFailed) first = costFailed.Add(candidate.name);
+                    if (first) Mod.LogError("Can't get the price of " + candidate.name + "; it is priced as the ground road, or free", e);
+                }
+            }
+            return 0;
         }
 
         // Enum values looked up by name: compiled-in numbers could be wrong.
