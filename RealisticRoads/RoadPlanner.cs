@@ -190,7 +190,13 @@ namespace RealisticRoads
                         // We stay at ground level on a bridge deck; the existing road goes down.
                         Fix(k, crossing.Point.y, minH, maxH, isFixed);
                         // The deck spans the lowered road and its cutting's banks.
-                        Mark(distance, k, SpanHalf(crossing, info.m_halfWidth, true) + 1f, forceBridge, false);
+                        float deckHalf = SpanHalf(crossing, info.m_halfWidth, true) + 1f;
+                        Mark(distance, k, deckHalf, forceBridge, false);
+                        // The node on the crossing is dropped later; the deck between
+                        // the side nodes must not sag below the height the lowering
+                        // was planned for, or the headroom underneath shrinks.
+                        for (int i = 0; i < n; i++)
+                            if (i != k && Mathf.Abs(distance[i] - distance[k]) <= deckHalf) minH[i] = Mathf.Max(minH[i], crossing.Point.y);
                         string problem;
                         var lowering = PlanLowering(crossing, info.m_halfWidth, plan.Tangents[k], out problem);
                         if (lowering != null) plan.Lowerings[c] = lowering;
@@ -612,7 +618,7 @@ namespace RealisticRoads
 
         // Sine of the angle between the two roads at a crossing (1 = square),
         // not below 0.35 so a very shallow crossing doesn't blow up.
-        private static float Skew(Crossing crossing, Vector3 ourDirection)
+        public static float Skew(Crossing crossing, Vector3 ourDirection)
         {
             Vector3 a, b, c, d;
             CrossingFinder.SegmentBezier(crossing.Segment, out a, out b, out c, out d);

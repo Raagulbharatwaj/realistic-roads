@@ -120,7 +120,7 @@ Junctions built with RR get the CS2 look automatically; JN changes any other jun
 2. Click a yellow junction: the vanilla junction piece (crosswalks, median blocks) is replaced by a flat asphalt
    floor and raised sidewalk corners that curve from road to road. The road ends move 3 m back for rounder corners.
 3. With the mouse over a CS2-style junction, **+** / **-** make the corners bigger / smaller (1 m steps, 0-20 m).
-   Click again to go back to vanilla.
+   Click again to go back to vanilla. **Ctrl+Z** switches the last junction you clicked back.
    **Page Up / Page Down** make the junction asphalt lighter / darker (all junctions, saved between games). The log
    shows `Junction asphalt shade X`: if you find a value that matches the roads, send it and it becomes the default.
 4. Traffic is unchanged; cars follow the new road ends. Saves keep the junctions; without the mod they are vanilla.
@@ -144,7 +144,7 @@ straight across, while the other lanes stay on the ground beside them.
    at the same distance (grey circle). Drag the **blue circle** at the junction up or down (or **Up** / **Down**) for
    the deck height, 9-40 m above the junction. The ramps are worked out at up to 6 %; the split can't come closer
    than the ramps need (the panel shows the range).
-5. **Enter** builds it; **Ctrl+Z** undoes all of it and puts the old roads back. **Esc** drops the lanes, then the
+5. **Enter** builds it; **Ctrl+Z** (in this mode) undoes the last grade separation and puts the old roads back. **Esc** drops the lanes, then the
    junction, then leaves; right-click does the same without leaving.
 
 The roads between the junction and the split are replaced, so TM:PE settings on them are lost. Where one ground part

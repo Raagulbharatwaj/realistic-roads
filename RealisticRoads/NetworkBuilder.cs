@@ -255,6 +255,11 @@ namespace RealisticRoads
                 throw new Exception("could not add a node to " + info.name);
             sim.m_currentBuildIndex++;
             if (onGround) net.m_nodes.m_buffer[cutNode].m_flags |= NetNode.Flags.OnGround;
+            else
+            {
+                float elevation = cut.y - TerrainManager.instance.SampleRawHeightSmooth(cut);
+                net.m_nodes.m_buffer[cutNode].m_elevation = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(elevation)), 0, 255);
+            }
             build.Nodes.Add(cutNode);
             build.Stamps.Node(cutNode);
 
@@ -269,6 +274,7 @@ namespace RealisticRoads
             CalculateSegmentDirections(piece);
             build.Segments.Add(piece);
             build.Stamps.Segment(piece);
+            UpdatePillar(cutNode);
             return cutNode;
         }
 
@@ -292,6 +298,7 @@ namespace RealisticRoads
                 net.m_nodes.m_buffer[node].m_elevation = record.Elevation;
                 map[record.Id] = node;
             }
+            var restoredNodes = new List<ushort>(map.Values);
             foreach (var record in build.RemovedSegments)
             {
                 ushort start, end;
@@ -311,6 +318,8 @@ namespace RealisticRoads
                     Remap(record.Id, restored);
                 }
             }
+            // Raised nodes put back get their pillars again (once their roads are back).
+            foreach (ushort node in restoredNodes) UpdatePillar(node);
         }
 
         // Only touched on the simulation thread.
@@ -333,6 +342,21 @@ namespace RealisticRoads
         public static void UndoLast()
         {
             SimulationManager.instance.AddAction(UndoNow);
+        }
+
+        // The junction tool's Ctrl+Z: only if the last build was a grade
+        // separation (RR's roads are undone in RR).
+        public static void UndoLastGradeSeparation()
+        {
+            SimulationManager.instance.AddAction(() =>
+            {
+                if (undoStack.Count == 0 || undoStack[undoStack.Count - 1].Children.Count == 0)
+                {
+                    Mod.Log("Nothing to undo here: the last thing built is not a grade separation (Ctrl+Z in RR undoes RR's roads)");
+                    return;
+                }
+                UndoNow();
+            });
         }
 
         public static void ClearUndo()
@@ -461,16 +485,7 @@ namespace RealisticRoads
                     }
                     else
                     {
-                        NetInfo existing = net.m_segments.m_buffer[crossing.Segment].Info;
-                        // Elevated piece (not the bridge one): no trusses, and no holes cut
-                        // in the ground beside its ends.
-                        NetInfo bridge = RoadPlanner.Variant(existing, "m_elevatedInfo") ?? RoadPlanner.Variant(existing, "m_bridgeInfo");
-                        if (bridge == null) throw new Exception(existing.name + " has no bridge version for the underpass");
-                        float length = Mathf.Max(net.m_segments.m_buffer[crossing.Segment].m_averageLength, 1f);
-                        float half = (info.m_halfWidth / crossing.Skew + UnderpassBridgeExtra) / length;
-                        float t0 = Mathf.Max(crossing.ExistingT - half, 0.05f);
-                        float t1 = Mathf.Min(crossing.ExistingT + half, 0.95f);
-                        SplitSegment(crossing.Segment, new[] { t0, t1 }, new[] { existing, bridge, existing }, build);
+                        BridgeOver(plan, crossing, info.m_halfWidth / crossing.Skew + UnderpassBridgeExtra, touched, build);
                     }
                 }
 
@@ -549,7 +564,17 @@ namespace RealisticRoads
 
                 // Pillars under our raised nodes. The vanilla tool adds them as its own
                 // step after building (the game doesn't), so without this the deck floats.
-                foreach (ushort node in build.Nodes) UpdatePillar(node);
+                // None on a node sitting on a road or track we bridge (one the
+                // planner couldn't drop): the pillar would stand on it.
+                var overCrossing = new HashSet<ushort>();
+                for (int c = 0; c < plan.Crossings.Count; c++)
+                {
+                    var type = plan.Crossings[c].Type;
+                    int k = plan.CrossingIndex[c];
+                    if ((type == CrossingType.Bridge || type == CrossingType.Overpass) && k >= 0 && k <= last) overCrossing.Add(nodeIds[k]);
+                }
+                foreach (ushort node in build.Nodes)
+                    if (!overCrossing.Contains(node)) UpdatePillar(node);
 
                 int middles = 0;
                 if (plan.Middle != null) foreach (bool m in plan.Middle) if (m) middles++;
@@ -582,6 +607,83 @@ namespace RealisticRoads
             }
         }
 
+        private const float MinPiece = 8f;   // no road piece shorter than this is left between cuts
+
+        // The existing road above an underpass becomes a bridge for 'reach'
+        // metres either side of the crossing, so it spans our cutting and its
+        // banks. Short of an end by less than MinPiece the bridge runs to that
+        // end; past an end it carries on into the next segment (through a
+        // plain road node), so a short segment can't leave the bridge's end
+        // standing in the cutting.
+        private static void BridgeOver(Plan plan, Crossing crossing, float reach, HashSet<ushort> touched, Build build)
+        {
+            var net = NetManager.instance;
+            var s = net.m_segments.m_buffer[crossing.Segment];
+            NetInfo existing = s.Info;
+            NetInfo bridge = UnderpassBridge(existing);
+            float length = Mathf.Max(s.m_averageLength, 1f);
+            float at = crossing.ExistingT * length;
+            float from = at - reach, to = at + reach;
+
+            var cuts = new List<float>();
+            var infos = new List<NetInfo>();
+            if (from > MinPiece)
+            {
+                cuts.Add(from / length);
+                infos.Add(existing);
+            }
+            infos.Add(bridge);
+            if (to < length - MinPiece)
+            {
+                cuts.Add(to / length);
+                infos.Add(existing);
+            }
+            ushort startNode = s.m_startNode, endNode = s.m_endNode;
+            SplitSegment(crossing.Segment, cuts.ToArray(), infos.ToArray(), build);
+            if (from < 0f) ContinueBridge(plan, startNode, crossing.Segment, -from, touched, build);
+            if (to > length) ContinueBridge(plan, endNode, crossing.Segment, to - length, touched, build);
+        }
+
+        private static NetInfo UnderpassBridge(NetInfo existing)
+        {
+            // Elevated piece (not the bridge one): no trusses, and no holes cut
+            // in the ground beside its ends.
+            NetInfo bridge = RoadPlanner.Variant(existing, "m_elevatedInfo") ?? RoadPlanner.Variant(existing, "m_bridgeInfo");
+            if (bridge == null) throw new Exception(existing.name + " has no bridge version for the underpass");
+            return bridge;
+        }
+
+        // The underpass bridge reaching 'metres' past 'node' into the road
+        // carrying on there. Not into a junction, or a road the curve also crosses.
+        private static void ContinueBridge(Plan plan, ushort node, ushort from, float metres, HashSet<ushort> touched, Build build)
+        {
+            var net = NetManager.instance;
+            if (!NodeExists(node) || SegmentCount(node) != 2) return;
+            ushort next = 0;
+            for (int i = 0; i < 8; i++)
+            {
+                ushort segment = net.m_nodes.m_buffer[node].GetSegment(i);
+                if (segment != 0 && segment != from) next = segment;
+            }
+            if (next == 0 || touched.Contains(next)) return;
+            foreach (var other in plan.Crossings) if (other.Segment == next) return;
+            touched.Add(next);
+
+            var s = net.m_segments.m_buffer[next];
+            NetInfo existing = s.Info;
+            NetInfo bridge = RoadPlanner.Variant(existing, "m_elevatedInfo") ?? RoadPlanner.Variant(existing, "m_bridgeInfo");
+            if (bridge == null) return;
+            float length = Mathf.Max(s.m_averageLength, 1f);
+            if (metres > length - MinPiece)
+            {
+                SplitSegment(next, new float[0], new[] { bridge }, build);
+                return;
+            }
+            bool fromStart = s.m_startNode == node;
+            float t = fromStart ? metres / length : 1f - metres / length;
+            SplitSegment(next, new[] { t }, fromStart ? new[] { bridge, existing } : new[] { existing, bridge }, build);
+        }
+
         // What the vanilla tool would charge for the new segments (the road's
         // own price per piece, by length and height). Changes to the roads we
         // cross aren't charged. Any thread.
@@ -611,6 +713,9 @@ namespace RealisticRoads
             {
                 var ai = candidate.m_netAI;
                 if (ai == null) continue;
+                bool failed;
+                lock (costFailed) failed = costFailed.Contains(candidate.name);
+                if (failed) continue;
                 if (ai.m_info == null) ai.m_info = candidate;
                 try
                 {
@@ -805,19 +910,23 @@ namespace RealisticRoads
 
         private static void Remap(ushort oldSegment, ushort newSegment)
         {
-            foreach (var build in undoStack)
+            foreach (var build in undoStack) Remap(build, oldSegment, newSegment);
+        }
+
+        // Also inside a grade separation's steps, which keep their own records.
+        private static void Remap(Build build, ushort oldSegment, ushort newSegment)
+        {
+            for (int i = 0; i < build.Segments.Count; i++)
+                if (build.Segments[i] == oldSegment) build.Segments[i] = newSegment;
+            build.Stamps.Replace(oldSegment, newSegment);
+            foreach (var split in build.Splits)
             {
-                for (int i = 0; i < build.Segments.Count; i++)
-                    if (build.Segments[i] == oldSegment) build.Segments[i] = newSegment;
-                build.Stamps.Replace(oldSegment, newSegment);
-                foreach (var split in build.Splits)
-                {
-                    for (int i = 0; i < split.Segments.Count; i++)
-                        if (split.Segments[i] == oldSegment) split.Segments[i] = newSegment;
-                    split.Stamps.Replace(oldSegment, newSegment);
-                    if (split.Original == oldSegment) split.Original = newSegment;
-                }
+                for (int i = 0; i < split.Segments.Count; i++)
+                    if (split.Segments[i] == oldSegment) split.Segments[i] = newSegment;
+                split.Stamps.Replace(oldSegment, newSegment);
+                if (split.Original == oldSegment) split.Original = newSegment;
             }
+            foreach (var child in build.Children) Remap(child, oldSegment, newSegment);
         }
 
         // Simulation thread. Cuts an existing segment at the given positions

@@ -20,7 +20,8 @@ namespace RealisticRoads
     // The lanes split off, rise and fly over the junction to the road
     // straight across; the others stay on the ground beside them.
     //
-    // Esc steps back (then leaves); Ctrl+Z undoes the last build.
+    // Esc steps back (then leaves). Ctrl+Z undoes this tool's own last change:
+    // the last look switched (look mode) or the last grade separation.
     public class JunctionTool : ToolBase
     {
         private const float MaxNodeDistance = 40f;
@@ -57,6 +58,7 @@ namespace RealisticRoads
         // Grade separation mode; main thread only.
         private bool gradeMode;
         private ushort gsJunction;
+        private readonly List<ushort> toggled = new List<ushort>();   // look mode: junctions switched, for Ctrl+Z
         private List<Leg> gsLegs = new List<Leg>();
         private Leg gsLeg;
         private int gsFrom = -1, gsTo = -1;
@@ -179,8 +181,18 @@ namespace RealisticRoads
             if (e.type == EventType.KeyDown && e.keyCode == KeyCode.Z && e.control)
             {
                 e.Use();
-                NetworkBuilder.UndoLast();
-                ClearJunction();
+                if (gradeMode)
+                {
+                    NetworkBuilder.UndoLastGradeSeparation();
+                    ClearJunction();
+                }
+                else if (toggled.Count > 0)
+                {
+                    ushort last = toggled[toggled.Count - 1];
+                    toggled.RemoveAt(toggled.Count - 1);
+                    SimulationManager.instance.AddAction(() => Junctions.Toggle(last));
+                }
+                else Mod.Log("Nothing to undo: no junction look switched in this session");
                 return;
             }
             if (gradeMode) GradeGUI(e);
@@ -221,6 +233,8 @@ namespace RealisticRoads
             if (e.type != EventType.MouseDown || e.button != 0 || m_toolController.IsInsideUI || node == 0) return;
             // Changes go through the simulation thread, like road building.
             SimulationManager.instance.AddAction(() => Junctions.Toggle(node));
+            toggled.Add(node);
+            if (toggled.Count > 50) toggled.RemoveAt(0);
             e.Use();
         }
 
@@ -384,7 +398,7 @@ namespace RealisticRoads
             }
             try
             {
-                var far = GradeSeparation.FarLeg(gsLegs, gsLeg);
+                var far = GradeSeparation.FarLeg(gsLegs, gsLeg, gsLeg.Lanes[gsFrom].Forward);
                 gsPlan = GradeSeparation.Make(gsJunction, gsLeg, far, gsFrom, gsTo, gsDistance, gsHeight);
                 if (gsPlan.Pieces.Count > 0) gsDistance = gsPlan.Distance;
                 gsHeight = gsPlan.Height;
@@ -572,7 +586,7 @@ namespace RealisticRoads
 
         private string GradeText()
         {
-            const string keys = "Tab: junction look  ·  Esc: back  ·  Ctrl+Z: undo";
+            const string keys = "Tab: junction look  ·  Esc: back  ·  Ctrl+Z: undo the last grade separation";
             if (gsJunction == 0)
                 return "Grade separation: click a junction.\n" + keys;
             if (gsLeg == null || gsFrom < 0)
@@ -609,7 +623,7 @@ namespace RealisticRoads
             string text = "Junction tool: click a junction for the CS2 look (no crosswalks or median blocks,\n" +
                           "rounded sidewalk corners); click again for vanilla. + / -: bigger / smaller corners\n" +
                           "Page Up / Down: lighter / darker asphalt (now " + JunctionRenderer.Shade.ToString("F2") + ")\n" +
-                          "Tab: grade separation (raise lanes over the junction)";
+                          "Ctrl+Z: switch the last junction back  ·  Tab: grade separation (raise lanes over the junction)";
             if (node == 0) return text;
             string reason;
             if (Junctions.IsEnabled(node))

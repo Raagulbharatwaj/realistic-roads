@@ -26,6 +26,7 @@ namespace RealisticRoads
         public NetInfo Info;                                          // of the segment at the junction
         public Vector3 Direction;                                     // away from the junction, flat
         public readonly List<LegLane> Lanes = new List<LegLane>();    // car lanes, left to right (facing the junction)
+        public readonly List<float> Ends = new List<float>();         // distance along Path to the far end of each segment
 
         public ushort First => Segments.Count > 0 ? Segments[0] : (ushort)0;
     }
@@ -133,6 +134,7 @@ namespace RealisticRoads
                     }
                     leg.Path.Add(p);
                 }
+                leg.Ends.Add(leg.Length);
                 ushort to = forward ? segments[segment].m_endNode : segments[segment].m_startNode;
                 // Carry on through plain road nodes, not through junctions or dead ends.
                 if (NetworkBuilder.SegmentCount(to) != 2) break;
@@ -209,14 +211,21 @@ namespace RealisticRoads
                    (lane.m_vehicleType & VehicleInfo.VehicleType.Car) != VehicleInfo.VehicleType.None;
         }
 
-        // The leg straight across from 'approach', or null.
-        public static Leg FarLeg(List<Leg> legs, Leg approach)
+        // The leg straight across from 'approach' that the raised lanes can
+        // land on: a road of the same kind (not a track or a path) with lanes
+        // going their way ('forward': the raised lanes go into the junction on
+        // the approach, so they leave it on the far side). Null if none.
+        public static Leg FarLeg(List<Leg> legs, Leg approach, bool forward)
         {
             Leg best = null;
             float bestDot = -Mathf.Cos(StraightAcross * Mathf.Deg2Rad);
+            var service = approach.Info.m_class != null ? approach.Info.m_class.m_service : default(ItemClass.Service);
             foreach (var leg in legs)
             {
-                if (leg == approach) continue;
+                if (leg == approach || leg.Info.m_class == null || leg.Info.m_class.m_service != service) continue;
+                bool hasWay = false;
+                foreach (var lane in leg.Lanes) if (lane.Forward != forward) hasWay = true;
+                if (!hasWay) continue;
                 float dot = Vector3.Dot(leg.Direction, approach.Direction);
                 if (dot < bestDot)
                 {
@@ -334,14 +343,21 @@ namespace RealisticRoads
                 Junction = junction, Approach = approach, Far = far,
                 Height = Mathf.Clamp(height, MinHeight, MaxHeight),
             };
-            if (far == null)
-            {
-                plan.Problems.Add("No road straight across the junction (within " + StraightAcross + " degrees) for the raised lanes to land on");
-                return plan;
-            }
             if (!IsGroup(approach, from, to))
             {
                 plan.Problems.Add("Pick lanes that all go the same way");
+                return plan;
+            }
+            if (far == null)
+            {
+                plan.Problems.Add("No road straight across the junction (within " + StraightAcross +
+                                  " degrees) with lanes going the raised lanes' way, for them to land on");
+                return plan;
+            }
+            string notGround = NotOnGround(junction, approach, far);
+            if (notGround != null)
+            {
+                plan.Problems.Add(notGround);
                 return plan;
             }
             if (from == 0 && to == approach.Lanes.Count - 1)
@@ -359,13 +375,17 @@ namespace RealisticRoads
             Vector3 junctionPosition = NetManager.instance.m_nodes.m_buffer[junction].m_position;
             float span = SpanHalf(junction, approach, far, plan);
             float converge = Converge(plan);
-            plan.MaxDistance = Mathf.Min(MaxDistance, Mathf.Min(approach.Length, far.Length) - 2f);
+            // Room for a cut to move out to the next node (cuts only move outward).
+            plan.MaxDistance = Mathf.Min(MaxDistance, Mathf.Min(approach.Length, far.Length) - 2f * CutSnap - 2f);
             plan.MinDistance = MinimumDistance(plan, junctionPosition.y, span);
             if (plan.MinDistance > plan.MaxDistance)
             {
-                plan.Problems.Add("The roads either side are too short: the ramps need " + plan.MinDistance.ToString("F0") +
-                                  " m each side at " + (Grade * 100f).ToString("F0") + " %, there are " + plan.MaxDistance.ToString("F0") +
-                                  " m before the next junction. Lower the deck.");
+                plan.Problems.Add(plan.MaxDistance < span + SideBySide + 10f
+                    ? "The roads either side are too short: there are only " + Mathf.Max(plan.MaxDistance, 0f).ToString("F0") +
+                      " m before the next junction or road end, too little for a ramp"
+                    : "The ramps would be steeper than " + (Grade * 100f).ToString("F0") + " % even with the split " +
+                      plan.MaxDistance.ToString("F0") + " m out (as far as the roads go before the next junction or road end). Lower the deck.");
+                plan.MinDistance = plan.MaxDistance = Mathf.Max(plan.MaxDistance, 0f);
                 plan.Distance = plan.MaxDistance;
                 return plan;
             }
@@ -376,6 +396,16 @@ namespace RealisticRoads
             Cut(far, farDistance, plan.FarSegments, out plan.FarT, out plan.FarCut, ref farDistance);
 
             // The centre line in the approach frame: approach cut -> junction -> far cut.
+            // The cuts moved out to a node or past a sliver: check the ramps there.
+            float top = junctionPosition.y + plan.Height;
+            if (RampGrade(top - plan.ApproachCut.y, plan.Distance - span) > Grade + 0.002f ||
+                RampGrade(top - plan.FarCut.y, farDistance - span) > Grade + 0.002f)
+            {
+                plan.Problems.Add("The ramps would be steeper than " + (Grade * 100f).ToString("F0") +
+                                  " % with the split there: move it further out or lower the deck");
+                return plan;
+            }
+
             var aSlice = CurveMath.Slice(approach.Path, 0f, plan.Distance);
             aSlice.Reverse();
             var fSlice = CurveMath.Slice(far.Path, 0f, farDistance);
@@ -480,12 +510,34 @@ namespace RealisticRoads
                                      : why + ". No other lane group on this road works with the loaded road types either.";
         }
 
-        // Half the deck's span over the junction: past the crossing roads' edges
-        // plus room for the pillar, and past where the ground parts come back
-        // together (so no pillar stands on them).
+        // The parts are rebuilt as ground roads, so only junctions and roads on
+        // the ground: an elevated or underground one would be left floating.
+        private static string NotOnGround(ushort junction, Leg approach, Leg far)
+        {
+            var net = NetManager.instance;
+            var node = net.m_nodes.m_buffer[junction];
+            if (node.m_elevation > 2 || (node.m_flags & NetNode.Flags.Underground) != NetNode.Flags.None)
+                return "Only junctions on the ground can be grade-separated (this one is raised or underground)";
+            foreach (var leg in new[] { approach, far })
+                foreach (ushort segment in leg.Segments)
+                {
+                    var info = net.m_segments.m_buffer[segment].Info;
+                    string ai = info != null && info.m_netAI != null ? info.m_netAI.GetType().Name : "";
+                    if (ai.Contains("Bridge") || ai.Contains("Elevated") || ai.Contains("Tunnel") || ai.Contains("Slope"))
+                        return "The roads either side must be on the ground up to the split (" + info.name + " is raised or underground there)";
+                }
+            return null;
+        }
+
+        // Half the deck's span over the junction. The pillars at its ends
+        // stand under the raised part's centre line, off to the side by its
+        // offset; they must clear every crossing road's edge (with room for
+        // the pillar) on both sides of the junction, measured square to that
+        // road, and be past where the ground parts come back together.
         private static float SpanHalf(ushort junction, Leg approach, Leg far, GradePlan plan)
         {
             float half = 8f;
+            float offset = Mathf.Abs(plan.Parts.Find(p => p.Raised).Offset);
             var net = NetManager.instance;
             var node = net.m_nodes.m_buffer[junction];
             for (int i = 0; i < 8; i++)
@@ -494,10 +546,17 @@ namespace RealisticRoads
                 if (segment == 0 || segment == approach.First || segment == far.First) continue;
                 var info = net.m_segments.m_buffer[segment].Info;
                 if (info == null) continue;
-                Vector3 away = CurveMath.FlatNormal(net.m_segments.m_buffer[segment].m_startNode == junction
+                Vector3 road = CurveMath.FlatNormal(net.m_segments.m_buffer[segment].m_startNode == junction
                     ? net.m_segments.m_buffer[segment].m_startDirection : net.m_segments.m_buffer[segment].m_endDirection);
-                float skew = Mathf.Max(Mathf.Abs(away.x * approach.Direction.z - away.z * approach.Direction.x), 0.35f);
-                half = Mathf.Max(half, info.m_halfWidth / skew + RoadPlanner.PillarClearance);
+                foreach (var side in new[] { approach.Direction, far.Direction })
+                {
+                    // A pillar d out along 'side' and 'offset' to its side is
+                    // d * |side x road| - offset * |across x road| from that road's centre line.
+                    Vector3 across = CurveMath.Left(side);
+                    float along = Mathf.Max(Mathf.Abs(side.x * road.z - side.z * road.x), 0.35f);
+                    float sideways = Mathf.Abs(across.x * road.z - across.z * road.x);
+                    half = Mathf.Max(half, (info.m_halfWidth + RoadPlanner.PillarClearance + offset * sideways) / along);
+                }
             }
             return Mathf.Max(half, Converge(plan) + RoadPlanner.PillarClearance);
         }
@@ -544,45 +603,46 @@ namespace RealisticRoads
         }
 
         // Where the leg is cut: the segments to remove and the cut on the last
-        // one. Near a node the node itself is used ('distance' moves to it).
+        // one. A cut only ever moves outward (ramps get longer, not steeper):
+        // just short of a plain road node it uses that node, and just past one
+        // it moves a little further on, so no sliver of road is left.
         private static void Cut(Leg leg, float distance, List<ushort> segments, out float t, out Vector3 cut, ref float actual)
         {
             var net = NetManager.instance;
             var nodes = net.m_nodes.m_buffer;
             ushort from = leg.Junction;
-            float travelled = 0f;
+            float start = 0f;
             t = -1f;
             cut = Vector3.zero;
-            foreach (ushort segment in leg.Segments)
+            for (int i = 0; i < leg.Segments.Count; i++)
             {
+                ushort segment = leg.Segments[i];
                 var s = net.m_segments.m_buffer[segment];
                 ushort to = s.m_startNode == from ? s.m_endNode : s.m_startNode;
-                float length = Mathf.Max(s.m_averageLength, 0.1f);
+                float end = leg.Ends[i];
                 segments.Add(segment);
-                if (travelled + length + CutSnap >= distance)
+                if (distance - start < CutSnap) distance = start + CutSnap;
+                bool plainNode = NetworkBuilder.SegmentCount(to) == 2 && i < leg.Segments.Count - 1;
+                if (distance >= end - CutSnap && distance <= end && plainNode)
                 {
-                    float into = distance - travelled;
-                    if (into >= length - CutSnap)
-                    {
-                        // At (or just short of) the far node: remove the segment whole.
-                        actual = travelled + length;
-                        cut = nodes[to].m_position;
-                        return;
-                    }
-                    // Just past the previous node: a little further on, so the
-                    // piece left between them isn't a sliver (the ramps only get gentler).
-                    if (into < CutSnap) distance = travelled + CutSnap;
-                    Vector3 point, tangent;
-                    CurveMath.PointAt(leg.Path, distance, out point, out tangent);
-                    float along = CrossingFinder.ClosestT(segment, point, out cut);
-                    t = Mathf.Clamp(along, 0.02f, 0.98f);
-                    actual = distance;
+                    // At (or just short of) the node: remove the segment whole.
+                    actual = end;
+                    cut = nodes[to].m_position;
                     return;
                 }
-                travelled += length;
+                if (distance < end - CutSnap || !plainNode)
+                {
+                    Vector3 point, tangent;
+                    CurveMath.PointAt(leg.Path, Mathf.Min(distance, end - CutSnap), out point, out tangent);
+                    float along = CrossingFinder.ClosestT(segment, point, out cut);
+                    t = Mathf.Clamp(along, 0.02f, 0.98f);
+                    actual = Mathf.Min(distance, end - CutSnap);
+                    return;
+                }
+                start = end;
                 from = to;
             }
-            actual = travelled;
+            actual = start;
             cut = nodes[from].m_position;
         }
 
