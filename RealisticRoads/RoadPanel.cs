@@ -19,6 +19,9 @@ namespace RealisticRoads
         public readonly List<string> Warnings = new List<string>();
         public bool CanBuild;
         public bool HasPoints;
+        public bool Straight;                     // the next piece is straight (else curved)
+        public float Radius;                      // corners between straight pieces (0: sharp)
+        public bool Snapping;                     // straight pieces snap their angle and length
         public PanelProfile Profile;              // the curve seen from the side (null: nothing to show)
         public string ProfileText = "";           // highest / deepest / steepest
     }
@@ -95,6 +98,18 @@ namespace RealisticRoads
         private PanelModel current;
 
         public Action Build, Undo, Close, GameTool;
+        // The DRAW bar: straight or curved pieces, corner radius, snapping, and
+        // a typed length / turn for the next point (submitted: place it).
+        public Action<bool> SetStraight;
+        public Action<float> ChangeRadius;
+        public Action ToggleSnap;
+        public Action<string, string> Typed;
+        public Action TypedSubmit;
+        private UIButton curveButton, straightButton, snapButton;
+        private UILabel radiusLabel;
+        private UITextField lengthField, turnField;
+        private const float BarTop = 46f;
+        private const float ContentTop = BarTop + 64f;   // the rows below the DRAW bar
         private UIButton buildButton, undoButton;
         private const int PageSize = 5;             // items along the road shown at a time
         private int page;                           // which PageSize items are shown
@@ -160,8 +175,141 @@ namespace RealisticRoads
                 "Build it (Enter, or double-click the last point)", () => { if (Build != null) Build(); });
             SetEnabled(buildButton, false);
             SetEnabled(undoButton, false);
+            CreateDrawBar();
 
             panel.isVisible = false;
+        }
+
+        // --- the DRAW bar (made once; only its state changes) ----------------------
+
+        private void CreateDrawBar()
+        {
+            float y = BarTop;
+            curveButton = BarButton(Icons.Curve, "C", "Curved pieces: the road bends smoothly through the points (Tab)", Pad, y,
+                () => { if (SetStraight != null) SetStraight(false); });
+            straightButton = BarButton(Icons.Straight, "S", "Straight pieces, with rounded corners between them (Tab)\n" +
+                "Snaps to 15° turns, along or across nearby roads, and 8 m lengths; hold Shift to draw freely", Pad + IconSize + 3f, y,
+                () => { if (SetStraight != null) SetStraight(true); });
+            snapButton = BarButton(Icons.Snap, "Sn", "Snapping for straight pieces (on: green)", Pad + 2f * (IconSize + 3f) + 8f, y,
+                () => { if (ToggleSnap != null) ToggleSnap(); });
+            float x = Pad + 3f * (IconSize + 3f) + 20f;
+            BarLabel("Corner", x, y + 8f, 46f);
+            BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner)", x + 48f, y,
+                () => { if (ChangeRadius != null) ChangeRadius(-CurveTool.RadiusStep); });
+            radiusLabel = BarLabel("", x + 48f + IconSize, y + 8f, 54f);
+            radiusLabel.textAlignment = UIHorizontalAlignment.Center;
+            BarButton(Icons.Plus, "+", "Wider corners between straight pieces", x + 102f + IconSize, y,
+                () => { if (ChangeRadius != null) ChangeRadius(CurveTool.RadiusStep); });
+
+            y += IconSize + 6f;
+            BarLabel("Length", Pad, y + 4f, 48f);
+            lengthField = BarField(Pad + 50f, y, 62f, "Length of the next piece in metres; Enter places the point");
+            BarLabel("m", Pad + 116f, y + 4f, 16f);
+            BarLabel("Turn", Pad + 140f, y + 4f, 36f);
+            turnField = BarField(Pad + 176f, y, 52f,
+                "Turn from the last piece in degrees: + right, - left (the first piece: bearing from north); Enter places the point");
+            BarLabel("° (+ right)", Pad + 232f, y + 4f, 84f);
+        }
+
+        private UIButton BarButton(string icon, string letter, string tooltip, float x, float y, Action onClick)
+        {
+            var button = (UIButton)panel.AddUIComponent(typeof(UIButton));
+            button.size = new Vector2(IconSize, IconSize);
+            button.relativePosition = new Vector3(x, y);
+            button.tooltip = tooltip;
+            if (Icons.Has(icon, Icons.Background, Icons.BackgroundHover, Icons.BackgroundSelected))
+            {
+                button.atlas = Icons.Atlas;
+                button.normalFgSprite = button.hoveredFgSprite = button.pressedFgSprite = button.focusedFgSprite = icon;
+                button.normalBgSprite = button.focusedBgSprite = Icons.Background;
+                button.hoveredBgSprite = Icons.BackgroundHover;
+                button.pressedBgSprite = Icons.BackgroundSelected;
+            }
+            else
+            {
+                button.normalBgSprite = button.focusedBgSprite = "ButtonMenu";
+                button.hoveredBgSprite = "ButtonMenuHovered";
+                button.pressedBgSprite = "ButtonMenuPressed";
+                button.text = letter;
+                button.textScale = 0.8f;
+            }
+            button.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0) onClick(); };
+            return button;
+        }
+
+        private UILabel BarLabel(string text, float x, float y, float width)
+        {
+            var label = (UILabel)panel.AddUIComponent(typeof(UILabel));
+            label.autoSize = false;
+            label.size = new Vector2(width, 16f);
+            label.textScale = 0.75f;
+            label.textColor = DimColor;
+            label.relativePosition = new Vector3(x, y);
+            label.isInteractive = false;
+            label.text = text;
+            return label;
+        }
+
+        private UITextField BarField(float x, float y, float width, string tooltip)
+        {
+            var field = (UITextField)panel.AddUIComponent(typeof(UITextField));
+            field.size = new Vector2(width, 22f);
+            field.relativePosition = new Vector3(x, y);
+            field.tooltip = tooltip;
+            field.normalBgSprite = "TextFieldPanel";
+            field.hoveredBgSprite = "TextFieldPanelHovered";
+            field.focusedBgSprite = "TextFieldPanel";
+            field.selectionSprite = "EmptySprite";
+            field.builtinKeyNavigation = true;
+            field.isInteractive = true;
+            field.canFocus = true;
+            field.readOnly = false;
+            field.selectOnFocus = true;
+            field.submitOnFocusLost = false;   // clicking the map afterwards must not place a second point
+            field.maxLength = 7;
+            field.textScale = 0.8f;
+            field.textColor = TextColor;
+            field.padding = new RectOffset(6, 6, 4, 0);
+            field.horizontalAlignment = UIHorizontalAlignment.Left;
+            field.eventTextChanged += (component, text) => SendTyped();
+            field.eventTextSubmitted += (component, text) =>
+            {
+                SendTyped();
+                if (TypedSubmit != null) TypedSubmit();
+            };
+            return field;
+        }
+
+        private void SendTyped()
+        {
+            if (Typed != null && lengthField != null && turnField != null) Typed(lengthField.text, turnField.text);
+        }
+
+        // After the typed point is placed: empty fields for the next one.
+        public void ClearTyped()
+        {
+            if (lengthField != null && lengthField.text != "") lengthField.text = "";
+            if (turnField != null && turnField.text != "") turnField.text = "";
+        }
+
+        private void UpdateDrawBar(PanelModel model)
+        {
+            Select(curveButton, !model.Straight);
+            Select(straightButton, model.Straight);
+            Select(snapButton, model.Snapping);
+            if (radiusLabel != null)
+            {
+                string text = model.Radius < 0.5f ? "sharp" : model.Radius.ToString("0") + " m";
+                if (radiusLabel.text != text) radiusLabel.text = text;
+            }
+        }
+
+        private static void Select(UIButton button, bool selected)
+        {
+            if (button == null) return;
+            bool icons = button.atlas == Icons.Atlas && Icons.Atlas != null;
+            string normal = icons ? (selected ? Icons.BackgroundSelected : Icons.Background) : (selected ? "ButtonMenuPressed" : "ButtonMenu");
+            if (button.normalBgSprite != normal) button.normalBgSprite = button.focusedBgSprite = normal;
         }
 
         public void Destroy()
@@ -169,6 +317,9 @@ namespace RealisticRoads
             if (panel != null) UnityEngine.Object.Destroy(panel.gameObject);
             if (profileTexture != null) UnityEngine.Object.Destroy(profileTexture);
             panel = null;
+            curveButton = straightButton = snapButton = null;
+            radiusLabel = null;
+            lengthField = turnField = null;
             profileSprite = null;
             profileTexture = null;
             drawnProfile = null;
@@ -196,6 +347,7 @@ namespace RealisticRoads
             current = model;
             SetEnabled(buildButton, model.CanBuild);
             SetEnabled(undoButton, NetworkBuilder.UndoCount > 0);
+            UpdateDrawBar(model);
             string shape = Shape(model);
             if (shape != structure)
             {
@@ -240,7 +392,7 @@ namespace RealisticRoads
             dynamic.Clear();
             texts.Clear();
             parent = panel;
-            float y = 46f;
+            float y = ContentTop;
 
             y = Header("ROAD", y);
             y = Text(m => m.Road, TextColor, 0.85f, y);

@@ -43,6 +43,9 @@ namespace RealisticRoads
         private static readonly Color JunctionColor = new Color(1f, 1f, 1f, 0.8f);
         private static readonly Color PillarColor = new Color(1f, 1f, 1f, 0.7f);
         private static readonly Color CursorColor = new Color(1f, 1f, 1f, 0.9f);
+        private static readonly Color GuideColor = new Color(1f, 1f, 1f, 0.35f);
+        private const float GuideBeyond = 150f;   // the guide line runs on this far past the point
+        private const float GuideWidth = 1.5f;
         public const float BridgeSpacing = 100f;     // spans over water (elevated pieces, pillars at each node)
         public const float BridgeMinSpacing = 40f;
         private const float WaterJoin = 60f;          // wet patches closer than this are one water crossing
@@ -80,7 +83,40 @@ namespace RealisticRoads
         // vanilla road tool's elevation), and the height the next point gets.
         // 0 on a point snapped to a road: it takes that road's height.
         private readonly List<float> pointLifts = new List<float>();
+        // Each point's piece (from the point before it): straight or curved.
+        private readonly List<bool> pointStraight = new List<bool>();
         private float lift;
+
+        // Precision drawing (the panel's DRAW bar). The next piece is straight
+        // or curved; corners between straight pieces are rounded with
+        // cornerRadius (0: sharp). Straight pieces snap their direction (15°
+        // steps, or along / across a road nearby) and length (8 m steps);
+        // Shift draws freely. A typed length or turn holds the next point to it.
+        private bool straightMode;
+        private float cornerRadius = DefaultCornerRadius;
+        private bool snapping = true;
+        private float typedLength = -1f;          // metres (-1: not typed)
+        private float typedTurn = float.NaN;      // degrees right of the last piece (or of north for the first)
+        public const float DefaultCornerRadius = 60f;
+        // Rounder than this a corner needs pieces shorter than MinSpacing to stay
+        // within MaxBend; below it the corner is sharp (0) instead.
+        public const float MinCornerRadius = 50f;
+        public const float RadiusStep = 10f;
+        public const float MaxCornerRadius = 300f;
+        private const float AngleStep = 15f;
+        private const float LengthStep = 8f;
+        private const float RoadSnapTolerance = 5f;   // degrees from along / across a road that snap to it
+        private const float RoadSnapReach = 100f;     // roads this close to the last point or the mouse count
+
+        // Where the next point goes: the mouse, snapped (main thread).
+        private bool aimValid;
+        private Vector3 aimPosition, aimMarker;
+        private ushort aimNode, aimSegment;
+        private float aimT;
+        private bool aimGuided;                   // a straight piece was snapped or typed: show its guide line
+        private Vector3 guideFrom, guideDirection;
+        private float guideLength, guideTurn;
+        private CurveMath.SnapKind guideKind;
         public const float LiftStep = 3f;       // Page Up / Page Down (Shift: 1 m)
         public const float MaxLift = 60f;
         public const float MinLift = -30f;
@@ -119,7 +155,8 @@ namespace RealisticRoads
         private class Division
         {
             public List<Vector3> Points;
-            public List<Vector3> Tangents;
+            public List<Vector3> Tangents;      // leaving each point
+            public List<Vector3> InTangents;    // arriving at it (differs at a sharp corner)
             public float Length;
             public bool Ok;
             public bool Continues;       // follows an existing road at the start or end
@@ -175,16 +212,19 @@ namespace RealisticRoads
             // worked out again when something it depends on changed (the mouse,
             // the points, a choice), and every half second for changes in the
             // city around it.
-            bool withHover = hoverValid && mouseRayValid && !planning;
-            Vector3 hover = hoverPosition;
+            UpdateAim();
+            // A typed point shows even while the mouse is over the panel (typing it).
+            bool withHover = aimValid && (mouseRayValid || aimGuided) && !planning;
+            Vector3 hover = aimPosition;
             string key = choicesVersion + "|" + points.Count + "|" + withHover + "|" +
                          Mathf.RoundToInt(hover.x * 4f) + "," + Mathf.RoundToInt(hover.y * 4f) + "," + Mathf.RoundToInt(hover.z * 4f) + "|" +
-                         hoverNode + "|" + hoverSegment + "|" + (SelectedNetwork != null ? SelectedNetwork.name : "");
+                         aimNode + "|" + aimSegment + "|" + (SelectedNetwork != null ? SelectedNetwork.name : "") + "|" +
+                         straightMode + cornerRadius;
             if (key == previewKey && ++framesSincePreview < PreviewRefreshFrames)
             {
                 // Nothing changed: the panel already shows this preview.
                 PlaceButtons();
-                UpdateCursorLabel(withHover);
+                UpdateCursorLabel(withHover && mouseRayValid);
                 return;
             }
             previewKey = key;
@@ -195,19 +235,202 @@ namespace RealisticRoads
             var liveSegments = new List<ushort>(pointSegments);
             var liveTs = new List<float>(pointTs);
             var liveLifts = new List<float>(pointLifts);
+            var liveStraight = new List<bool>(pointStraight);
             if (withHover)
             {
                 live.Add(hover);
-                liveNodes.Add(hoverNode);
-                liveSegments.Add(hoverSegment);
-                liveTs.Add(hoverT);
-                liveLifts.Add(LiftFor(hoverNode, hoverSegment));
+                liveNodes.Add(aimNode);
+                liveSegments.Add(aimSegment);
+                liveTs.Add(aimT);
+                liveLifts.Add(LiftFor(aimNode, aimSegment));
+                liveStraight.Add(straightMode);
             }
-            preview = Divide(live, liveNodes, liveSegments, liveTs, liveLifts);
+            preview = Divide(live, liveNodes, liveSegments, liveTs, liveLifts, liveStraight);
             cursorText = CursorText(withHover);
             ShowPanel();
             PlaceButtons();
-            UpdateCursorLabel(withHover);
+            UpdateCursorLabel(withHover && mouseRayValid);
+        }
+
+        // --- precision drawing --------------------------------------------------------
+
+        // Main thread. Where the next point goes. While drawing a straight piece
+        // the mouse is snapped: its direction to 15° steps from the last piece
+        // (north for the first) or along / across a road nearby, its length to
+        // 8 m steps. A typed length or turn holds it (curved pieces too). Shift,
+        // or snapping off, draws freely; a point on a road stays on it.
+        private void UpdateAim()
+        {
+            aimGuided = false;
+            bool typed = typedLength > 0f || !float.IsNaN(typedTurn);
+            Vector3 mouse = hoverPosition;
+            bool onMap = hoverValid && mouseRayValid;
+            if (onMap) lastMouse = mouse;
+            else if (typed && haveLastMouse) mouse = lastMouse;   // typing in the panel: the mouse is over it
+            haveLastMouse |= onMap;
+            aimValid = onMap;
+            aimPosition = mouse;
+            aimMarker = hoverMarker;
+            aimNode = onMap ? hoverNode : (ushort)0;
+            aimSegment = onMap && hoverNode == 0 ? hoverSegment : (ushort)0;
+            aimT = hoverT;
+            if (planning || points.Count == 0) return;
+            if (!onMap && !(typed && haveLastMouse)) return;
+
+            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            bool snap = snapping && straightMode && !shift;
+            if (!typed && (!snap || aimNode != 0 || aimSegment != 0)) return;
+
+            Vector3 from = points[points.Count - 1];
+            // The mouse back on the last point (a double-click to finish): not snapped away from it.
+            if (typedLength <= 0f && CurveMath.FlatDistance(mouse, from) < LengthStep * 0.5f) return;
+            Vector3 reference = points.Count >= 2 ? CurveMath.FlatNormal(from - points[points.Count - 2]) : Vector3.zero;
+            if (reference == Vector3.zero) reference = North;
+            Vector3 raw = CurveMath.FlatNormal(mouse - from);
+            Vector3 direction;
+            var kind = CurveMath.SnapKind.None;
+            if (!float.IsNaN(typedTurn)) direction = CurveMath.Rotate(reference, -typedTurn);
+            else if (snap) direction = CurveMath.SnapDirection(raw, reference, NearbyRoads(from, mouse), AngleStep, RoadSnapTolerance, out kind);
+            else direction = raw;
+            if (direction == Vector3.zero) return;   // the mouse is on the last point
+
+            float length = typedLength;
+            if (length <= 0f)
+            {
+                length = Mathf.Max(0f, (mouse.x - from.x) * direction.x + (mouse.z - from.z) * direction.z);
+                if (snap) length = CurveMath.SnapLength(length, LengthStep);
+            }
+            if (length < MinPointSpacing) return;
+
+            Vector3 p = from + direction * length;
+            p.y = TerrainManager.instance.SampleRawHeightSmoothWithWater(p, false, 0f);
+            aimValid = true;
+            aimPosition = aimMarker = p;
+            aimNode = 0;
+            aimSegment = 0;
+            aimGuided = true;
+            guideFrom = from;
+            guideDirection = direction;
+            guideLength = length;
+            guideTurn = -CurveMath.SignedAngle(reference, direction);
+            guideKind = kind;
+        }
+
+        private static readonly Vector3 North = new Vector3(0f, 0f, 1f);
+        private Vector3 lastMouse;            // the mouse on the map when it was last there
+        private bool haveLastMouse;
+
+        // Directions of the roads near the last point and the mouse (where
+        // they are closest to it), for snapping along or across them. Kept
+        // while the mouse stays within a few metres.
+        private readonly List<Vector3> nearbyRoads = new List<Vector3>();
+        private Vector3 nearbyFrom, nearbyMouse;
+        private bool nearbyValid;
+
+        private List<Vector3> NearbyRoads(Vector3 from, Vector3 mouse)
+        {
+            if (nearbyValid && CurveMath.FlatDistance(from, nearbyFrom) < 1f && CurveMath.FlatDistance(mouse, nearbyMouse) < LengthStep)
+                return nearbyRoads;
+            nearbyValid = true;
+            nearbyFrom = from;
+            nearbyMouse = mouse;
+            nearbyRoads.Clear();
+            var seen = new HashSet<ushort>();
+            var segments = NetManager.instance.m_segments.m_buffer;
+            foreach (var near in new[] { from, mouse })
+                foreach (ushort segment in RoadPlanner.NearbySegments(near, RoadSnapReach))
+                {
+                    if (!seen.Add(segment) || nearbyRoads.Count >= 24) continue;
+                    var info = segments[segment].Info;
+                    if (info == null || info.m_class == null || !CrossingFinder.IsPhysical(info)) continue;
+                    Vector3 onRoad;
+                    float t = CrossingFinder.ClosestT(segment, near, out onRoad);
+                    if (CurveMath.FlatDistance(onRoad, near) > RoadSnapReach) continue;
+                    Vector3 a, b, c, d;
+                    CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+                    Vector3 along = CurveMath.FlatNormal(CurveMath.BezierDerivative(a, b, c, d, t));
+                    if (along != Vector3.zero) nearbyRoads.Add(along);
+                }
+            return nearbyRoads;
+        }
+
+        private void AddAimPoint()
+        {
+            points.Add(aimPosition);
+            pointNodes.Add(aimNode);
+            pointMarkers.Add(aimMarker);
+            pointSegments.Add(aimSegment);
+            pointTs.Add(aimT);
+            pointLifts.Add(LiftFor(aimNode, aimSegment));
+            pointStraight.Add(straightMode);
+            choicesVersion++;
+            Mod.Log("Point " + points.Count + " at " + Format(aimPosition) + (straightMode ? " (straight)" : "") +
+                    (aimNode != 0 ? " (on node #" + aimNode + ")" : ""));
+            // A typed length or turn is for one point.
+            ClearTyped();
+        }
+
+        private void SetStraight(bool straight)
+        {
+            straightMode = straight;
+            choicesVersion++;
+        }
+
+        private void ChangeRadius(float step)
+        {
+            float radius = cornerRadius + step;
+            if (step < 0f && radius < MinCornerRadius) radius = 0f;
+            else if (step > 0f && radius < MinCornerRadius) radius = MinCornerRadius;
+            cornerRadius = Mathf.Clamp(radius, 0f, MaxCornerRadius);
+            choicesVersion++;
+        }
+
+        private void ToggleSnapping()
+        {
+            snapping = !snapping;
+            choicesVersion++;
+        }
+
+        // From the panel's Length and Turn fields; empty or unreadable: not held.
+        private void SetTyped(string length, string turn)
+        {
+            float value;
+            typedLength = ReadNumber(length, out value) && value >= MinPointSpacing && value <= 10000f ? value : -1f;
+            typedTurn = ReadNumber(turn, out value) && Mathf.Abs(value) <= 180f ? value : float.NaN;
+            choicesVersion++;
+        }
+
+        private static bool ReadNumber(string text, out float value)
+        {
+            value = 0f;
+            if (string.IsNullOrEmpty(text)) return false;
+            text = text.Trim().Replace(',', '.');
+            return float.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
+        }
+
+        private void ClearTyped()
+        {
+            bool had = typedLength > 0f || !float.IsNaN(typedTurn);
+            typedLength = -1f;
+            typedTurn = float.NaN;
+            if (had) panel.ClearTyped();
+        }
+
+        // The first line of the label by the mouse: the piece being drawn.
+        private string PieceText()
+        {
+            string mode = straightMode ? "Straight" : "Curve";
+            if (!aimGuided) return mode + "   (Tab: " + (straightMode ? "curve" : "straight") + ")";
+            string turn;
+            if (points.Count < 2)
+                turn = "bearing " + Mathf.RoundToInt((guideTurn + 360f) % 360f) + "°";
+            else if (Mathf.Abs(guideTurn) < 0.5f)
+                turn = "straight on";
+            else
+                turn = Mathf.RoundToInt(Mathf.Abs(guideTurn)) + "° " + (guideTurn > 0f ? "right" : "left");
+            string how = guideKind == CurveMath.SnapKind.Parallel ? "   ·   along the road"
+                : guideKind == CurveMath.SnapKind.Perpendicular ? "   ·   square to the road" : "";
+            return mode + "   ·   " + guideLength.ToString("N0") + " m   ·   " + turn + how + (straightMode ? "   (Shift: free)" : "");
         }
 
         // --- the label next to the mouse -------------------------------------------
@@ -222,6 +445,7 @@ namespace RealisticRoads
         {
             if (!withHover) return "";
             var lines = new List<string>();
+            if (points.Count > 0) lines.Add(PieceText());
             if (hoverNode != 0) lines.Add("Joins the road end here");
             else if (hoverSegment != 0) lines.Add("Joins this road here (T-junction)");
             else lines.Add("Height " + FormatLift(lift) + "   (Page Up / Page Down)");
@@ -400,7 +624,14 @@ namespace RealisticRoads
 
             if (e.type == EventType.KeyDown)
             {
-                if (e.keyCode == KeyCode.Escape)
+                // Typing a length or turn in the panel: those keys are the field's.
+                if (UIView.HasInputFocus()) return;
+                if (e.keyCode == KeyCode.Tab)
+                {
+                    e.Use();
+                    SetStraight(!straightMode);
+                }
+                else if (e.keyCode == KeyCode.Escape)
                 {
                     e.Use();
                     if (points.Count > 0)
@@ -458,25 +689,16 @@ namespace RealisticRoads
                 return;
             }
 
-            if (e.button == 0 && hoverValid)
+            if (e.button == 0 && aimValid)
             {
                 e.Use();
-                var p = hoverPosition;
-                if (points.Count > 0 && (p - points[points.Count - 1]).sqrMagnitude < MinPointSpacing * MinPointSpacing)
+                if (points.Count > 0 && (aimPosition - points[points.Count - 1]).sqrMagnitude < MinPointSpacing * MinPointSpacing)
                 {
                     // Double-click (or a second click on the last point): done drawing.
                     StartPlanning();
                     return;
                 }
-                points.Add(p);
-                pointNodes.Add(hoverNode);
-                pointMarkers.Add(hoverMarker);
-                pointSegments.Add(hoverNode == 0 ? hoverSegment : (ushort)0);
-                pointTs.Add(hoverT);
-                pointLifts.Add(LiftFor(hoverNode, hoverNode == 0 ? hoverSegment : (ushort)0));
-                choicesVersion++;
-                Mod.Log("Point " + points.Count + " at " + Format(p) +
-                        (hoverNode != 0 ? " (on node #" + hoverNode + ")" : ""));
+                AddAimPoint();
             }
             else if (e.button == 1 && points.Count > 0)
             {
@@ -487,6 +709,7 @@ namespace RealisticRoads
                 pointSegments.RemoveAt(pointSegments.Count - 1);
                 pointTs.RemoveAt(pointTs.Count - 1);
                 pointLifts.RemoveAt(pointLifts.Count - 1);
+                pointStraight.RemoveAt(pointStraight.Count - 1);
                 choicesVersion++;
                 Mod.Log("Removed last point, " + points.Count + " left");
             }
@@ -559,8 +782,18 @@ namespace RealisticRoads
                 overlay.DrawCircle(cameraInfo, color, pointMarkers[i], planning ? HandleSize : PointSize, -1f, 1280f, false, true);
             }
 
-            if (hoverValid && mouseRayValid && !planning)
-                overlay.DrawCircle(cameraInfo, hoverNode != 0 || hoverSegment != 0 ? SnapColor : HoverColor, hoverMarker, HoverSize, -1f, 1280f, false, true);
+            if (aimValid && (mouseRayValid || aimGuided) && !planning)
+            {
+                overlay.DrawCircle(cameraInfo, aimNode != 0 || aimSegment != 0 ? SnapColor : HoverColor, aimMarker, HoverSize, -1f, 1280f, false, true);
+                // The guide line of a snapped or typed straight piece, on past the point.
+                if (aimGuided)
+                {
+                    Vector3 a = guideFrom, d = guideFrom + guideDirection * (guideLength + GuideBeyond);
+                    var line = new Bezier3 { a = a, b = Vector3.Lerp(a, d, 1f / 3f), c = Vector3.Lerp(a, d, 2f / 3f), d = d };
+                    bool road = guideKind == CurveMath.SnapKind.Parallel || guideKind == CurveMath.SnapKind.Perpendicular;
+                    overlay.DrawBezier(cameraInfo, road ? SnapColor : GuideColor, line, GuideWidth, 0f, 0f, -1f, 1280f, false, true);
+                }
+            }
         }
 
         // The colour only on what is at the road's own height: the 3D preview's
@@ -630,7 +863,7 @@ namespace RealisticRoads
         // the map and in the profile.
         private static ProfileStyle StyleOf(Plan plan, int i)
         {
-            if (CurveMath.BendAngle(plan.Tangents[i - 1], plan.Tangents[i]) > MaxBend) return ProfileStyle.TooSharp;
+            if (CurveMath.BendAngle(plan.Tangents[i - 1], plan.InTangent(i)) > MaxBend) return ProfileStyle.TooSharp;
             if (plan.Steep != null && i < plan.Steep.Length && plan.Steep[i]) return ProfileStyle.Steep;
             if (IsRaised(plan.Kinds[i - 1]) || IsRaised(plan.Kinds[i])) return ProfileStyle.Raised;
             if (IsLowered(plan.Kinds[i - 1]) || IsLowered(plan.Kinds[i])) return ProfileStyle.Lowered;
@@ -723,7 +956,7 @@ namespace RealisticRoads
                 return;
             }
 
-            var division = Divide(points, pointNodes, pointSegments, pointTs, pointLifts);
+            var division = Divide(points, pointNodes, pointSegments, pointTs, pointLifts, pointStraight);
             if (!division.Ok)
             {
                 Mod.Log("Not built: a bend is too sharp (over " + MaxBend + " degrees per segment). Spread the points out.");
@@ -746,20 +979,25 @@ namespace RealisticRoads
         // smoothly; if that would bend too much it meets the road at an angle
         // instead (like a normal junction). Crossings with existing roads get a
         // node exactly on them, and RoadPlanner works out the heights.
-        private Division Divide(List<Vector3> controls, List<ushort> nodes, List<ushort> segments, List<float> ts, List<float> lifts)
+        private Division Divide(List<Vector3> controls, List<ushort> nodes, List<ushort> segments, List<float> ts, List<float> lifts,
+            List<bool> pointModes)
         {
-            if (controls.Count < 2) return new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>() };
+            if (controls.Count < 2) return new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>(), InTangents = new List<Vector3>() };
 
             int n = controls.Count - 1;
-            Vector3 startDir = NetworkBuilder.ContinuationDirection(nodes[0], controls[1] - controls[0], true);
-            Vector3 endDir = NetworkBuilder.ContinuationDirection(nodes[n], controls[n] - controls[n - 1], false);
+            // Span i (point i to i+1) is straight if point i+1 was placed in straight mode.
+            var straight = new List<bool>();
+            for (int i = 1; i <= n; i++) straight.Add(i < pointModes.Count && pointModes[i]);
+            // A straight end piece meets the road there at its own angle; a curved one may continue it.
+            Vector3 startDir = straight[0] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[0], controls[1] - controls[0], true);
+            Vector3 endDir = straight[n - 1] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[n], controls[n] - controls[n - 1], false);
 
-            var division = DivideShaped(controls, startDir, endDir, nodes[0], nodes[n], lifts);
+            var division = DivideShaped(controls, startDir, endDir, nodes[0], nodes[n], lifts, straight);
             division.Continues = startDir != Vector3.zero || endDir != Vector3.zero;
             if (!division.Ok && division.Continues)
             {
                 // Continuing the road bends too much: meet it at an angle instead.
-                var plain = DivideShaped(controls, Vector3.zero, Vector3.zero, nodes[0], nodes[n], lifts);
+                var plain = DivideShaped(controls, Vector3.zero, Vector3.zero, nodes[0], nodes[n], lifts, straight);
                 if (plain.Ok)
                 {
                     division = plain;
@@ -776,13 +1014,13 @@ namespace RealisticRoads
                 if (Mathf.Abs(lifts[i]) > 0.01f) raisedPoints.Add(new KeyValuePair<Vector3, float>(controls[i], lifts[i]));
             division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
                 division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
-                startSegment, ts[0], endSegment, ts[n], raisedPoints);
+                startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents);
             // Raised stretches get a node (and pillar) every RaisedSpacing, like the
             // vanilla tool's elevated roads; plan again with them.
             if (AddRaisedNodes(division))
                 division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
                     division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
-                    startSegment, ts[0], endSegment, ts[n], raisedPoints);
+                    startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents);
             DropNodesOverCrossings(division);
             division.Cost = NetworkBuilder.Cost(SelectedNetwork, division.Plan);
             int blocked = BuildingsInTheWay(division);
@@ -829,7 +1067,9 @@ namespace RealisticRoads
                 {
                     float t = k / (float)pieces;
                     division.Points.Insert(i, CurveMath.Bezier(bezier.a, bezier.b, bezier.c, bezier.d, t));
-                    division.Tangents.Insert(i, CurveMath.FlatNormal(CurveMath.BezierDerivative(bezier.a, bezier.b, bezier.c, bezier.d, t)));
+                    Vector3 along = CurveMath.FlatNormal(CurveMath.BezierDerivative(bezier.a, bezier.b, bezier.c, bezier.d, t));
+                    division.Tangents.Insert(i, along);
+                    division.InTangents.Insert(i, along);
                 }
                 for (int c = 0; c < division.CrossingIndex.Count; c++)
                     if (division.CrossingIndex[c] >= i) division.CrossingIndex[c] += pieces - 1;
@@ -854,9 +1094,11 @@ namespace RealisticRoads
                 // Only with a raised node on each side to carry the deck, and only if
                 // the one piece left doesn't bend more than a piece may.
                 if (!IsRaised(plan.Kinds[k - 1]) || !IsRaised(plan.Kinds[k + 1])) continue;
-                if (CurveMath.BendAngle(division.Tangents[k - 1], division.Tangents[k + 1]) > MaxBend) continue;
+                if (IsCorner(division, k)) continue;
+                if (CurveMath.BendAngle(division.Tangents[k - 1], division.InTangents[k + 1]) > MaxBend) continue;
                 division.Points.RemoveAt(k);
                 division.Tangents.RemoveAt(k);
+                division.InTangents.RemoveAt(k);
                 RoadPlanner.RemoveNode(plan, k);
                 division.CrossingIndex[c] = -1;
                 for (int other = 0; other < division.CrossingIndex.Count; other++)
@@ -911,10 +1153,12 @@ namespace RealisticRoads
         }
 
         private Division DivideShaped(List<Vector3> controls, Vector3 startDir, Vector3 endDir, ushort startNode, ushort endNode,
-            List<float> lifts)
+            List<float> lifts, List<bool> straight)
         {
-            var division = new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>() };
-            var polyline = CurveMath.SampleShaped(controls, startDir, endDir);
+            var division = new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>(), InTangents = new List<Vector3>() };
+            int[] controlSamples;
+            List<float> corners;
+            var polyline = CurveMath.SampleMixed(controls, straight, cornerRadius, startDir, endDir, out controlSamples, out corners);
             division.Length = CurveMath.Length(polyline);
             if (division.Length < 1f) return division;
 
@@ -922,7 +1166,9 @@ namespace RealisticRoads
             division.WaterRuns = FindWater(polyline);
             var cuts = new List<KeyValuePair<float, Crossing>>();
             // A point with a height of its own gets a node, so the height is held exactly there.
-            var controlAt = ControlDistances(polyline, controls.Count, startDir, endDir);
+            var controlAt = ControlDistances(polyline, controlSamples);
+            // A sharp corner (two straight pieces meeting at an angle) is a node.
+            foreach (float corner in corners) cuts.Add(new KeyValuePair<float, Crossing>(corner, null));
             for (int i = 1; i < controls.Count - 1; i++)
                 if (Mathf.Abs(lifts[i]) > 0.01f) cuts.Add(new KeyValuePair<float, Crossing>(controlAt[i], null));
             foreach (var run in division.WaterRuns)
@@ -978,8 +1224,11 @@ namespace RealisticRoads
                 if (cut.Key < 4f || cut.Key > division.Length - 4f) continue;
                 if (cut.Key - stops[stops.Count - 1].Key < 4f)
                 {
-                    // Too close to the previous stop: keep the crossing if there is one.
-                    if (cut.Value != null && stops[stops.Count - 1].Value == null && stops.Count > 1)
+                    // Too close to the previous stop: keep the crossing if there is one,
+                    // else a sharp corner (the road turns there, so it needs the node).
+                    var previous = stops[stops.Count - 1];
+                    bool better = cut.Value != null || (IsCornerAt(corners, cut.Key) && !IsCornerAt(corners, previous.Key));
+                    if (better && previous.Value == null && stops.Count > 1)
                         stops[stops.Count - 1] = cut;
                     continue;
                 }
@@ -1010,6 +1259,7 @@ namespace RealisticRoads
                 {
                     division.Points.Add(slicePoints[i]);
                     division.Tangents.Add(sliceTangents[i]);
+                    division.InTangents.Add(sliceTangents[i]);
                 }
                 if (c < stops.Count - 1)
                 {
@@ -1017,7 +1267,16 @@ namespace RealisticRoads
                     int index = division.Points.Count - 1;
                     Vector3 point, tangent;
                     CurveMath.PointAt(polyline, to, out point, out tangent);
-                    if (tangent != Vector3.zero) division.Tangents[index] = tangent;
+                    if (tangent != Vector3.zero) division.Tangents[index] = division.InTangents[index] = tangent;
+                    if (IsCornerAt(corners, to))
+                    {
+                        // A sharp corner: the road arrives along one straight and leaves along the other.
+                        Vector3 before, after, ignore;
+                        CurveMath.PointAt(polyline, to - CornerProbe, out ignore, out before);
+                        CurveMath.PointAt(polyline, to + CornerProbe, out ignore, out after);
+                        if (before != Vector3.zero) division.InTangents[index] = before;
+                        if (after != Vector3.zero) division.Tangents[index] = after;
+                    }
                     if (stops[c].Value != null)
                     {
                         // A junction right next to an existing node joins at that node:
@@ -1041,12 +1300,35 @@ namespace RealisticRoads
             {
                 if (index <= 0 || index >= division.Points.Count - 1) continue;
                 Vector3 through = CurveMath.FlatNormal(division.Points[index + 1] - division.Points[index - 1]);
-                if (through != Vector3.zero) division.Tangents[index] = through;
+                if (through != Vector3.zero && !IsCorner(division, index)) division.Tangents[index] = division.InTangents[index] = through;
             }
-            if (startDir != Vector3.zero) division.Tangents[0] = CurveMath.FlatNormal(startDir);
-            if (endDir != Vector3.zero) division.Tangents[division.Tangents.Count - 1] = CurveMath.FlatNormal(endDir);
-            division.Ok = CurveMath.MaxBend(division.Tangents) <= MaxBend;
+            if (startDir != Vector3.zero) division.Tangents[0] = division.InTangents[0] = CurveMath.FlatNormal(startDir);
+            int lastIndex = division.Tangents.Count - 1;
+            if (endDir != Vector3.zero) division.Tangents[lastIndex] = division.InTangents[lastIndex] = CurveMath.FlatNormal(endDir);
+            division.Ok = MaxPieceBend(division) <= MaxBend;
             return division;
+        }
+
+        private const float CornerProbe = 1f;     // metres either side of a sharp corner its two directions are read
+
+        private static bool IsCornerAt(List<float> corners, float at)
+        {
+            foreach (float corner in corners) if (Mathf.Abs(corner - at) < 0.5f) return true;
+            return false;
+        }
+
+        // A node where the road turns on the spot (a sharp corner).
+        private static bool IsCorner(Division division, int i) =>
+            CurveMath.BendAngle(division.InTangents[i], division.Tangents[i]) > 0.5f;
+
+        // How much the road turns within one piece, at most (a sharp corner
+        // turns at a node, between pieces, so it doesn't count).
+        private static float MaxPieceBend(Division division)
+        {
+            float most = 0f;
+            for (int i = 1; i < division.Tangents.Count; i++)
+                most = Mathf.Max(most, CurveMath.BendAngle(division.Tangents[i - 1], division.InTangents[i]));
+            return most;
         }
 
         // Stretches of the curve over water. Wet patches less than WaterJoin
@@ -1096,16 +1378,15 @@ namespace RealisticRoads
 
         // Where each control point is along the curve through them (the
         // curve passes through every one, in order).
-        // Metres along the polyline (from SampleShaped) at each control point:
-        // the controls are samples of it, so read them off by index.
-        private static float[] ControlDistances(List<Vector3> polyline, int controls, Vector3 startDir, Vector3 endDir)
+        // Metres along the polyline at each control point, from its sample index.
+        private static float[] ControlDistances(List<Vector3> polyline, int[] controlSamples)
         {
-            var result = new float[controls];
+            var result = new float[controlSamples.Length];
             float distance = 0f;
             int sample = 0;
-            for (int c = 0; c < controls; c++)
+            for (int c = 0; c < controlSamples.Length; c++)
             {
-                int index = Mathf.Min(CurveMath.ShapedSampleIndex(controls, c, startDir, endDir), polyline.Count - 1);
+                int index = Mathf.Min(controlSamples[c], polyline.Count - 1);
                 for (; sample < index; sample++) distance += CurveMath.FlatDistance(polyline[sample], polyline[sample + 1]);
                 result[c] = distance;
             }
@@ -1353,6 +1634,11 @@ namespace RealisticRoads
                     ToolsModifierControl.SetTool<DefaultTool>();
                 };
                 panel.GameTool = () => ToolActivator.SwitchToGameTool(SelectedNetwork);
+                panel.SetStraight = SetStraight;
+                panel.ChangeRadius = ChangeRadius;
+                panel.ToggleSnap = ToggleSnapping;
+                panel.Typed = SetTyped;
+                panel.TypedSubmit = () => { if (!planning && points.Count > 0 && aimValid) AddAimPoint(); };
             }
             panel.Show(Model());
         }
@@ -1376,7 +1662,7 @@ namespace RealisticRoads
             var bezier = new Bezier3();
             bezier.a = division.Points[i - 1];
             bezier.d = division.Points[i];
-            NetSegment.CalculateMiddlePoints(bezier.a, division.Tangents[i - 1], bezier.d, -division.Tangents[i],
+            NetSegment.CalculateMiddlePoints(bezier.a, division.Tangents[i - 1], bezier.d, -division.InTangents[i],
                 false, false, out bezier.b, out bezier.c);
             return bezier;
         }
@@ -1388,11 +1674,15 @@ namespace RealisticRoads
             {
                 Road = SelectedNetwork != null ? Title(SelectedNetwork) : "No road picked: choose one in the game's Roads menu, then open RR",
                 HasPoints = points.Count > 0,
+                Straight = straightMode,
+                Radius = cornerRadius,
+                Snapping = snapping,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
                 Mode = planning
                     ? "PLANNING: drag the points to adjust; pick each crossing here or on the map. Check mark / Enter: build. Esc: scrap. Right-click: keep drawing."
-                    : points.Count == 0 ? "DRAWING: click to place the first point."
-                    : "DRAWING: click to add points. Double-click or Enter when done, to check and adjust the plan before building.",
+                    : points.Count == 0 ? "DRAWING: click to place the first point. Tab: straight / curved pieces."
+                    : "DRAWING: click to add points (Tab: straight / curved; type a length or turn above for an exact point). " +
+                      "Double-click or Enter when done, to check and adjust the plan before building.",
             };
             var division = preview;
             if (division == null || division.Points.Count < 2 || division.Plan == null)
@@ -1613,6 +1903,8 @@ namespace RealisticRoads
             pointSegments.Clear();
             pointTs.Clear();
             pointLifts.Clear();
+            pointStraight.Clear();
+            ClearTyped();
             crossingTypes.Clear();
             crossingExtra.Clear();
             waterExtra.Clear();

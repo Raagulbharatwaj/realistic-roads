@@ -132,7 +132,22 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    Rail decks over a crossing span at least 90 m, so no short pieces bunch up next to it.
    A level crossing (junction) and ramps up to 3 m above the ground use the ground version of the road on an
    embankment; only stretches that must be raised (bridges, water) or are higher use the elevated version.
-5. **Drawing, then planning.** While drawing, the curve follows the mouse and each click adds a point; right-click
+5. **Straight pieces and precision.** Under the panel's title is the **DRAW** bar:
+   - **Curve / Straight** (or **Tab**): how the next piece is drawn. Curved pieces bend smoothly through the points as
+     before; straight pieces run straight from point to point. Each piece keeps the mode it was drawn in, so one road
+     can mix both; a curve next to a straight piece leaves it along its line, without a kink.
+   - **Corner** with **-** / **+**: corners between two straight pieces are rounded with this radius (60 m to start,
+     50 to 300 m). Below 50 m the corner is **sharp**: a node right on it, the two straight pieces meeting there at an
+     angle.
+   - **Snap** (on: green): a straight piece snaps its direction to 15° turns from the last piece (from north for the
+     first one), or along or square to a road within 100 m when it is within 5° of that; and its length to 8 m steps.
+     A guide line shows the snapped direction (yellow when it lines up with a road). Hold **Shift** to draw freely.
+     A point on a road (its end, or a T-junction) still snaps to the road.
+   - **Length** and **Turn**: type an exact length (metres) and/or turn (degrees, + right, - left; for the first
+     piece, the bearing from north) for the next point; the point is held there and **Enter** in the field places it
+     (or click on the map). The fields empty again after each point.
+   The label by the mouse shows the piece: `Straight · 248 m · 15° right · along the road`.
+6. **Drawing, then planning.** While drawing, the curve follows the mouse and each click adds a point; right-click
    removes the last one. **Double-click** (or **Enter**) when done: the tool switches to **planning**. The plan then
    stays where it is, so you can work on it without it following the mouse:
    - drag any point (the bigger circles) to move it; it snaps to roads like a new point;
@@ -140,7 +155,7 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    - **Enter** or the check mark builds it; **Esc** scraps it; **right-click** goes back to drawing, adding points at
      the end.
    The panel says which of the two you are in and what to do next. Esc with no points leaves the tool.
-6. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
+7. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
 
 Building costs what the vanilla road tool would charge for the same pieces (shown as **Cost** in the panel); Ctrl+Z
 gives it back. Buildings in the way are not removed: the panel warns ("Runs through N building(s)"), bulldoze them

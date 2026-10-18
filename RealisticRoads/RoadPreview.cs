@@ -118,7 +118,7 @@ namespace RealisticRoads
             float run = CurveMath.FlatDistance(a, d);
             float slope = run > 0.01f ? (d.y - a.y) / run : 0f;
             start = new Vector3(plan.Tangents[i - 1].x, slope, plan.Tangents[i - 1].z).normalized;
-            end = new Vector3(plan.Tangents[i].x, slope, plan.Tangents[i].z).normalized;
+            end = new Vector3(plan.InTangent(i).x, slope, plan.InTangent(i).z).normalized;
         }
 
         // Piece i as the game will build it, at its planned heights.

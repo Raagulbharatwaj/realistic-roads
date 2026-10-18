@@ -33,12 +33,15 @@ namespace RealisticRoads
         public const string BackgroundOff = "bgOff";
         public const string PageBack = "pageBack";
         public const string PageNext = "pageNext";
+        public const string Curve = "curve";
+        public const string Straight = "straight";
+        public const string Snap = "snap";
 
         private static readonly string[] Names =
         {
             Junction, Bridge, Overpass, Underpass, Tunnel, Plus, Minus, Background, BackgroundHover, BackgroundSelected,
             Logo, LogoSmall, ButtonBackground, ButtonBackgroundHover, ButtonBackgroundPressed,
-            Build, BuildOff, Undo, UndoOff, GameTool, BackgroundOff, PageBack, PageNext,
+            Build, BuildOff, Undo, UndoOff, GameTool, BackgroundOff, PageBack, PageNext, Curve, Straight, Snap,
         };
 
         private static UITextureAtlas atlas;

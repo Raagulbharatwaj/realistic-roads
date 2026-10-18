@@ -467,4 +467,89 @@ public class CurveMathTests
             }
         }
     }
+
+    [Fact]
+    public void Mixed_RoundedCornerIsACircleOfTheRadius()
+    {
+        var controls = new List<Vector3> { V(0, 0), V(100, 0), V(100, 100) };
+        var line = CurveMath.SampleMixed(controls, new[] { true, true }, 50f, Vector3.zero, Vector3.zero, out var at, out var sharp);
+        Assert.Empty(sharp);
+        Assert.Equal(V(0, 0), line.First());
+        Assert.Equal(V(100, 100), line.Last());
+        foreach (var p in line)
+        {
+            if (p.x < 50f - 0.01f) Assert.Equal(0f, p.z, 3);                   // the first straight
+            else if (p.z > 50f + 0.01f) Assert.Equal(100f, p.x, 3);            // the second
+            else Assert.Equal(50f, CurveMath.FlatDistance(p, V(50, 50)), 0);   // the rounding (within 0.5 m)
+        }
+        // The middle control maps to the middle of the rounding.
+        Assert.True(CurveMath.FlatDistance(line[at[1]], V(85.36f, 14.64f)) < 3f);
+    }
+
+    [Fact]
+    public void Mixed_ZeroRadiusLeavesASharpCorner()
+    {
+        var controls = new List<Vector3> { V(0, 0), V(100, 0), V(100, 60) };
+        var line = CurveMath.SampleMixed(controls, new[] { true, true }, 0f, Vector3.zero, Vector3.zero, out var at, out var sharp);
+        Assert.Single(sharp);
+        Assert.Equal(100f, sharp[0], 2);
+        Assert.Equal(V(100, 0), line[at[1]]);
+        Assert.Equal(160f, CurveMath.Length(line), 2);
+    }
+
+    [Fact]
+    public void Mixed_CurveLeavesAStraightAlongItsLine()
+    {
+        var controls = new List<Vector3> { V(0, 0), V(100, 0), V(200, 80) };
+        var line = CurveMath.SampleMixed(controls, new[] { true, false }, 40f, Vector3.zero, Vector3.zero, out var at, out _);
+        int corner = at[1];
+        Assert.Equal(V(100, 0), line[corner]);
+        var after = CurveMath.FlatNormal(line[corner + 1] - line[corner]);
+        Assert.True(CurveMath.BendAngle(V(1, 0), after) < 2f);
+        Assert.Equal(V(200, 80), line.Last());
+    }
+
+    [Fact]
+    public void Mixed_AllCurvesIsTheShapedCurve()
+    {
+        var controls = new List<Vector3> { V(0, 0), V(100, 30), V(220, 0) };
+        var mixed = CurveMath.SampleMixed(controls, new[] { false, false }, 40f, Vector3.zero, Vector3.zero, out var at, out _);
+        var shaped = CurveMath.SampleShaped(controls, Vector3.zero, Vector3.zero);
+        Assert.Equal(shaped.Count, mixed.Count);
+        Assert.Equal(V(100, 30), mixed[at[1]]);
+    }
+
+    [Fact]
+    public void Snap_GridRoadsAndLength()
+    {
+        var north = V(0, 1);
+        var raw = CurveMath.Rotate(north, -20f);   // 20 degrees right of north
+        var snapped = CurveMath.SnapDirection(raw, north, null, 15f, 5f, out var kind);
+        Assert.Equal(CurveMath.SnapKind.Grid, kind);
+        Assert.Equal(-15f, CurveMath.SignedAngle(north, snapped), 2);
+
+        var road = CurveMath.Rotate(north, -23f);   // a road 3 degrees off: parallel to it wins
+        snapped = CurveMath.SnapDirection(raw, north, new[] { road }, 15f, 5f, out kind);
+        Assert.Equal(CurveMath.SnapKind.Parallel, kind);
+        Assert.True(CurveMath.BendAngle(snapped, road) < 0.01f);
+
+        var across = CurveMath.Rotate(north, 68f);  // perpendicular to it is 22 degrees right
+        snapped = CurveMath.SnapDirection(raw, north, new[] { across }, 15f, 5f, out kind);
+        Assert.Equal(CurveMath.SnapKind.Perpendicular, kind);
+
+        Assert.Equal(104f, CurveMath.SnapLength(101f, 8f));
+        Assert.Equal(8f, CurveMath.SnapLength(2f, 8f));
+    }
+
+    [Theory]
+    [InlineData(50f)]
+    [InlineData(60f)]
+    public void Mixed_RightAngleCornerFitsThePieceBendLimit(float radius)
+    {
+        // The tool's spacing (120 m, at least 30 m) and bend limit (40 degrees a piece).
+        var controls = new List<Vector3> { V(0, 0), V(300, 0), V(300, 300) };
+        var line = CurveMath.SampleMixed(controls, new[] { true, true }, radius, Vector3.zero, Vector3.zero, out _, out _);
+        CurveMath.DivideAdaptive(line, 120f, 30f, 40f, out var points, out var tangents, out _);
+        Assert.True(CurveMath.MaxBend(tangents) <= 40f, "bend " + CurveMath.MaxBend(tangents));
+    }
 }
