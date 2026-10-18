@@ -214,14 +214,16 @@ namespace RealisticRoads
                             Limit(distance, k, window, crossing.Point.y + CutDepth, true, minH, false);
                         break;
                     case CrossingType.Bridge:
-                        // Up to the deck's ends either side (the node on the crossing
-                        // itself is dropped later, so the side nodes carry the height).
+                        // Level at full clearance up to the deck's ends either side, and
+                        // the nodes just past them (the node on the crossing itself is
+                        // dropped later, so the side nodes carry the height and the deck
+                        // between them never sags below it).
                         // Over rail on the ground the whole deck is higher, so the
                         // overhead wires pass under it.
                         // Over a ship or ferry route the deck leaves room for the ships.
                         Limit(distance, k, DeckHalf(crossing, info, false) + 1f,
                             crossing.Point.y + (crossing.ShipPath ? ShipClearance : OverClearance) + crossing.ExtraHeight +
-                            (crossing.OverRail ? RailDeckLift : 0f), true, minH, false);
+                            (crossing.OverRail ? RailDeckLift : 0f), true, minH, true, true);
                         break;
                     case CrossingType.Overpass:
                         // We stay at ground level on a bridge deck; the existing road goes down.
@@ -350,8 +352,8 @@ namespace RealisticRoads
         // The road's version for a node kind, or null if it has none.
         private static float GradeFor(NetInfo info)
         {
-            var service = info != null && info.m_class != null ? info.m_class.m_service.ToString() : "";
-            return service == "PublicTransport" ? RailGrade : RoadGrade;
+            return info != null && info.m_class != null && info.m_class.m_service == ItemClass.Service.PublicTransport
+                ? RailGrade : RoadGrade;
         }
 
         // Half the length of our deck over a crossed road or rail, measured along
@@ -397,7 +399,15 @@ namespace RealisticRoads
             return IsRail(ours) ? Mathf.Max(half, RailDeckHalf) : half;
         }
 
-        public static bool IsRail(NetInfo info) => info != null && GradeFor(info) == RailGrade;
+        // Train, metro, monorail and tram tracks: not ship, ferry, cable car or
+        // other routes the game also files under public transport.
+        public static bool IsRail(NetInfo info)
+        {
+            if (info == null || info.m_class == null || info.m_class.m_service != ItemClass.Service.PublicTransport) return false;
+            var sub = info.m_class.m_subService;
+            return sub == ItemClass.SubService.PublicTransportTrain || sub == ItemClass.SubService.PublicTransportMetro ||
+                   sub == ItemClass.SubService.PublicTransportMonorail || sub == ItemClass.SubService.PublicTransportTram;
+        }
 
         public static float SpanHalf(Crossing crossing, float ourHalfWidth, bool overpass)
         {
@@ -694,9 +704,16 @@ namespace RealisticRoads
                     continue;
                 }
                 splitT[g] = Mathf.Clamp(crossing.ExistingT, MinSplit / length, 1f - MinSplit / length);
+                // The cut where the segment will really be split: moved off the
+                // crossing when it was too close to a node (the clamp above).
+                float cutAt = at[g];
+                var cutSegment = net.m_segments.m_buffer[crossing.Segment];
+                int fromIndex = line.Nodes.IndexOf(cutSegment.m_startNode), toIndex = line.Nodes.IndexOf(cutSegment.m_endNode);
+                if (fromIndex >= 0 && toIndex >= 0)
+                    cutAt += (line.Along[toIndex] >= line.Along[fromIndex] ? 1f : -1f) * (splitT[g] - crossing.ExistingT) * length;
                 int insert = 0;
-                while (insert < along.Count && along[insert] < at[g]) insert++;
-                along.Insert(insert, at[g]);
+                while (insert < along.Count && along[insert] < cutAt) insert++;
+                along.Insert(insert, cutAt);
                 current.Insert(insert, crossing.Point.y);
                 ids.Insert(insert, 0);
                 for (int h = 0; h < g; h++) if (splitOf[h] >= insert) splitOf[h]++;
@@ -821,14 +838,19 @@ namespace RealisticRoads
         // only for the footprint left beyond it: the road may slope away from it
         // at MaxGrade over the remaining (window - d). Nodes outside the window
         // (the neighbours of a tunnel) need none.
-        private static void Limit(float[] distance, int k, float window, float height, bool isMin, float[] limits, bool neighbours)
+        // 'flat': the same height across the whole window (a bridge deck: level
+        // at its clearance, so the planned deck is the one built whether or not
+        // the node on the crossing is dropped). Otherwise the limit grows towards
+        // k at the road's grade.
+        private static void Limit(float[] distance, int k, float window, float height, bool isMin, float[] limits, bool neighbours,
+            bool flat = false)
         {
             for (int i = 0; i < distance.Length; i++)
             {
                 float d = Mathf.Abs(distance[i] - distance[k]);
                 bool near = i == k || d <= window || (neighbours && Mathf.Abs(i - k) == 1);
                 if (!near) continue;
-                float margin = MaxGrade * Mathf.Max(0f, window - d);
+                float margin = flat ? 0f : MaxGrade * Mathf.Max(0f, window - d);
                 float limit = isMin ? height + margin : height - margin;
                 limits[i] = isMin ? Mathf.Max(limits[i], limit) : Mathf.Min(limits[i], limit);
             }
@@ -979,7 +1001,15 @@ namespace RealisticRoads
             for (int c = 0; c < plan.Crossings.Count; c++)
             {
                 var crossing = plan.Crossings[c];
-                if (crossing.Connects || crossing.Type == CrossingType.Overpass || crossing.Type == CrossingType.Underpass) continue;
+                bool changesIt = crossing.Connects || crossing.Type == CrossingType.Overpass || crossing.Type == CrossingType.Underpass;
+                // The road our curve starts or ends in the middle of is cut there
+                // first; a junction, overpass or underpass further along that same
+                // piece of road would then have nothing left to change.
+                if (changesIt && crossing.Segment != 0 && (crossing.Segment == plan.StartSegment || crossing.Segment == plan.EndSegment))
+                    plan.Problems.Add("Crossing " + (c + 1) + " (" + crossing.ExistingName + ") is on the piece of road the curve " +
+                                      (crossing.Segment == plan.StartSegment ? "starts" : "ends") +
+                                      " on: pick a bridge or tunnel there, or start the curve on another road");
+                if (changesIt) continue;
                 float gap = Mathf.Abs(plan.Points[plan.CrossingIndex[c]].y - crossing.Point.y);
                 if (gap < UnderClearance - 0.5f)
                     plan.Problems.Add("Only " + gap.ToString("F0") + " m from " + crossing.ExistingName +

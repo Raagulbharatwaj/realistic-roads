@@ -167,12 +167,18 @@ namespace RealisticRoads
                             float length = segments[current].m_averageLength;
                             if (crossing.ExistingT * length < Crossing.NodeSnap) crossing.SnapNode = segments[current].m_startNode;
                             else if ((1f - crossing.ExistingT) * length < Crossing.NodeSnap) crossing.SnapNode = segments[current].m_endNode;
-                            crossing.ExistingElevation = crossing.Point.y - terrain.SampleRawHeightSmooth(crossing.Point);
-                            crossing.ExistingHalfWidth = existing.m_halfWidth;
-                            crossing.ExistingName = existing.name;
-                            crossing.OverRail = RoadPlanner.IsRail(existing) && crossing.ExistingAtGround;
                             crossing.ShipPath = (existing.m_class.m_layer & ShipLayer) != ItemClass.Layer.None;
-                            if (crossing.ShipPath) crossing.ExistingName = "ship route";
+                            if (crossing.ShipPath)
+                            {
+                                // Measured from the water: the ships sail on its surface,
+                                // whatever height the route itself is kept at.
+                                crossing.Point.y = terrain.SampleRawHeightSmoothWithWater(crossing.Point, false, 0f);
+                                crossing.ExistingElevation = 0f;
+                            }
+                            else crossing.ExistingElevation = crossing.Point.y - terrain.SampleRawHeightSmooth(crossing.Point);
+                            crossing.ExistingHalfWidth = existing.m_halfWidth;
+                            crossing.ExistingName = crossing.ShipPath ? "ship route" : existing.name;
+                            crossing.OverRail = !crossing.ShipPath && RoadPlanner.IsRail(existing) && crossing.ExistingAtGround;
                             result.Add(crossing);
                         }
                     }
@@ -183,7 +189,6 @@ namespace RealisticRoads
             return result;
         }
 
-        // Points along an existing segment's curve (y = its real height).
         // Something to cross: roads, tracks, paths, canals, and ship and ferry
         // routes (a bridge must leave room for the ships). Not airplane or
         // blimp routes or power lines, which the game also keeps as networks.
@@ -200,10 +205,10 @@ namespace RealisticRoads
         {
             var layer = info.m_class.m_layer;
             if ((layer & (ItemClass.Layer.Default | ItemClass.Layer.MetroTunnels | ShipLayer)) == ItemClass.Layer.None) return false;
-            string service = info.m_class.m_service.ToString();
-            return service != "Electricity";
+            return info.m_class.m_service != ItemClass.Service.Electricity;
         }
 
+        // Points along an existing segment's curve (y = its real height).
         public static void SampleSegment(ushort segment, Vector3[] samples)
         {
             Vector3 a, b, c, d;

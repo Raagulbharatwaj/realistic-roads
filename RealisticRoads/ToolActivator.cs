@@ -21,6 +21,7 @@ namespace RealisticRoads
         private static UIButton modeButton;      // RR toggle shown next to the game's road tool options
         private static UIComponent modeHost;     // the options panel it sits on
         private static int searchWait;
+        private const string ModeButtonName = "RealisticRoadsModeButton";
         private static bool reportedNoHost;
 
         public static void Create(LoadMode mode)
@@ -185,21 +186,36 @@ namespace RealisticRoads
             if (modeHost == null || !modeHost.isVisible)
             {
                 if (modeButton != null && modeButton.isVisible) modeButton.isVisible = false;
+                // Looking through the whole UI is slow: at most every 60 frames.
                 if (--searchWait > 0) return;
-                modeHost = FindOptionsPanel();
-                if (modeHost == null)
+                searchWait = 60;
+                var host = FindOptionsPanel();
+                if (host == null)
                 {
                     searchWait = 120;
                     if (!reportedNoHost) Mod.Log("RR mode: the game's road options panel wasn't found; use the RR button");
                     reportedNoHost = true;
                     return;
                 }
-                searchWait = 30;
-                Mod.Log("RR mode: toggle added to " + modeHost.name);
-                if (modeButton != null) UnityEngine.Object.Destroy(modeButton.gameObject);
-                modeButton = CreateModeButton(modeHost);
+                // Each road group (roads, rail, paths...) has its own options
+                // panel: move to the one now open, reusing a toggle already on it.
+                if (host != modeHost) Mod.Log("RR mode: toggle on " + host.name);
+                modeHost = host;
+                var existing = host.Find<UIButton>(ModeButtonName);
+                if (modeButton != null && modeButton != existing) UnityEngine.Object.Destroy(modeButton.gameObject);
+                modeButton = existing ?? CreateModeButton(host);
+                PlaceModeButton();
             }
             if (!modeButton.isVisible) modeButton.isVisible = true;
+        }
+
+        // Right of the options, or left of them if that would be off the screen.
+        private static void PlaceModeButton()
+        {
+            float x = modeHost.width + 6f;
+            var view = UIView.GetAView();
+            if (view != null && view.fixedWidth > 0 && modeHost.absolutePosition.x + x + 36f > view.fixedWidth) x = -42f;
+            modeButton.relativePosition = new Vector3(x, Mathf.Max((modeHost.height - 36f) * 0.5f, 0f));
         }
 
         private static UIComponent FindOptionsPanel()
@@ -214,9 +230,8 @@ namespace RealisticRoads
         private static UIButton CreateModeButton(UIComponent host)
         {
             var button = (UIButton)host.AddUIComponent(typeof(UIButton));
-            button.name = "RealisticRoadsModeButton";
+            button.name = ModeButtonName;
             button.size = new Vector2(36f, 36f);
-            button.relativePosition = new Vector3(host.width + 6f, Mathf.Max((host.height - 36f) * 0.5f, 0f));
             button.tooltip = "Realistic Roads: draw this road with RR (curves, bridges, crossings)\nRR stays on for every road you pick until you leave it";
             if (Icons.Has(Icons.Logo, Icons.ButtonBackground, Icons.ButtonBackgroundHover, Icons.ButtonBackgroundPressed))
             {

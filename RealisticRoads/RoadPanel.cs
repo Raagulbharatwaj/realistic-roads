@@ -83,7 +83,9 @@ namespace RealisticRoads
         private UITextureSprite profileSprite;
         private Texture2D profileTexture;
         private PanelProfile drawnProfile;
-        private Color32[] profilePixels;          // the drawn profile without the cursor line
+        private Color32[] profilePixels;          // the drawn profile, with the cursor line at drawnCursorX
+        private int drawnCursorX = -1;            // column of the cursor line in profilePixels (-1: none)
+        private readonly Color32[] cursorBackup = new Color32[ProfileHeight];   // that column without the line
         private UILabel profileReadout;
         private float cursorAlong = -1f;          // metres along the curve under the mouse on the side view (-1: none)
         private bool cursorPinned;                // clicked: stays when the mouse leaves
@@ -171,6 +173,7 @@ namespace RealisticRoads
             profileTexture = null;
             drawnProfile = null;
             profilePixels = null;
+            drawnCursorX = -1;
             profileReadout = null;
             cursorAlong = -1f;
             cursorPinned = false;
@@ -252,6 +255,7 @@ namespace RealisticRoads
             profileReadout = null;
             drawnProfile = null;
             profilePixels = null;
+            drawnCursorX = -1;
             if (model.Profile != null)
             {
                 y = Header("SIDE VIEW", y);
@@ -590,6 +594,7 @@ namespace RealisticRoads
             }
 
             profilePixels = pixels;
+            drawnCursorX = -1;
             if (cursorAlong > profile.Length) cursorAlong = profile.Length;
             ShowCursor();
             profileSprite.texture = profileTexture;
@@ -640,11 +645,20 @@ namespace RealisticRoads
             if (profileTexture == null || profilePixels == null || profile == null) return;
             const int w = ProfileWidth, h = ProfileHeight;
             var pixels = profilePixels;
+            // Put back the column under the old line, then draw the new one,
+            // keeping what was under it (no copy of the whole picture per move).
+            if (drawnCursorX >= 0)
+                for (int y = 0; y < h; y++) pixels[y * w + drawnCursorX] = cursorBackup[y];
+            drawnCursorX = -1;
             if (cursorAlong >= 0f)
             {
-                pixels = (Color32[])profilePixels.Clone();
                 int x = Mathf.Clamp(Mathf.RoundToInt(cursorAlong / Mathf.Max(profile.Length, 1f) * (w - 1)), 0, w - 1);
-                for (int y = 0; y < h; y++) pixels[y * w + x] = CrossingMark;
+                for (int y = 0; y < h; y++)
+                {
+                    cursorBackup[y] = pixels[y * w + x];
+                    pixels[y * w + x] = CrossingMark;
+                }
+                drawnCursorX = x;
             }
             profileTexture.SetPixels32(pixels);
             profileTexture.Apply();

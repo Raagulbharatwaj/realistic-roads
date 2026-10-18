@@ -108,6 +108,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    - **tunnel**: ours goes 12 m under through a tunnel. Like the vanilla tool: an open cutting while it is less than
      8 m down, one slope piece with the portal, then the tunnel (no more rows of portals).
    Crossing at an angle, bridges, cuttings and lowered stretches get longer to fit the skewed footprint.
+   A curve that starts or ends in the middle of a road can cross that same piece of road again only with a bridge
+   or tunnel (that piece is cut where the curve joins it); the panel says so.
    If an overpass can't lower the other road, the log lists that road's nodes and heights (`Overpass: lowering ...
    failed`); please send it.
    Over water the preview shows **+/-** at the middle of the river: the bridge deck is 10 m above the water by

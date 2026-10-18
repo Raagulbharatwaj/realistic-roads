@@ -130,6 +130,19 @@ namespace RealisticRoads
             return result;
         }
 
+        // Index in SampleShaped's polyline of control point 'c' (of 'count'):
+        // ShapeEnds adds a guide point after the first and before the last
+        // control when that end has a direction, and every span has
+        // SamplesPerSpan samples.
+        public static int ShapedSampleIndex(int count, int c, Vector3 startDir, Vector3 endDir)
+        {
+            if (count < 2) return 0;
+            int shaped = c;
+            if (c > 0 && FlatNormal(startDir) != Vector3.zero) shaped++;
+            if (c == count - 1 && FlatNormal(endDir) != Vector3.zero) shaped++;
+            return shaped * SamplesPerSpan;
+        }
+
         // Ground length of a polyline.
         public static float Length(IList<Vector3> polyline)
         {

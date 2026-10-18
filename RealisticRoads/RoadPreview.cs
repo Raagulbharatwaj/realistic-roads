@@ -94,7 +94,13 @@ namespace RealisticRoads
                     if (piece.m_segments == null || piece.m_segments.Length == 0) continue;
                     Vector3 start, end;
                     Directions(plan, i, out start, out end);
-                    renderSegment.Invoke(target, Arguments(piece, plan.Points[i - 1], plan.Points[i], start, end));
+                    // A tunnel entrance is built from its underground end up (see
+                    // NetworkBuilder), so its portal faces the surface: draw it so too.
+                    // The flags passed (All, like the game's own preview) include Invert.
+                    if (plan.Kinds[i] == NodeKind.Tunnel && plan.Kinds[i - 1] != NodeKind.Tunnel)
+                        renderSegment.Invoke(target, Arguments(piece, plan.Points[i], plan.Points[i - 1], -end, -start));
+                    else
+                        renderSegment.Invoke(target, Arguments(piece, plan.Points[i - 1], plan.Points[i], start, end));
                 }
             }
             catch (Exception e)

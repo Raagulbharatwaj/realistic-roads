@@ -450,4 +450,21 @@ public class CurveMathTests
         Assert.Equal(CurveMath.BridgeEnd.Continue, End(10f, 32f, false, true, 90f, out _));
         Assert.Equal(CurveMath.BridgeEnd.Keep, End(10f, 32f, true, false, 0f, out _));
     }
+
+    [Fact]
+    public void ShapedSampleIndex_LandsOnEachControlPoint()
+    {
+        var controls = new List<Vector3> { V(0, 0), V(120, 40), V(260, -30), V(400, 10) };
+        foreach (var start in new[] { Vector3.zero, V(1, 0) })
+        foreach (var end in new[] { Vector3.zero, V(0, 1) })
+        {
+            var polyline = CurveMath.SampleShaped(controls, start, end);
+            for (int c = 0; c < controls.Count; c++)
+            {
+                var p = polyline[CurveMath.ShapedSampleIndex(controls.Count, c, start, end)];
+                Assert.Equal(controls[c].x, p.x, 3);
+                Assert.Equal(controls[c].z, p.z, 3);
+            }
+        }
+    }
 }

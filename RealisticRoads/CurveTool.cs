@@ -922,7 +922,7 @@ namespace RealisticRoads
             division.WaterRuns = FindWater(polyline);
             var cuts = new List<KeyValuePair<float, Crossing>>();
             // A point with a height of its own gets a node, so the height is held exactly there.
-            var controlAt = ControlDistances(polyline, controls);
+            var controlAt = ControlDistances(polyline, controls.Count, startDir, endDir);
             for (int i = 1; i < controls.Count - 1; i++)
                 if (Mathf.Abs(lifts[i]) > 0.01f) cuts.Add(new KeyValuePair<float, Crossing>(controlAt[i], null));
             foreach (var run in division.WaterRuns)
@@ -1096,28 +1096,18 @@ namespace RealisticRoads
 
         // Where each control point is along the curve through them (the
         // curve passes through every one, in order).
-        private static float[] ControlDistances(List<Vector3> polyline, List<Vector3> controls)
+        // Metres along the polyline (from SampleShaped) at each control point:
+        // the controls are samples of it, so read them off by index.
+        private static float[] ControlDistances(List<Vector3> polyline, int controls, Vector3 startDir, Vector3 endDir)
         {
-            var result = new float[controls.Count];
-            int from = 0;
-            var distances = new float[polyline.Count];
-            for (int i = 1; i < polyline.Count; i++) distances[i] = distances[i - 1] + CurveMath.FlatDistance(polyline[i - 1], polyline[i]);
-            for (int c = 0; c < controls.Count; c++)
+            var result = new float[controls];
+            float distance = 0f;
+            int sample = 0;
+            for (int c = 0; c < controls; c++)
             {
-                int best = from;
-                float bestDistance = float.MaxValue;
-                for (int i = from; i < polyline.Count; i++)
-                {
-                    float d = CurveMath.FlatDistance(polyline[i], controls[c]);
-                    if (d < bestDistance)
-                    {
-                        best = i;
-                        bestDistance = d;
-                    }
-                    if (bestDistance < 0.01f) break;
-                }
-                from = best;
-                result[c] = distances[best];
+                int index = Mathf.Min(CurveMath.ShapedSampleIndex(controls, c, startDir, endDir), polyline.Count - 1);
+                for (; sample < index; sample++) distance += CurveMath.FlatDistance(polyline[sample], polyline[sample + 1]);
+                result[c] = distance;
             }
             return result;
         }
@@ -1518,9 +1508,9 @@ namespace RealisticRoads
             }
             var crossing = item.Crossing;
             float ours = HeightAt(plan, crossing.Distance);
-            float under = crossing.ShipPath ? terrain.SampleRawHeightSmoothWithWater(crossing.Point, false, 0f) : crossing.Point.y;
-            float gap = ours - under;
-            string where = crossing.ShipPath ? " above the water" : gap >= 0f ? " above it" : " below it";
+            float gap = ours - crossing.Point.y;   // a ship route's point is on the water
+            string where = gap >= 0f ? (crossing.ShipPath ? " above the water" : " above it")
+                : crossing.ShipPath ? " below the water" : " below it";
             return crossing.Describe() + (Mathf.Abs(gap) >= 1f ? ", " + Mathf.Abs(gap).ToString("F0") + " m" + where : "");
         }
 
@@ -1528,10 +1518,9 @@ namespace RealisticRoads
         private static string ItemHeight(Division division, AlongItem item)
         {
             var plan = division.Plan;
-            var terrain = TerrainManager.instance;
             float at = item.Water != null ? (item.Water.From + item.Water.To) * 0.5f : item.Crossing.Distance;
-            float under = item.Water != null || item.Crossing.ShipPath
-                ? terrain.SampleRawHeightSmoothWithWater(item.Where, false, 0f)
+            float under = item.Water != null
+                ? TerrainManager.instance.SampleRawHeightSmoothWithWater(item.Where, false, 0f)
                 : item.Crossing.Point.y;
             float gap = HeightAt(plan, at) - under;
             return Mathf.Abs(gap) < 1f ? "level" : (gap > 0f ? "+" : "-") + Mathf.Abs(gap).ToString("F0") + " m";
