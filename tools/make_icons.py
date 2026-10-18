@@ -126,6 +126,12 @@ for y0 in (7, 17, 27):
     d.line(p(20, y0, 20, y0 + 5), fill=DASH, width=int(1.6 * S))
 save(im, "gameTool")
 
+# page arrows for the list along the road
+for name, pts in (("pageBack", (25, 10, 13, 20, 25, 30)), ("pageNext", (15, 10, 27, 20, 15, 30))):
+    im, d = canvas()
+    d.polygon(p(*pts), fill=DASH)
+    save(im, name)
+
 # a background for buttons that can't be used right now
 im, d = canvas()
 d.rounded_rectangle(p(1, 1, 39, 39), radius=8 * S, fill=(30, 34, 40, 150), outline=(70, 75, 85, 200), width=2 * S)

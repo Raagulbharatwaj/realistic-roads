@@ -47,7 +47,7 @@ namespace RealisticRoads
         public const float BridgeMinSpacing = 40f;
         private const float WaterJoin = 60f;          // wet patches closer than this are one water crossing
         private const float MinWaterWidth = 4f;       // narrower wet patches are ignored
-        private const float RaisedSpacing = 48f;      // node (pillar) spacing on raised stretches, like vanilla elevated roads
+        private const float RaisedSpacing = 90f;      // node (pillar) spacing on raised road stretches: long spans, few nodes
         private const float RailRaisedSpacing = 96f;  // rail: as few nodes as possible, long spans
         private const float HeightStep = 5f;
         private const float MaxExtraHeight = 60f;
@@ -167,11 +167,15 @@ namespace RealisticRoads
                 mouseRayValid = false;
             }
 
-            // Live preview: the clicked points plus the mouse position. Only
+            // Planning: a point being dragged follows the mouse.
+            if (dragIndex >= 0) UpdateDrag();
+
+            // Live preview: the clicked points plus the mouse position while
+            // drawing (not while planning: then the plan stays as it is). Only
             // worked out again when something it depends on changed (the mouse,
             // the points, a choice), and every half second for changes in the
             // city around it.
-            bool withHover = hoverValid && mouseRayValid;
+            bool withHover = hoverValid && mouseRayValid && !planning;
             Vector3 hover = hoverPosition;
             string key = choicesVersion + "|" + points.Count + "|" + withHover + "|" +
                          Mathf.RoundToInt(hover.x * 4f) + "," + Mathf.RoundToInt(hover.y * 4f) + "," + Mathf.RoundToInt(hover.z * 4f) + "|" +
@@ -413,8 +417,10 @@ namespace RealisticRoads
                 }
                 else if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
                 {
+                    // Drawing: done, check and adjust the plan. Planning: build it.
                     e.Use();
-                    BuildCurrent();
+                    if (planning) BuildCurrent();
+                    else StartPlanning();
                 }
                 else if (e.keyCode == KeyCode.Z && e.control)
                 {
@@ -432,14 +438,34 @@ namespace RealisticRoads
 
             if (e.type != EventType.MouseDown || m_toolController.IsInsideUI) return;
 
+            if (planning)
+            {
+                // Planning: clicks never add points. Grab a point to move it;
+                // right-click goes back to drawing (adding points at the end).
+                if (e.button == 0)
+                {
+                    e.Use();
+                    dragIndex = PointUnderMouse();
+                }
+                else if (e.button == 1)
+                {
+                    e.Use();
+                    planning = false;
+                    dragIndex = -1;
+                    choicesVersion++;
+                    Mod.Log("Drawing again: new points are added at the end");
+                }
+                return;
+            }
+
             if (e.button == 0 && hoverValid)
             {
                 e.Use();
                 var p = hoverPosition;
                 if (points.Count > 0 && (p - points[points.Count - 1]).sqrMagnitude < MinPointSpacing * MinPointSpacing)
                 {
-                    // Double-click (or a second click on the last point): build.
-                    BuildCurrent();
+                    // Double-click (or a second click on the last point): done drawing.
+                    StartPlanning();
                     return;
                 }
                 points.Add(p);
@@ -526,10 +552,14 @@ namespace RealisticRoads
                 overlay.DrawCircle(cameraInfo, CursorColor, marked, size, marked.y - 6f, marked.y + 6f, false, true);
             }
 
+            // While planning the points are handles: bigger, the grabbed one white.
             for (int i = 0; i < points.Count; i++)
-                overlay.DrawCircle(cameraInfo, pointNodes[i] != 0 || pointSegments[i] != 0 ? SnapColor : PointColor, pointMarkers[i], PointSize, -1f, 1280f, false, true);
+            {
+                Color color = i == dragIndex ? HoverColor : pointNodes[i] != 0 || pointSegments[i] != 0 ? SnapColor : PointColor;
+                overlay.DrawCircle(cameraInfo, color, pointMarkers[i], planning ? HandleSize : PointSize, -1f, 1280f, false, true);
+            }
 
-            if (hoverValid && mouseRayValid)
+            if (hoverValid && mouseRayValid && !planning)
                 overlay.DrawCircle(cameraInfo, hoverNode != 0 || hoverSegment != 0 ? SnapColor : HoverColor, hoverMarker, HoverSize, -1f, 1280f, false, true);
         }
 
@@ -1131,7 +1161,10 @@ namespace RealisticRoads
             if (division != null && division.Plan != null && camera != null && view != null)
             {
                 // Same numbers and order as the panel's list along the road.
+                // Rows that would cover one already placed (crossings close
+                // together) are stacked above it.
                 var items = Along(division);
+                var placed = new List<Vector4>();   // x, y, width, height of each row so far
                 for (int n = 0; n < items.Count; n++)
                 {
                     var item = items[n];
@@ -1145,6 +1178,7 @@ namespace RealisticRoads
                         foreach (var type in AllTypes) if (c.Allows(type)) allowed.Add(type);
                         int count = allowed.Count + (c.Type == CrossingType.Bridge ? 2 : 0);
                         float x = gui.x - count * (IconSize + 2f) * 0.5f;
+                        y = FreeRow(placed, x, y, count * (IconSize + 2f));
                         UseLabel(labelled++, (n + 1) + " · " + ItemHeight(division, item), new Vector2(x, y - 22f));
                         foreach (var type in allowed)
                         {
@@ -1162,6 +1196,7 @@ namespace RealisticRoads
                     else
                     {
                         var r = item.Water;
+                        y = FreeRow(placed, gui.x - IconSize - 1f, y, 2f * IconSize + 2f);
                         UseLabel(labelled++, (n + 1) + " · " + ItemHeight(division, item), new Vector2(gui.x - IconSize - 1f, y - 22f));
                         UseButton(used++, Icons.Plus, "+", "Bridge higher over the water (+" + HeightStep + " m)",
                             new Vector2(gui.x - IconSize - 1f, y), false, () => AddWaterExtra(r, HeightStep));
@@ -1172,6 +1207,28 @@ namespace RealisticRoads
             }
             HideButtons(used);
             for (int i = labelled; i < mapLabels.Count; i++) mapLabels[i].isVisible = false;
+        }
+
+        // The highest free spot at or above 'y' for a row of icons with its
+        // label (22 px above it), and the row taken there.
+        private static float FreeRow(List<Vector4> placed, float x, float y, float width)
+        {
+            const float label = 22f, gap = 4f;
+            float height = IconSize + label;
+            for (int guard = 0; guard < 20; guard++)
+            {
+                bool clear = true;
+                foreach (var row in placed)
+                    if (x < row.x + row.z + gap && row.x < x + width + gap && y - label < row.y + row.w - label + gap && row.y - label < y + IconSize + gap)
+                    {
+                        clear = false;
+                        y = row.y - height - gap;
+                        break;
+                    }
+                if (clear) break;
+            }
+            placed.Add(new Vector4(x, y, width, height));
+            return y;
         }
 
         // Number and height of each item along the road, shown on the map.
@@ -1342,6 +1399,10 @@ namespace RealisticRoads
                 Road = SelectedNetwork != null ? Title(SelectedNetwork) : "No road picked: choose one in the game's Roads menu, then open RR",
                 HasPoints = points.Count > 0,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
+                Mode = planning
+                    ? "PLANNING: drag the points to adjust; pick each crossing here or on the map. Check mark / Enter: build. Esc: scrap. Right-click: keep drawing."
+                    : points.Count == 0 ? "DRAWING: click to place the first point."
+                    : "DRAWING: click to add points. Double-click or Enter when done, to check and adjust the plan before building.",
             };
             var division = preview;
             if (division == null || division.Points.Count < 2 || division.Plan == null)
@@ -1490,8 +1551,73 @@ namespace RealisticRoads
             return plan.Points.Count > 0 ? plan.Points[0].y : 0f;
         }
 
+        // --- planning: the drawn curve kept as a plan to adjust before building ---
+
+        private bool planning;          // done drawing: the plan stays put, points can be dragged
+        private int dragIndex = -1;     // the point being dragged (-1: none)
+        private const float HandleSize = 12f;
+        private const float GrabPixels = 18f;
+
+        private void StartPlanning()
+        {
+            if (points.Count < 2)
+            {
+                Mod.Log("Place at least 2 points first");
+                return;
+            }
+            planning = true;
+            dragIndex = -1;
+            choicesVersion++;
+            Mod.Log("Planning: drag the points to adjust, pick each crossing; Enter or the check mark builds it, Esc scraps it");
+        }
+
+        // The point whose marker is under the mouse on screen (-1: none).
+        private int PointUnderMouse()
+        {
+            var camera = Camera.main;
+            if (camera == null) return -1;
+            Vector3 mouse = Input.mousePosition;
+            int best = -1;
+            float bestDistance = GrabPixels * GrabPixels;
+            for (int i = 0; i < pointMarkers.Count; i++)
+            {
+                Vector3 screen = camera.WorldToScreenPoint(pointMarkers[i]);
+                if (screen.z <= 0f) continue;
+                float dx = screen.x - mouse.x, dy = screen.y - mouse.y;
+                if (dx * dx + dy * dy < bestDistance)
+                {
+                    bestDistance = dx * dx + dy * dy;
+                    best = i;
+                }
+            }
+            return best;
+        }
+
+        // The dragged point follows the mouse (snapping to roads like a new
+        // point) until the button is let go.
+        private void UpdateDrag()
+        {
+            if (!Input.GetMouseButton(0) || dragIndex >= points.Count)
+            {
+                if (dragIndex >= 0 && dragIndex < points.Count) Mod.Log("Point " + (dragIndex + 1) + " moved to " + Format(points[dragIndex]));
+                dragIndex = -1;
+                return;
+            }
+            if (!hoverValid || !mouseRayValid) return;
+            Vector3 p = hoverPosition;
+            if ((p - points[dragIndex]).sqrMagnitude < 0.25f && pointNodes[dragIndex] == hoverNode) return;
+            points[dragIndex] = p;
+            pointNodes[dragIndex] = hoverNode;
+            pointMarkers[dragIndex] = hoverMarker;
+            pointSegments[dragIndex] = hoverNode == 0 ? hoverSegment : (ushort)0;
+            pointTs[dragIndex] = hoverT;
+            choicesVersion++;
+        }
+
         private void ClearPoints()
         {
+            planning = false;
+            dragIndex = -1;
             points.Clear();
             pointNodes.Clear();
             pointMarkers.Clear();

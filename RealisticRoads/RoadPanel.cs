@@ -10,6 +10,7 @@ namespace RealisticRoads
     {
         public string Road = "";
         public string Height = "";                // the next point's height (Page Up / Page Down)
+        public string Mode = "";                  // drawing or planning, and what to do next
         public string Summary = "";               // length, segments, cost
         public string Details = "";               // raised / lowered / continues ...
         // Crossings and water bridges, in order along the road (numbered as on the map).
@@ -93,8 +94,9 @@ namespace RealisticRoads
 
         public Action Build, Undo, Close, GameTool;
         private UIButton buildButton, undoButton;
-        private const float MaxListHeight = 330f;   // the list along the road scrolls beyond this
-        private UIComponent parent;                 // where the row helpers add their parts (the panel or the list)
+        private const int PageSize = 5;             // items along the road shown at a time
+        private int page;                           // which PageSize items are shown
+        private UIComponent parent;                 // where the row helpers add their parts
 
         public bool Exists => panel != null;
 
@@ -208,11 +210,12 @@ namespace RealisticRoads
             DrawProfile(model.Profile);
         }
 
-        private static string Shape(PanelModel model)
+        private string Shape(PanelModel model)
         {
             var shape = new System.Text.StringBuilder();
-            shape.Append(model.HasPoints).Append(model.CanBuild).Append(model.Profile != null).Append('|');
-            shape.Append(Lines(model.ProfileText, Width - 2f * Pad, 0.75f)).Append(Lines(model.Height, Width - 2f * Pad, 0.75f));
+            shape.Append(model.HasPoints).Append(model.CanBuild).Append(model.Profile != null).Append('|').Append(page).Append('|');
+            shape.Append(Lines(model.ProfileText, Width - 2f * Pad, 0.75f)).Append(Lines(model.Height, Width - 2f * Pad, 0.75f))
+                .Append(Lines(model.Mode, Width - 2f * Pad, 0.75f));
             // A text that wraps to more or fewer lines moves everything under it.
             float wide = Width - 2f * Pad;
             shape.Append(Lines(model.Road, wide, 0.85f)).Append(Lines(model.Summary, wide, 0.85f)).Append(Lines(model.Details, wide, 0.75f));
@@ -239,6 +242,7 @@ namespace RealisticRoads
             y = Header("ROAD", y);
             y = Text(m => m.Road, TextColor, 0.85f, y);
             y = Text(m => m.Height, DimColor, 0.75f, y);
+            y = Text(m => m.Mode, WarningColor, 0.75f, y);
 
             y = Header("CURVE", y);
             y = Text(m => m.Summary, TextColor, 0.85f, y);
@@ -285,26 +289,21 @@ namespace RealisticRoads
             if (model.Items.Count > 0)
             {
                 y = Header("ALONG THE ROAD", y);
-                // In a scrolling box when long (mouse wheel), so the panel stays on screen.
-                var box = (UIScrollablePanel)panel.AddUIComponent(typeof(UIScrollablePanel));
-                box.relativePosition = new Vector3(0f, y);
-                box.clipChildren = true;
-                box.scrollWheelDirection = UIOrientation.Vertical;
-                box.builtinKeyNavigation = false;
-                dynamic.Add(box);
-                parent = box;
-                float rowY = 0f;
-                for (int i = 0; i < model.Items.Count; i++)
+                // A page of PageSize at a time, with arrows to go through them.
+                int pages = (model.Items.Count + PageSize - 1) / PageSize;
+                page = Mathf.Clamp(page, 0, pages - 1);
+                int first = page * PageSize, last = Mathf.Min(first + PageSize, model.Items.Count);
+                for (int i = first; i < last; i++)
                 {
                     int index = i;
-                    rowY = Text(m => index < m.Items.Count ? m.Items[index].Title : "", TextColor, 0.8f, rowY);
-                    rowY = Text(m => index < m.Items.Count ? m.Items[index].Detail : "", DimColor, 0.75f, rowY - 2f);
+                    y = Text(m => index < m.Items.Count ? m.Items[index].Title : "", TextColor, 0.8f, y);
+                    y = Text(m => index < m.Items.Count ? m.Items[index].Detail : "", DimColor, 0.75f, y - 2f);
                     float x = Pad;
                     var item = model.Items[i];
                     foreach (var type in item.Allowed)
                     {
                         var t = type;
-                        IconButton(IconFor(t), Letter(t), Describe(t), new Vector2(x, rowY), item.Selected == t,
+                        IconButton(IconFor(t), Letter(t), Describe(t), new Vector2(x, y), item.Selected == t,
                             () => { var c = Row(index); if (c != null && c.Pick != null) c.Pick(t); });
                         x += IconSize + 3f;
                     }
@@ -312,19 +311,24 @@ namespace RealisticRoads
                     {
                         if (item.Allowed.Count > 0) x += 8f;
                         string step = item.Step.ToString("0.#");
-                        IconButton(Icons.Plus, "+", "Higher (+" + step + " m)", new Vector2(x, rowY), false,
+                        IconButton(Icons.Plus, "+", "Higher (+" + step + " m)", new Vector2(x, y), false,
                             () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(c.Step); });
-                        IconButton(Icons.Minus, "-", "Lower (-" + step + " m)", new Vector2(x + IconSize + 3f, rowY), false,
+                        IconButton(Icons.Minus, "-", "Lower (-" + step + " m)", new Vector2(x + IconSize + 3f, y), false,
                             () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(-c.Step); });
                     }
-                    if (item.Allowed.Count > 0 || item.HeightButtons) rowY += IconSize;
-                    rowY += RowGap + 6f;
+                    if (item.Allowed.Count > 0 || item.HeightButtons) y += IconSize;
+                    y += RowGap + 6f;
                 }
-                parent = panel;
-                float shown = Mathf.Min(rowY, MaxListHeight);
-                box.size = new Vector2(Width, shown);
-                y += shown;
-                if (rowY > MaxListHeight) y = Text(m => "Scroll the list for more (" + m.Items.Count + " in all)", DimColor, 0.7f, y);
+                if (pages > 1)
+                {
+                    IconButton(Icons.PageBack, "<", "Previous " + PageSize, new Vector2(Pad, y), false, () => TurnPage(-1));
+                    IconButton(Icons.PageNext, ">", "Next " + PageSize, new Vector2(Width - Pad - IconSize, y), false, () => TurnPage(1));
+                    int shownFirst = first + 1, shownLast = last, total = model.Items.Count;
+                    var label = Label(m => shownFirst + "-" + shownLast + " of " + total, DimColor, 0.8f,
+                        new Vector2(Pad + IconSize + 8f, y + 8f), Width - 2f * Pad - 2f * IconSize - 16f);
+                    label.textAlignment = UIHorizontalAlignment.Center;
+                    y += IconSize + RowGap;
+                }
             }
 
             if (model.Problems.Count > 0)
@@ -361,6 +365,13 @@ namespace RealisticRoads
             int lines = 0;
             foreach (var paragraph in text.Split('\n')) lines += Mathf.Max(1, Mathf.CeilToInt(paragraph.Length / (float)perLine));
             return lines;
+        }
+
+        private void TurnPage(int step)
+        {
+            page += step;
+            structure = null;          // rebuilt with the new page
+            if (current != null) Show(current);
         }
 
         private PanelCrossing Row(int index) => current != null && index < current.Items.Count ? current.Items[index] : null;

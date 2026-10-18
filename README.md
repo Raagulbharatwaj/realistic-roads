@@ -63,7 +63,7 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,
-     for a bridge, higher / lower; water bridges have higher / lower. The list scrolls (mouse wheel) when long. On
+     for a bridge, higher / lower; water bridges have higher / lower. The list shows 5 at a time; the arrows under it page through the rest. On
      the map the same number and height are shown at each one (`3 · +11 m`), above its icons. Roads, tracks,
      paths, canals and **ship and ferry routes** count: over a ship route only a bridge (at least 20 m above the
      water, so ships fit) or a tunnel is offered. Airplane routes and power lines are ignored;
@@ -126,11 +126,18 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    ground, blue raised, orange lowered (shown on the ground above it, where it will be dug), purple steep, red too sharp.
 4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
    elevated road (deck on pillars), 10 m above the water, with ramps on land at a gentle 4 % slope (3.5 % for rail).
-   Raised stretches over land get a pillar every 48 m (roads) or 96 m (rail); bridges over water keep ~100 m spans.
+   Raised stretches over land get a pillar about every 90 m (roads) or 96 m (rail); bridges over water keep ~100 m spans.
    Rail decks over a crossing span at least 90 m, so no short pieces bunch up next to it.
    A level crossing (junction) and ramps up to 3 m above the ground use the ground version of the road on an
    embankment; only stretches that must be raised (bridges, water) or are higher use the elevated version.
-5. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.
+5. **Drawing, then planning.** While drawing, the curve follows the mouse and each click adds a point; right-click
+   removes the last one. **Double-click** (or **Enter**) when done: the tool switches to **planning**. The plan then
+   stays where it is, so you can work on it without it following the mouse:
+   - drag any point (the bigger circles) to move it; it snaps to roads like a new point;
+   - pick each crossing's type and heights, in the panel or on the map;
+   - **Enter** or the check mark builds it; **Esc** scraps it; **right-click** goes back to drawing, adding points at
+     the end.
+   The panel says which of the two you are in and what to do next. Esc with no points leaves the tool.
 6. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
 
 Building costs what the vanilla road tool would charge for the same pieces (shown as **Cost** in the panel); Ctrl+Z
