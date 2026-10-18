@@ -905,13 +905,15 @@ namespace RealisticRoads
             {
                 Vector3 p = plan.Points[i];
                 Vector3 a, b;
-                if (plan.OnDeck != null && plan.OnDeck[i] && !Decks.PillarFits(p, plan.Decks[i]) &&
-                    DeckFrames.Columns(plan.Decks[i], ourHalf, out a, out b))
+                var support = plan.OnDeck != null && plan.OnDeck[i] ? Decks.SupportFor(p, plan.Decks[i]) : Decks.Support.Pillar;
+                if (support != Decks.Support.Pillar && DeckFrames.Beam(plan.Decks[i], ourHalf, support == Decks.Support.Column, out a, out b))
                 {
-                    // A frame across the road below: its two columns, and the beam between them.
-                    foreach (var foot in new[] { a, b })
+                    // Our support: a column on the median, or a frame's two columns beside
+                    // the road below; and the beam under the deck.
+                    var feet = support == Decks.Support.Column ? new[] { plan.Decks[i].Center } : new[] { a, b };
+                    foreach (var foot in feet)
                     {
-                        float footGround = terrain.SampleRawHeightSmooth(foot);
+                        float footGround = support == Decks.Support.Column ? foot.y : terrain.SampleRawHeightSmooth(foot);
                         overlay.DrawCircle(cameraInfo, PillarColor, new Vector3(foot.x, footGround, foot.z), 3f, footGround - 4f, footGround + 4f, false, true);
                     }
                     float beam = p.y - 2f;
@@ -1882,12 +1884,13 @@ namespace RealisticRoads
                 foreach (int i in PillarNodes(division))
                 {
                     if (!plan.OnDeck[i] || plan.Decks[i].Segment == 0) continue;
-                    if (Decks.PillarFits(plan.Points[i], plan.Decks[i])) medians++;
-                    else frames++;
+                    var support = Decks.SupportFor(plan.Points[i], plan.Decks[i]);
+                    if (support == Decks.Support.Column) medians++;
+                    else if (support == Decks.Support.Portal) frames++;
                 }
                 foreach (bool on in plan.OnDeck) if (on) onDeck++;
                 if (onDeck > 0)
-                    details.Add("deck over the roads below" + (medians > 0 ? ", " + medians + " pillar(s) on medians" : "") +
+                    details.Add("deck over the roads below" + (medians > 0 ? ", " + medians + " column(s) on the median" : "") +
                                 (frames > 0 ? ", " + frames + " frame(s) across roads" : ""));
             }
             if (lowered > 0) details.Add("lowered in places");

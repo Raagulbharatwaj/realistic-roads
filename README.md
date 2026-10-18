@@ -157,11 +157,17 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
        the ground where there is no road; over an elevated road it is a third level. Roads it passes over are crossed
        by bridge; the road it runs along isn't a crossing.
      - Ramps: draw the pieces before and after the deck with Deck off; they climb to it at the road's grade.
-     - **Pillars:** where the road below has a median (no lane within 1.5 m of its middle) and the deck is over its
-       middle, the deck's own pillars stand on the median. Otherwise each node gets a **frame**: two columns beside
-       the road below and a beam across under the deck, so nothing stands on the road. The preview shows the columns
-       and beam; the panel counts both. Frames are drawn by the mod (with the pillars' concrete) and saved with the
-       city; without the mod those nodes would get their normal pillars back the next time the game updates them.
+     - **Supports:** the game won't put a pillar on another road, so over a road the mod builds its own (drawn
+       with the concrete of the road's pillars, saved with the city):
+       - where the road below has a median (no lane within 0.75 m of its middle) and the deck is over its middle,
+         **one column on the median** with a cap under the deck;
+       - otherwise a **frame**: two columns beside the road below and a beam across under the deck.
+       Over open ground the deck has the game's normal pillars. The preview shows each column and beam; the panel
+       counts columns and frames. Without the mod those nodes would get the game's pillars back.
+     - The deck also clears the street lights and trees along the middle of the road below (it is raised above
+       their tops when they are taller than the 9 m clearance allows).
+     - A third level is measured from the deck below it (the highest road under each point), and evened out
+       between neighbouring nodes so it doesn't dip where a node is just off the deck below.
 6. **Drawing, then planning.** While drawing, the curve follows the mouse and each click adds a point; right-click
    removes the last one. **Double-click** (or **Enter**) when done: the tool switches to **planning**. The plan then
    stays where it is, so you can work on it without it following the mouse:

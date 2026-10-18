@@ -166,9 +166,23 @@ namespace RealisticRoads
             }
 
             // A deck stays clear of the road under it (or of the ground) all along.
+            // Each node's floor is the highest of its own and its deck neighbours':
+            // a node just off the middle of the deck below (or past its end) would
+            // otherwise measure from the road under that, and the deck would dip and rise.
             if (onDeck != null && decks != null)
+            {
+                var floor = new float[n];
                 for (int i = 0; i < n && i < onDeck.Length && i < decks.Length; i++)
-                    if (onDeck[i]) minH[i] = Mathf.Max(minH[i], Decks.Floor(points[i], decks[i]));
+                    if (onDeck[i]) floor[i] = Decks.Floor(points[i], decks[i]);
+                for (int i = 0; i < n && i < onDeck.Length; i++)
+                {
+                    if (!onDeck[i]) continue;
+                    float level = floor[i];
+                    if (i > 0 && onDeck[i - 1]) level = Mathf.Max(level, floor[i - 1]);
+                    if (i + 1 < n && i + 1 < onDeck.Length && onDeck[i + 1]) level = Mathf.Max(level, floor[i + 1]);
+                    minH[i] = Mathf.Max(minH[i], level);
+                }
+            }
 
             if (NetworkBuilder.NodeExists(startNode)) Fix(0, nodes[startNode].m_position.y, minH, maxH, isFixed);
             if (NetworkBuilder.NodeExists(endNode)) Fix(n - 1, nodes[endNode].m_position.y, minH, maxH, isFixed);
