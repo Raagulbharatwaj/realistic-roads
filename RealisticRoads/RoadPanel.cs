@@ -22,6 +22,7 @@ namespace RealisticRoads
         public bool Straight;                     // the next piece is straight (else curved)
         public float Radius;                      // corners between straight pieces (0: sharp)
         public bool Snapping;                     // straight pieces snap their angle and length
+        public bool Deck;                         // the next piece is a deck over the roads below
         public PanelProfile Profile;              // the curve seen from the side (null: nothing to show)
         public string ProfileText = "";           // highest / deepest / steepest
     }
@@ -103,9 +104,10 @@ namespace RealisticRoads
         public Action<bool> SetStraight;
         public Action<float> ChangeRadius;
         public Action ToggleSnap;
+        public Action ToggleDeck;
         public Action<string, string> Typed;
         public Action TypedSubmit;
-        private UIButton curveButton, straightButton, snapButton;
+        private UIButton curveButton, straightButton, snapButton, deckButton;
         private UILabel radiusLabel;
         private UITextField lengthField, turnField;
         private const float BarTop = 46f;
@@ -192,13 +194,17 @@ namespace RealisticRoads
                 () => { if (SetStraight != null) SetStraight(true); });
             snapButton = BarButton(Icons.Snap, "Sn", "Snapping for straight pieces (on: green)", Pad + 2f * (IconSize + 3f) + 8f, y,
                 () => { if (ToggleSnap != null) ToggleSnap(); });
-            float x = Pad + 3f * (IconSize + 3f) + 20f;
-            BarLabel("Corner", x, y + 8f, 46f);
-            BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner)", x + 48f, y,
+            deckButton = BarButton(Icons.Deck, "D", "Deck: the next pieces run over the roads below, a level up (double or triple " +
+                "decker)\nClick on a road to put a deck point over its middle; between two such points the deck follows the road.\n" +
+                "Pillars stand on the road's median if it has one, else a frame spans the road", Pad + 3f * (IconSize + 3f) + 8f, y,
+                () => { if (ToggleDeck != null) ToggleDeck(); });
+            float x = Pad + 4f * (IconSize + 3f) + 14f;
+            BarLabel("Corner", x, y + 8f, 44f);
+            BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner)", x + 44f, y,
                 () => { if (ChangeRadius != null) ChangeRadius(-CurveTool.RadiusStep); });
-            radiusLabel = BarLabel("", x + 48f + IconSize, y + 8f, 54f);
+            radiusLabel = BarLabel("", x + 44f + IconSize, y + 8f, 46f);
             radiusLabel.textAlignment = UIHorizontalAlignment.Center;
-            BarButton(Icons.Plus, "+", "Wider corners between straight pieces", x + 102f + IconSize, y,
+            BarButton(Icons.Plus, "+", "Wider corners between straight pieces", x + 90f + IconSize, y,
                 () => { if (ChangeRadius != null) ChangeRadius(CurveTool.RadiusStep); });
 
             y += IconSize + 6f;
@@ -297,6 +303,7 @@ namespace RealisticRoads
             Select(curveButton, !model.Straight);
             Select(straightButton, model.Straight);
             Select(snapButton, model.Snapping);
+            Select(deckButton, model.Deck);
             if (radiusLabel != null)
             {
                 string text = model.Radius < 0.5f ? "sharp" : model.Radius.ToString("0") + " m";
@@ -317,7 +324,7 @@ namespace RealisticRoads
             if (panel != null) UnityEngine.Object.Destroy(panel.gameObject);
             if (profileTexture != null) UnityEngine.Object.Destroy(profileTexture);
             panel = null;
-            curveButton = straightButton = snapButton = null;
+            curveButton = straightButton = snapButton = deckButton = null;
             radiusLabel = null;
             lengthField = turnField = null;
             profileSprite = null;

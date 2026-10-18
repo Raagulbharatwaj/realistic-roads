@@ -139,9 +139,11 @@ namespace RealisticRoads
         // (each becomes a node there). A curve next to a straight span leaves
         // it smoothly, along its line. 'controlSamples': the polyline index of
         // each control (the middle of its rounding for a rounded corner).
-        // No straight span: the same curve as SampleShaped.
+        // 'paths' (optional): span i runs exactly along paths[i] where it isn't
+        // null (a deck following an existing road), from control i to i+1.
+        // No straight span or path: the same curve as SampleShaped.
         public static List<Vector3> SampleMixed(IList<Vector3> controls, IList<bool> straight, float radius, Vector3 startDir,
-            Vector3 endDir, out int[] controlSamples, out List<float> sharpCorners)
+            Vector3 endDir, out int[] controlSamples, out List<float> sharpCorners, IList<List<Vector3>> paths = null)
         {
             int n = controls.Count;
             controlSamples = new int[n];
@@ -149,6 +151,9 @@ namespace RealisticRoads
             bool any = false;
             if (straight != null)
                 for (int i = 0; i < n - 1 && i < straight.Count; i++) any |= straight[i];
+            Func<int, List<Vector3>> pathOf = i => paths != null && i >= 0 && i < paths.Count && paths[i] != null && paths[i].Count >= 2
+                ? paths[i] : null;
+            for (int i = 0; i < n - 1; i++) any |= pathOf(i) != null;
             if (n < 2 || !any)
             {
                 var shaped = SampleShaped(controls, startDir, endDir);
@@ -156,7 +161,13 @@ namespace RealisticRoads
                 return shaped;
             }
 
-            Func<int, bool> isStraight = i => i >= 0 && i < n - 1 && i < straight.Count && straight[i];
+            Func<int, bool> isStraight = i => i >= 0 && i < n - 1 && straight != null && i < straight.Count && straight[i] && pathOf(i) == null;
+            // A path's own direction where it leaves and reaches its controls.
+            Func<int, bool, Vector3> pathEnd = (i, atStart) =>
+            {
+                var path = pathOf(i);
+                return atStart ? FlatNormal(path[1] - path[0]) : FlatNormal(path[path.Count - 1] - path[path.Count - 2]);
+            };
             var dir = new Vector3[n - 1];
             var length = new float[n - 1];
             for (int i = 0; i < n - 1; i++)
@@ -184,15 +195,17 @@ namespace RealisticRoads
             var tangent = new Vector3[n];
             for (int i = 1; i < n - 1; i++)
             {
-                if (isStraight(i - 1)) tangent[i] = dir[i - 1];
+                if (pathOf(i - 1) != null) tangent[i] = pathEnd(i - 1, false);
+                else if (pathOf(i) != null) tangent[i] = pathEnd(i, true);
+                else if (isStraight(i - 1)) tangent[i] = dir[i - 1];
                 else if (isStraight(i)) tangent[i] = dir[i];
                 else tangent[i] = FlatNormal(controls[i + 1] - controls[i - 1]);
                 if (tangent[i] == Vector3.zero) tangent[i] = dir[i];
             }
             Vector3 startN = FlatNormal(startDir), endN = FlatNormal(endDir);
-            tangent[0] = isStraight(0) ? dir[0] : startN != Vector3.zero ? startN
+            tangent[0] = pathOf(0) != null ? pathEnd(0, true) : isStraight(0) ? dir[0] : startN != Vector3.zero ? startN
                 : n > 2 ? FlatNormal(2f * dir[0] - tangent[1]) : dir[0];
-            tangent[n - 1] = isStraight(n - 2) ? dir[n - 2] : endN != Vector3.zero ? endN
+            tangent[n - 1] = pathOf(n - 2) != null ? pathEnd(n - 2, false) : isStraight(n - 2) ? dir[n - 2] : endN != Vector3.zero ? endN
                 : n > 2 ? FlatNormal(2f * dir[n - 2] - tangent[n - 2]) : dir[n - 2];
             for (int i = 0; i < n; i++) if (tangent[i] == Vector3.zero) tangent[i] = dir[Math.Min(i, n - 2)];
 
@@ -200,7 +213,14 @@ namespace RealisticRoads
             for (int i = 0; i < n - 1; i++)
             {
                 Vector3 a = controls[i], b = controls[i + 1];
-                if (isStraight(i))
+                var path = pathOf(i);
+                if (path != null)
+                {
+                    for (int k = 1; k < path.Count - 1; k++) result.Add(path[k]);
+                    result.Add(b);
+                    controlSamples[i + 1] = result.Count - 1;
+                }
+                else if (isStraight(i))
                 {
                     // The line up to where the corner's rounding starts (or the next control).
                     Vector3 end = reach[i + 1] > 0f ? Vector3.Lerp(a, b, 1f - reach[i + 1] / Mathf.Max(length[i], 0.01f)) : b;

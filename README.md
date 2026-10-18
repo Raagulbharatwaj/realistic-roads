@@ -147,6 +147,20 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      piece, the bearing from north) for the next point; the point is held there and **Enter** in the field places it
      (or click on the map). The fields empty again after each point.
    The label by the mouse shows the piece: `Straight · 248 m · 15° right · along the road`.
+   - **Deck** (double and triple deckers): the next pieces run a level up, over the roads below. Like the other
+     modes, a piece is a deck if its end point was placed with Deck on.
+     - Click on a road with Deck on: the point goes over the road's middle (no junction with it). Between two such
+       points the deck **follows that road** exactly, through its bends and junctions. Elsewhere it is drawn freely
+       (curved or straight) over whatever is below.
+     - A deck stays 9 m clear of the road under it (11 m over a rail line on the ground, for the wires), or 9 m above
+       the ground where there is no road; over an elevated road it is a third level. Roads it passes over are crossed
+       by bridge; the road it runs along isn't a crossing.
+     - Ramps: draw the pieces before and after the deck with Deck off; they climb to it at the road's grade.
+     - **Pillars:** where the road below has a median (no lane within 1.5 m of its middle) and the deck is over its
+       middle, the deck's own pillars stand on the median. Otherwise each node gets a **frame**: two columns beside
+       the road below and a beam across under the deck, so nothing stands on the road. The preview shows the columns
+       and beam; the panel counts both. Frames are drawn by the mod (with the pillars' concrete) and saved with the
+       city; without the mod those nodes would get their normal pillars back the next time the game updates them.
 6. **Drawing, then planning.** While drawing, the curve follows the mouse and each click adds a point; right-click
    removes the last one. **Double-click** (or **Enter**) when done: the tool switches to **planning**. The plan then
    stays where it is, so you can work on it without it following the mouse:

@@ -328,8 +328,22 @@ namespace RealisticRoads
                     int k = plan.CrossingIndex[c];
                     if ((type == CrossingType.Bridge || type == CrossingType.Overpass) && k >= 0 && k <= last) overCrossing.Add(nodeIds[k]);
                 }
+                // A deck over a road: its pillar on the road's median if it has
+                // one, else a frame across the road (none on the road itself).
+                int frames = 0;
+                if (plan.OnDeck != null && plan.Decks != null)
+                    for (int i = 0; i <= last && i < plan.OnDeck.Length && i < plan.Decks.Length; i++)
+                    {
+                        var below = plan.Decks[i];
+                        bool raised = plan.Kinds[i] == NodeKind.Elevated || plan.Kinds[i] == NodeKind.Bridge;
+                        if (!plan.OnDeck[i] || !raised || below.Segment == 0 || !build.Nodes.Contains(nodeIds[i])) continue;
+                        if (Decks.PillarFits(points[i], below)) continue;
+                        DeckFrames.Add(nodeIds[i], below, info.m_halfWidth);
+                        frames++;
+                    }
                 foreach (ushort node in build.Nodes)
                     if (!overCrossing.Contains(node)) UpdatePillar(node);
+                if (frames > 0) Mod.Log("  Deck: " + frames + " frame(s) across the road below instead of pillars on it");
 
                 int middles = 0;
                 if (plan.Middle != null) foreach (bool m in plan.Middle) if (m) middles++;
