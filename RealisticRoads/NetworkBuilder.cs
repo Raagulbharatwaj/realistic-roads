@@ -135,11 +135,7 @@ namespace RealisticRoads
                     var crossing = plan.Crossings[c];
                     bool underpass = crossing.Type == CrossingType.Underpass && crossing.ExistingAtGround;
                     bool overpass = crossing.Type == CrossingType.Overpass && plan.Lowerings.ContainsKey(c);
-                    // A bridge over rail keeps its node above the track: the track
-                    // dips a little there so its wires clear the deck.
-                    bool overRail = crossing.Type == CrossingType.Bridge && crossing.ExistingAtGround &&
-                                    plan.CrossingIndex[c] >= 0 && RoadPlanner.CrossesRail(crossing);
-                    if (!crossing.Connects && !underpass && !overpass && !overRail) continue;
+                    if (!crossing.Connects && !underpass && !overpass) continue;
                     if (!touched.Add(crossing.Segment))
                     {
                         // Junctions on the same segment were all made with the first one.
@@ -149,12 +145,6 @@ namespace RealisticRoads
                     }
                     if ((net.m_segments.m_buffer[crossing.Segment].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None)
                         throw new Exception("the road at crossing " + (c + 1) + " no longer exists");
-
-                    if (overRail)
-                    {
-                        DipUnder(crossing, RailUnderDeck, build);
-                        continue;
-                    }
 
                     if (overpass)
                     {
@@ -353,31 +343,8 @@ namespace RealisticRoads
 
         private const float MinPiece = 8f;   // no road piece shorter than this is left between cuts
         private const float MinRailPiece = 30f;   // on rail: as few nodes as possible, no short pieces
-        private const float RailUnderDeck = 1f;   // track dip under a bridge's node above it
 
         private static float MinPieceOf(NetInfo info) => RoadPlanner.IsRail(info) ? MinRailPiece : MinPiece;
-
-        // Dips the existing track under our deck's node by 'depth': a new node
-        // at the crossing, or the existing node if one is within a short piece.
-        private static void DipUnder(Crossing crossing, float depth, Build build)
-        {
-            var net = NetManager.instance;
-            var s = net.m_segments.m_buffer[crossing.Segment];
-            float length = Mathf.Max(s.m_averageLength, 1f);
-            float fromStart = crossing.ExistingT * length, fromEnd = length - fromStart;
-            float minimum = MinPieceOf(s.Info);
-            ushort node;
-            if (fromStart < minimum || fromEnd < minimum)
-            {
-                node = fromStart < fromEnd ? s.m_startNode : s.m_endNode;
-                build.Moves.Add(new KeyValuePair<ushort, Vector3>(node, net.m_nodes.m_buffer[node].m_position));
-            }
-            else node = SplitSegment(crossing.Segment, new[] { crossing.ExistingT }, null, build).Nodes[0];
-            Vector3 position = net.m_nodes.m_buffer[node].m_position;
-            position.y -= depth;
-            net.MoveNode(node, position);
-            RefreshDirections(node);
-        }
 
         // The existing road above an underpass becomes a bridge for 'reach'
         // metres either side of the crossing, so it spans our cutting and its
@@ -823,94 +790,6 @@ namespace RealisticRoads
                 if (Vector3.Dot(away, direction) > limit) return false;
             }
             return true;
-        }
-
-        // --- half snapping: attach a branch to one half of a wide road's end ---
-
-        // Where a narrower road attaches to one half of a wide road's end.
-        public struct HalfSnap
-        {
-            public int Side;          // +1 = left half, -1 = right half (seen from the trunk looking out)
-            public Vector3 Forward;   // trunk direction at its end, pointing out of the trunk
-            public float Offset;      // sideways distance of the branch centre line from the trunk's
-            public float RunIn;       // how far the branch runs parallel before it may curve away
-        }
-
-        private const float MinHalfRunIn = 24f;
-
-        // Can a 'branch' road attach to a half of the road ending at 'node'?
-        // True for a dead end of a road at least ~1.33x as wide as the branch,
-        // or such a road end with one branch already on a half (the new one
-        // then gets the other half). 'cursor' picks the half; 'forcedSide' (if
-        // not 0) overrides it.
-        public static bool TryHalfSnap(ushort node, NetInfo branch, Vector3 cursor, int forcedSide, out HalfSnap snap)
-        {
-            snap = default(HalfSnap);
-            if (branch == null || !NodeExists(node)) return false;
-            var nodes = NetManager.instance.m_nodes.m_buffer;
-            var segments = NetManager.instance.m_segments.m_buffer;
-
-            // Trunk = the widest road at the node.
-            ushort trunk = 0, other = 0;
-            int count = 0;
-            for (int i = 0; i < 8; i++)
-            {
-                ushort s = nodes[node].GetSegment(i);
-                if (s == 0) continue;
-                count++;
-                if (trunk == 0 || segments[s].Info.m_halfWidth > segments[trunk].Info.m_halfWidth)
-                {
-                    other = trunk;
-                    trunk = s;
-                }
-                else
-                {
-                    other = s;
-                }
-            }
-            if (count < 1 || count > 2) return false;
-
-            float trunkHalf = segments[trunk].Info.m_halfWidth;
-            float branchHalf = branch.m_halfWidth;
-            if (branchHalf > trunkHalf * 0.75f) return false;
-
-            Vector3 position = nodes[node].m_position;
-            Vector3 forward = -CurveMath.FlatNormal(DirectionAway(trunk, node));
-            Vector3 left = CurveMath.Left(forward);
-            int side = forcedSide != 0 ? forcedSide : (Vector3.Dot(cursor - position, left) >= 0f ? 1 : -1);
-
-            if (count == 2)
-            {
-                // The other road must be a narrower branch already leaving this
-                // end, not the same road carrying on (a node mid-road).
-                if (segments[other].Info.m_halfWidth > trunkHalf * 0.75f) return false;
-                if (Vector3.Dot(CurveMath.FlatNormal(DirectionAway(other, node)), forward) < Mathf.Cos(45f * Mathf.Deg2Rad))
-                    return false;
-                ushort far = segments[other].m_startNode == node ? segments[other].m_endNode : segments[other].m_startNode;
-                int taken = Vector3.Dot(nodes[far].m_position - position, left) >= 0f ? 1 : -1;
-                side = -taken;
-            }
-
-            snap.Side = side;
-            snap.Forward = forward;
-            // Branches side by side without overlapping; outer edge at least at the trunk's edge.
-            snap.Offset = Mathf.Max(branchHalf, trunkHalf - branchHalf);
-            // A long, gentle taper before the branch curves away.
-            snap.RunIn = Mathf.Max(MinHalfRunIn, snap.Offset * 8f);
-            return true;
-        }
-
-        // Point on the trunk end where the branch attaches (shown under the cursor).
-        public static Vector3 HalfSnapMarker(ushort node, HalfSnap snap)
-        {
-            Vector3 position = NetManager.instance.m_nodes.m_buffer[node].m_position;
-            return position + CurveMath.Left(snap.Forward) * (snap.Side * snap.Offset);
-        }
-
-        // End of the parallel run-in, where the branch's own curve begins.
-        public static Vector3 HalfSnapRunIn(ushort node, HalfSnap snap)
-        {
-            return HalfSnapMarker(node, snap) + snap.Forward * snap.RunIn;
         }
 
         // Flat directions, then the game works out the slope between the two

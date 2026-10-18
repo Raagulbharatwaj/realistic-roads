@@ -188,7 +188,7 @@ namespace RealisticRoads
                             crossing.Point.y + OverClearance + crossing.ExtraHeight, true, minH, false);
                         // Over rail the node on the track stays (no pillar) and sits
                         // higher, so the overhead wires pass under the deck.
-                        if (CrossesRail(crossing))
+                        if (crossing.OverRail)
                             minH[k] = Mathf.Max(minH[k], crossing.Point.y + OverClearance + crossing.ExtraHeight + RailDeckLift);
                         break;
                     case CrossingType.Overpass:
@@ -337,11 +337,6 @@ namespace RealisticRoads
         }
 
         public static bool IsRail(NetInfo info) => info != null && GradeFor(info) == RailGrade;
-
-        public static bool CrossesRail(Crossing crossing)
-        {
-            return crossing.Segment != 0 && IsRail(NetManager.instance.m_segments.m_buffer[crossing.Segment].Info);
-        }
 
         public static float SpanHalf(Crossing crossing, float ourHalfWidth, bool overpass)
         {
@@ -599,8 +594,10 @@ namespace RealisticRoads
 
                 string problem;
                 if (!LowerGroup(plan, info, line, group, at, grade, depth, out problem))
-                    plan.Problems.Add(problem + " (needs about " + ramp.ToString("F0") + " m of plain " +
-                                      (rail ? "track" : "road") + " each side at " + (grade * 100f).ToString("0.#") + " %)");
+                    plan.Problems.Add(problem.StartsWith("Not enough room")
+                        ? problem + " (needs about " + ramp.ToString("F0") + " m of plain " + (rail ? "track" : "road") +
+                          " each side at " + (grade * 100f).ToString("0.#") + " %)"
+                        : problem);
             }
         }
 
@@ -626,7 +623,10 @@ namespace RealisticRoads
                 float length = Mathf.Max(net.m_segments.m_buffer[crossing.Segment].m_averageLength, 1f);
                 int nearest = 0;
                 for (int i = 1; i < along.Count; i++) if (Mathf.Abs(along[i] - at[g]) < Mathf.Abs(along[nearest] - at[g])) nearest = i;
-                if (ids[nearest] != 0 && Mathf.Abs(along[nearest] - at[g]) < MinSplit)
+                // Never onto a pinned end of the line (a junction, or where the walk
+                // stopped): that node stays put, so nothing would be lowered there.
+                bool pinned = (nearest == 0 && line.StartFixed) || (nearest == along.Count - 1 && line.EndFixed);
+                if (ids[nearest] != 0 && !pinned && Mathf.Abs(along[nearest] - at[g]) < MinSplit)
                 {
                     splitOf[g] = nearest;
                     splitT[g] = -1f;
@@ -662,7 +662,9 @@ namespace RealisticRoads
                 float span = (info.m_halfWidth / Mathf.Max(crossing.Skew, 0.35f)) + 6f;
                 for (int i = 0; i < m; i++)
                     if (Mathf.Abs(along[i] - at[g]) <= span) maxH[i] = Mathf.Min(maxH[i], crossing.Point.y - CutDepth);
-                maxH[splitOf[g]] = Mathf.Min(maxH[splitOf[g]], crossing.Point.y - depth);
+                // The one cut is the low point; deep enough that the road, climbing
+                // from it at the grade, still clears the deck's edge.
+                maxH[splitOf[g]] = Mathf.Min(maxH[splitOf[g]], Mathf.Min(crossing.Point.y - depth, crossing.Point.y - CutDepth - grade * span));
                 // Between this overpass and the next one: stay down, running evenly.
                 if (o + 1 < order.Count)
                 {
@@ -692,6 +694,14 @@ namespace RealisticRoads
                 lastLoweringFailure = text;
                 return false;
             }
+
+            // Every crossing's low point must really be down (a pinned node can't be).
+            for (int g = 0; g < group.Count; g++)
+                if (heights[splitOf[g]] > plan.Crossings[group[g]].Point.y - CutDepth + 0.1f)
+                {
+                    problem = "Not enough room to lower the " + name + " (a junction is too close to the crossing)";
+                    return false;
+                }
 
             // The first overpass of the group moves the existing nodes; each one cuts its own segment.
             var terrain = TerrainManager.instance;

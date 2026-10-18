@@ -26,6 +26,7 @@ namespace RealisticRoads
         public readonly List<CrossingType> Allowed = new List<CrossingType>();
         public CrossingType Selected;
         public bool HeightButtons;                // bridge: +/- for the deck
+        public float Step;                        // metres per +/- click
         public Action<CrossingType> Pick;
         public Action<float> Raise;
     }
@@ -33,6 +34,7 @@ namespace RealisticRoads
     public class PanelWater
     {
         public string Title = "";
+        public float Step;                        // metres per +/- click
         public Action<float> Raise;
     }
 
@@ -89,7 +91,7 @@ namespace RealisticRoads
             icon.size = new Vector2(28f, 28f);
             icon.relativePosition = new Vector3(10f, 6f);
             icon.isInteractive = false;
-            if (Icons.Atlas != null)
+            if (Icons.Has(Icons.LogoSmall))
             {
                 icon.atlas = Icons.Atlas;
                 icon.normalFgSprite = Icons.LogoSmall;
@@ -201,10 +203,11 @@ namespace RealisticRoads
                     if (crossing.HeightButtons)
                     {
                         x += 8f;
-                        IconButton(Icons.Plus, "+", "Deck higher (+5 m)", new Vector2(x, y), false,
-                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(5f); });
-                        IconButton(Icons.Minus, "-", "Deck lower (-5 m)", new Vector2(x + IconSize + 3f, y), false,
-                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(-5f); });
+                        string step = crossing.Step.ToString("0.#");
+                        IconButton(Icons.Plus, "+", "Deck higher (+" + step + " m)", new Vector2(x, y), false,
+                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(c.Step); });
+                        IconButton(Icons.Minus, "-", "Deck lower (-" + step + " m)", new Vector2(x + IconSize + 3f, y), false,
+                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(-c.Step); });
                     }
                     y += IconSize + RowGap + 4f;
                 }
@@ -219,10 +222,11 @@ namespace RealisticRoads
                     float rowY = y;
                     var label = Label(m => index < m.Water.Count ? m.Water[index].Title : "", TextColor, 0.8f, new Vector2(Pad, rowY + 7f),
                         Width - 2f * Pad - 2f * (IconSize + 3f));
-                    IconButton(Icons.Plus, "+", "Bridge higher over the water (+5 m)", new Vector2(Width - Pad - 2f * IconSize - 3f, rowY), false,
-                        () => { if (index < current.Water.Count) current.Water[index].Raise(5f); });
-                    IconButton(Icons.Minus, "-", "Bridge lower over the water (-5 m)", new Vector2(Width - Pad - IconSize, rowY), false,
-                        () => { if (index < current.Water.Count) current.Water[index].Raise(-5f); });
+                    string step = model.Water[i].Step.ToString("0.#");
+                    IconButton(Icons.Plus, "+", "Bridge higher over the water (+" + step + " m)", new Vector2(Width - Pad - 2f * IconSize - 3f, rowY), false,
+                        () => { if (index < current.Water.Count) current.Water[index].Raise(current.Water[index].Step); });
+                    IconButton(Icons.Minus, "-", "Bridge lower over the water (-" + step + " m)", new Vector2(Width - Pad - IconSize, rowY), false,
+                        () => { if (index < current.Water.Count) current.Water[index].Raise(-current.Water[index].Step); });
                     y = Mathf.Max(rowY + IconSize, rowY + label.size.y) + RowGap;
                 }
             }
@@ -315,10 +319,9 @@ namespace RealisticRoads
             button.size = new Vector2(IconSize, IconSize);
             button.relativePosition = new Vector3(at.x, at.y);
             button.tooltip = tooltip;
-            var atlas = Icons.Atlas;
-            if (atlas != null)
+            if (Icons.Has(icon, Icons.Background, Icons.BackgroundHover, Icons.BackgroundSelected))
             {
-                button.atlas = atlas;
+                button.atlas = Icons.Atlas;
                 button.normalFgSprite = icon;
                 button.hoveredFgSprite = icon;
                 button.pressedFgSprite = icon;

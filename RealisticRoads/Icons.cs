@@ -34,6 +34,16 @@ namespace RealisticRoads
 
         private static UITextureAtlas atlas;
         private static bool failed;
+        private static readonly HashSet<string> loaded = new HashSet<string>();
+
+        // True if the atlas exists and has every one of these sprites (a PNG
+        // missing from the DLL is skipped when the atlas is made).
+        public static bool Has(params string[] names)
+        {
+            if (Atlas == null) return false;
+            foreach (var name in names) if (!loaded.Contains(name)) return false;
+            return true;
+        }
 
         // Main thread. Null if the icons could not be loaded (buttons then show text).
         public static UITextureAtlas Atlas
@@ -54,7 +64,9 @@ namespace RealisticRoads
                 foreach (var name in Names)
                 {
                     var texture = Load(assembly, name);
-                    if (texture != null) textures.Add(texture);
+                    if (texture == null) continue;
+                    textures.Add(texture);
+                    loaded.Add(name);
                 }
 
                 var created = ScriptableObject.CreateInstance<UITextureAtlas>();

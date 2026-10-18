@@ -104,7 +104,7 @@ namespace RealisticRoads
             button.focusedBgSprite = "ButtonMenu";
             button.textScale = text.Length > 2 ? 0.9f : 1.1f;
             // The logo on the vanilla button background; the letters only if the icons can't load.
-            if (Icons.Atlas != null)
+            if (Icons.Has(Icons.Logo, Icons.ButtonBackground, Icons.ButtonBackgroundHover, Icons.ButtonBackgroundPressed))
             {
                 button.atlas = Icons.Atlas;
                 button.normalBgSprite = Icons.ButtonBackground;
