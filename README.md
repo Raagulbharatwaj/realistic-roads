@@ -50,17 +50,33 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
 
 ## 5. Curve tool: build CS2-style curves (milestones 3 + 4)
 1. Pick a road in the vanilla **Roads** menu (e.g. Basic Road or Oneway Road), then click the **RR** button (the
-   curved-road icon) or press **Ctrl+Shift+C**. The **Realistic Roads** panel opens (drag its title bar to move it;
-   the place is remembered). It shows:
-   - **Road**: the road you are drawing;
+   curved-road icon; also next to the game's Straight / Curved / Freeform / Upgrade buttons while its road tool is
+   open) or press **Ctrl+Shift+C**. **RR is then a mode:** every road you pick in the Roads menu opens in RR, until
+   you leave it (Esc twice, the X, the **Game tool** button, or the RR button again). The **Realistic Roads** panel
+   opens (drag its title bar to move it; the place is remembered). It shows:
+   - **Road**: the road you are drawing, and the next point's height (Page Up / Page Down);
    - **Curve**: length, segments, cost, and whether it is raised or lowered anywhere;
+   - **Side view**: the curve seen from the side: the road's height against the ground (and water) along it, in the
+     preview's colours, with thin lines for the pillars and a white mark at the height of each road or track it
+     crosses. Under it: how high and how deep it goes, the steepest grade and the number of pillars. Move the mouse
+     along it to read the height at any spot (a white ring marks that spot on the map); click to keep the mark;
    - **Crossings**: each crossing with its options as icons (the same as the icons above it on the map) and, for a
      bridge, deck higher / lower;
    - **Water**: each water bridge with higher / lower;
    - **Can't build yet** (red) and **Notes** (yellow);
-   - **Build**, **Undo** and **Clear** buttons (same as Enter, Ctrl+Z and Esc). The X closes the tool.
-2. Click points on the ground. The curve follows the mouse as a road-width band through all of them:
-   **green** = can be built, **red** = a bend is too tight (spread the points out).
+   - **Build**, **Undo** and **Clear** buttons (same as Enter, Ctrl+Z and Esc), and **Game tool** (draw this road
+     with the game's own tool instead, RR mode off). The X closes the tool.
+2. Click points on the ground. The curve follows the mouse and is drawn **in 3D at its planned heights**, with the
+   real road pieces it will be built from (ground, elevated deck, ramps), like the vanilla road tool's preview, so
+   flyovers, bridges and ramps look the way they will be built. The colour sits on the road at its own height:
+   **green** = can be built, **red** = a bend is too tight (spread the points out). A white ring on the ground
+   marks every pillar. (If a game update ever breaks the 3D preview the log says so and the old flat band is used.)
+   A label next to the mouse shows the next point's height, the planned height where the curve ends at the mouse,
+   the grade of the last piece and the length so far.
+   **Heights:** **Page Up / Page Down** raise or lower the next point you place by 3 m (Shift: 1 m), like the vanilla
+   road tool's elevation: that point becomes a node held at that height above the ground (or the water) and the road
+   ramps to it and away from it at the road's grade, so you can build an elevated road or a sunken one on purpose.
+   Points on an existing road take that road's height. If there isn't room to ramp, the panel says so.
 3. Clicking on the middle of an existing road starts or ends the curve there: that road is cut and the new one joins
    it (a T-junction). Clicking on (or near the end of) an existing road snaps to its end (yellow circle) so the new road connects there,
    at the start or the end of the curve. Where it can, the curve continues that road smoothly ("continues the road"
@@ -80,7 +96,10 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      gets one new node (none if one is already there). Several overpasses over the same line whose ramps would
      meet share one lowered stretch: the line stays down between them instead of rising and dipping again;
    - **underpass**: the existing road gets a short bridge, ours is dug 8 m down into an open cutting under it.
-     On rail no piece shorter than 30 m is left: the bridge runs on to the next node instead;
+     The bridge adds as few nodes as possible: it runs on to a node just past its end, or a plain node nearby (up
+     to 80 m away on rail, 30 m on a road) is slid along the line to the bridge's end. Only where neither works is a
+     new node made, and on rail never one leaving a piece shorter than 30 m. The log says what each end did
+     (`Underpass: ... start node #... slid to it, end runs to node #...`);
    - **tunnel**: ours goes 12 m under through a tunnel. Like the vanilla tool: an open cutting while it is less than
      8 m down, one slope piece with the portal, then the tunnel (no more rows of portals).
    Crossing at an angle, bridges, cuttings and lowered stretches get longer to fit the skewed footprint.
@@ -98,8 +117,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    into a cutting by up to 6 m to even it out. If it is still too steep after that, the stretch is shown **purple**
    and the panel lists it with "~" (a warning): the curve still builds, the game will just draw it steep.
    The panel lists each crossing and water bridge with its height/depth; problems are listed with "!" and the
-   curve won't build until they are fixed; warnings ("~") don't stop it. Preview colours: green ground, blue raised,
-   orange lowered, purple steep, red too sharp.
+   curve won't build until they are fixed; warnings ("~") don't stop it. Preview colours (map and profile): green
+   ground, blue raised, orange lowered (shown on the ground above it, where it will be dug), purple steep, red too sharp.
 4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
    elevated road (deck on pillars), 10 m above the water, with ramps on land at a gentle 4 % slope (3.5 % for rail).
    Raised stretches over land get a pillar every 48 m (roads) or 96 m (rail); bridges over water keep ~100 m spans.

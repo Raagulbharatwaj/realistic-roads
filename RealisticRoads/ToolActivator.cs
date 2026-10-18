@@ -13,6 +13,16 @@ namespace RealisticRoads
         private static CurveTool curveTool;
         private static UIButton curveButton;
 
+        // RR as a mode of the game's road tool: while it is on, picking a road
+        // in the game's Roads menu (which starts the game's road tool) opens RR
+        // with that road instead. On with the RR button or the RR button in the
+        // road tool's options; off with Esc, X, "Game tool" or the RR button.
+        public static bool Mode { get; private set; }
+        private static UIButton modeButton;      // RR toggle shown next to the game's road tool options
+        private static UIComponent modeHost;     // the options panel it sits on
+        private static int searchWait;
+        private static bool reportedNoHost;
+
         public static void Create(LoadMode mode)
         {
             if (mode == LoadMode.NewAsset || mode == LoadMode.LoadAsset ||
@@ -56,6 +66,7 @@ namespace RealisticRoads
                     UnityEngine.Object.Destroy(curveTool);
                 }
                 if (curveButton != null) UnityEngine.Object.Destroy(curveButton.gameObject);
+                if (modeButton != null) UnityEngine.Object.Destroy(modeButton.gameObject);
             }
             catch (Exception e)
             {
@@ -63,6 +74,9 @@ namespace RealisticRoads
             }
             curveTool = null;
             curveButton = null;
+            modeButton = null;
+            modeHost = null;
+            Mode = false;
         }
 
         public static void ToggleCurveTool()
@@ -72,21 +86,161 @@ namespace RealisticRoads
             {
                 if (curveTool.IsActive)
                 {
+                    LeaveMode();
                     ToolsModifierControl.SetTool<DefaultTool>();
                     Mod.Log("Curve tool off");
                     return;
                 }
 
                 var netTool = ToolsModifierControl.GetTool<NetTool>();
-                curveTool.SelectedNetwork = netTool != null ? netTool.m_prefab : null;
-                ToolsModifierControl.toolController.CurrentTool = curveTool;
-                Mod.Log("Curve tool on, network = " +
-                        (curveTool.SelectedNetwork != null ? curveTool.SelectedNetwork.name : "none selected"));
+                Open(netTool != null ? netTool.m_prefab : null);
             }
             catch (Exception e)
             {
                 Mod.LogError("Switching the curve tool failed", e);
             }
+        }
+
+        // RR on with this road, and the mode on.
+        private static void Open(NetInfo road)
+        {
+            Mode = true;
+            curveTool.SelectedNetwork = road;
+            ToolsModifierControl.toolController.CurrentTool = curveTool;
+            Mod.Log("Curve tool on, network = " + (road != null ? road.name : "none selected"));
+        }
+
+        public static void LeaveMode()
+        {
+            if (Mode) Mod.Log("RR mode off: the game's road tool is used again");
+            Mode = false;
+        }
+
+        // The game's road tool with this road (from the panel's "Game tool").
+        public static void SwitchToGameTool(NetInfo road)
+        {
+            try
+            {
+                LeaveMode();
+                var netTool = ToolsModifierControl.GetTool<NetTool>();
+                if (netTool == null || road == null)
+                {
+                    ToolsModifierControl.SetTool<DefaultTool>();
+                    return;
+                }
+                netTool.m_prefab = road;
+                ToolsModifierControl.toolController.CurrentTool = netTool;
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Switching to the game's road tool failed", e);
+            }
+        }
+
+        // Every frame (main thread). In RR mode, a road picked in the game's
+        // menu opens RR with it; and the RR toggle is kept next to the game's
+        // road tool options while that tool is open.
+        public static void Update()
+        {
+            if (curveTool == null) return;
+            try
+            {
+                var controller = ToolsModifierControl.toolController;
+                var current = controller != null ? controller.CurrentTool : null;
+                var netTool = current != null && current.GetType() == typeof(NetTool) ? (NetTool)current : null;
+                if (Mode && netTool != null && netTool.m_prefab != null && CanDraw(netTool.m_prefab))
+                {
+                    Open(netTool.m_prefab);
+                    netTool = null;
+                }
+                UpdateModeButton(netTool != null);
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("RR mode failed; it is off", e);
+                Mode = false;
+            }
+        }
+
+        // Roads, tracks and paths: not pipes, power lines or the like.
+        private static bool CanDraw(NetInfo info)
+        {
+            if (info.m_class == null) return false;
+            var service = info.m_class.m_service;
+            return service == ItemClass.Service.Road || service == ItemClass.Service.PublicTransport ||
+                   service == ItemClass.Service.Beautification;
+        }
+
+        // The RR toggle on the game's road tool options panel (the Straight /
+        // Curved / Freeform / Upgrade row), found by name while the game's road
+        // tool is open. If the panel can't be found the floating RR button
+        // still does the same.
+        private static void UpdateModeButton(bool gameRoadTool)
+        {
+            if (!gameRoadTool)
+            {
+                if (modeButton != null && modeButton.isVisible) modeButton.isVisible = false;
+                return;
+            }
+            if (modeHost == null || !modeHost.isVisible)
+            {
+                if (modeButton != null && modeButton.isVisible) modeButton.isVisible = false;
+                if (--searchWait > 0) return;
+                modeHost = FindOptionsPanel();
+                if (modeHost == null)
+                {
+                    searchWait = 120;
+                    if (!reportedNoHost) Mod.Log("RR mode: the game's road options panel wasn't found; use the RR button");
+                    reportedNoHost = true;
+                    return;
+                }
+                searchWait = 30;
+                Mod.Log("RR mode: toggle added to " + modeHost.name);
+                if (modeButton != null) UnityEngine.Object.Destroy(modeButton.gameObject);
+                modeButton = CreateModeButton(modeHost);
+            }
+            if (!modeButton.isVisible) modeButton.isVisible = true;
+        }
+
+        private static UIComponent FindOptionsPanel()
+        {
+            var view = UIView.GetAView();
+            if (view == null) return null;
+            foreach (var panel in view.GetComponentsInChildren<UIPanel>())
+                if (panel != null && panel.isVisible && panel.name != null && panel.name.StartsWith("RoadsOptionPanel")) return panel;
+            return null;
+        }
+
+        private static UIButton CreateModeButton(UIComponent host)
+        {
+            var button = (UIButton)host.AddUIComponent(typeof(UIButton));
+            button.name = "RealisticRoadsModeButton";
+            button.size = new Vector2(36f, 36f);
+            button.relativePosition = new Vector3(host.width + 6f, Mathf.Max((host.height - 36f) * 0.5f, 0f));
+            button.tooltip = "Realistic Roads: draw this road with RR (curves, bridges, crossings)\nRR stays on for every road you pick until you leave it";
+            if (Icons.Has(Icons.Logo, Icons.ButtonBackground, Icons.ButtonBackgroundHover, Icons.ButtonBackgroundPressed))
+            {
+                button.atlas = Icons.Atlas;
+                button.normalBgSprite = Icons.ButtonBackground;
+                button.hoveredBgSprite = Icons.ButtonBackgroundHover;
+                button.pressedBgSprite = Icons.ButtonBackgroundPressed;
+                button.normalFgSprite = button.hoveredFgSprite = button.pressedFgSprite = Icons.Logo;
+            }
+            else
+            {
+                button.normalBgSprite = "ButtonMenu";
+                button.hoveredBgSprite = "ButtonMenuHovered";
+                button.pressedBgSprite = "ButtonMenuPressed";
+                button.text = "RR";
+                button.textScale = 0.9f;
+            }
+            button.eventClick += (component, param) =>
+            {
+                if ((param.buttons & UIMouseButton.Left) == 0) return;
+                var netTool = ToolsModifierControl.GetTool<NetTool>();
+                Open(netTool != null ? netTool.m_prefab : null);
+            };
+            return button;
         }
 
         private static UIButton CreateButton(string name, string text, string tooltip, float y, Action onClick)
@@ -156,6 +310,7 @@ namespace RealisticRoads
     {
         public override void OnUpdate(float realTimeDelta, float simulationTimeDelta)
         {
+            ToolActivator.Update();
             if (!Input.GetKeyDown(KeyCode.C)) return;
             var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             var shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
