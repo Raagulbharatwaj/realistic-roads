@@ -36,6 +36,7 @@ namespace RealisticRoads
         public bool OverRail;
         // A ship or ferry route: only a bridge (high enough for ships) or a tunnel.
         public bool ShipPath;
+        public bool OnDeck;                    // under a deck we draw: only passed over
 
         // A junction this close to an existing node joins at that node instead of cutting the road.
         public const float NodeSnap = 6f;
@@ -52,6 +53,7 @@ namespace RealisticRoads
         // road only works where it is on the ground.
         public bool Allows(CrossingType type)
         {
+            if (OnDeck) return type == CrossingType.Bridge;
             switch (type)
             {
                 case CrossingType.Overpass:

@@ -46,6 +46,10 @@ namespace RealisticRoads
         public List<Vector3> InTangents;
         public Vector3 InTangent(int i) => InTangents != null && i < InTangents.Count ? InTangents[i] : Tangents[i];
         public NodeKind[] Kinds;
+        // A deck over roads: what is under each node (Segment 0: nothing, or
+        // not on a deck), for its pillar or frame. Null if no deck.
+        public DeckBelow[] Decks;
+        public bool[] OnDeck;
         public bool[] Middle;                 // suspension bridges: the node between two towers
         public List<Crossing> Crossings = new List<Crossing>();
         public List<int> CrossingIndex = new List<int>();   // node index of each crossing
@@ -95,13 +99,16 @@ namespace RealisticRoads
         public static Plan Make(NetInfo info, List<Vector3> points, List<Vector3> tangents,
             List<Crossing> crossings, List<int> crossingIndex, List<WaterRun> waterRuns, ushort startNode, ushort endNode,
             ushort startSegment = 0, float startT = 0f, ushort endSegment = 0, float endT = 0f,
-            List<KeyValuePair<Vector3, float>> lifts = null, List<Vector3> inTangents = null)
+            List<KeyValuePair<Vector3, float>> lifts = null, List<Vector3> inTangents = null,
+            bool[] onDeck = null, DeckBelow[] decks = null)
         {
             var plan = new Plan
             {
                 Points = new List<Vector3>(points),
                 Tangents = new List<Vector3>(tangents),
                 InTangents = inTangents != null ? new List<Vector3>(inTangents) : null,
+                OnDeck = onDeck != null ? (bool[])onDeck.Clone() : null,
+                Decks = decks != null ? (DeckBelow[])decks.Clone() : null,
                 Crossings = crossings,
                 CrossingIndex = crossingIndex,
                 WaterRuns = waterRuns,
@@ -157,6 +164,11 @@ namespace RealisticRoads
                     }
                 }
             }
+
+            // A deck stays clear of the road under it (or of the ground) all along.
+            if (onDeck != null && decks != null)
+                for (int i = 0; i < n && i < onDeck.Length && i < decks.Length; i++)
+                    if (onDeck[i]) minH[i] = Mathf.Max(minH[i], Decks.Floor(points[i], decks[i]));
 
             if (NetworkBuilder.NodeExists(startNode)) Fix(0, nodes[startNode].m_position.y, minH, maxH, isFixed);
             if (NetworkBuilder.NodeExists(endNode)) Fix(n - 1, nodes[endNode].m_position.y, minH, maxH, isFixed);
@@ -427,6 +439,8 @@ namespace RealisticRoads
             plan.Points.RemoveAt(index);
             plan.Tangents.RemoveAt(index);
             if (plan.InTangents != null && index < plan.InTangents.Count) plan.InTangents.RemoveAt(index);
+            if (plan.Decks != null && index < plan.Decks.Length) plan.Decks = Without(plan.Decks, index);
+            if (plan.OnDeck != null && index < plan.OnDeck.Length) plan.OnDeck = Without(plan.OnDeck, index);
             plan.Kinds = Without(plan.Kinds, index);
             if (plan.Steep != null)
             {

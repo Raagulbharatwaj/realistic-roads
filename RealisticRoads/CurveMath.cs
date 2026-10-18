@@ -139,9 +139,11 @@ namespace RealisticRoads
         // (each becomes a node there). A curve next to a straight span leaves
         // it smoothly, along its line. 'controlSamples': the polyline index of
         // each control (the middle of its rounding for a rounded corner).
-        // No straight span: the same curve as SampleShaped.
+        // 'paths' (optional): span i runs exactly along paths[i] where it isn't
+        // null (a deck following an existing road), from control i to i+1.
+        // No straight span or path: the same curve as SampleShaped.
         public static List<Vector3> SampleMixed(IList<Vector3> controls, IList<bool> straight, float radius, Vector3 startDir,
-            Vector3 endDir, out int[] controlSamples, out List<float> sharpCorners)
+            Vector3 endDir, out int[] controlSamples, out List<float> sharpCorners, IList<List<Vector3>> paths = null)
         {
             int n = controls.Count;
             controlSamples = new int[n];
@@ -149,6 +151,9 @@ namespace RealisticRoads
             bool any = false;
             if (straight != null)
                 for (int i = 0; i < n - 1 && i < straight.Count; i++) any |= straight[i];
+            Func<int, List<Vector3>> pathOf = i => paths != null && i >= 0 && i < paths.Count && paths[i] != null && paths[i].Count >= 2
+                ? paths[i] : null;
+            for (int i = 0; i < n - 1; i++) any |= pathOf(i) != null;
             if (n < 2 || !any)
             {
                 var shaped = SampleShaped(controls, startDir, endDir);
@@ -156,7 +161,13 @@ namespace RealisticRoads
                 return shaped;
             }
 
-            Func<int, bool> isStraight = i => i >= 0 && i < n - 1 && i < straight.Count && straight[i];
+            Func<int, bool> isStraight = i => i >= 0 && i < n - 1 && straight != null && i < straight.Count && straight[i] && pathOf(i) == null;
+            // A path's own direction where it leaves and reaches its controls.
+            Func<int, bool, Vector3> pathEnd = (i, atStart) =>
+            {
+                var path = pathOf(i);
+                return atStart ? FlatNormal(path[1] - path[0]) : FlatNormal(path[path.Count - 1] - path[path.Count - 2]);
+            };
             var dir = new Vector3[n - 1];
             var length = new float[n - 1];
             for (int i = 0; i < n - 1; i++)
@@ -175,7 +186,8 @@ namespace RealisticRoads
                 if (!isStraight(i - 1) || !isStraight(i)) continue;
                 turn[i] = BendAngle(dir[i - 1], dir[i]);
                 if (turn[i] < 0.5f) continue;
-                if (radius < 0.5f) { sharp[i] = true; continue; }
+                // A hairpin can't be rounded inside the road's own corridor: sharp.
+                if (radius < 0.5f || turn[i] > MaxRoundedTurn) { sharp[i] = true; continue; }
                 float half = turn[i] * 0.5f / Rad2Deg;
                 reach[i] = Mathf.Min(radius * (float)Math.Tan(half), Mathf.Min(length[i - 1], length[i]) * 0.5f);
             }
@@ -184,15 +196,17 @@ namespace RealisticRoads
             var tangent = new Vector3[n];
             for (int i = 1; i < n - 1; i++)
             {
-                if (isStraight(i - 1)) tangent[i] = dir[i - 1];
+                if (pathOf(i - 1) != null) tangent[i] = pathEnd(i - 1, false);
+                else if (pathOf(i) != null) tangent[i] = pathEnd(i, true);
+                else if (isStraight(i - 1)) tangent[i] = dir[i - 1];
                 else if (isStraight(i)) tangent[i] = dir[i];
                 else tangent[i] = FlatNormal(controls[i + 1] - controls[i - 1]);
                 if (tangent[i] == Vector3.zero) tangent[i] = dir[i];
             }
             Vector3 startN = FlatNormal(startDir), endN = FlatNormal(endDir);
-            tangent[0] = isStraight(0) ? dir[0] : startN != Vector3.zero ? startN
+            tangent[0] = pathOf(0) != null ? pathEnd(0, true) : isStraight(0) ? dir[0] : startN != Vector3.zero ? startN
                 : n > 2 ? FlatNormal(2f * dir[0] - tangent[1]) : dir[0];
-            tangent[n - 1] = isStraight(n - 2) ? dir[n - 2] : endN != Vector3.zero ? endN
+            tangent[n - 1] = pathOf(n - 2) != null ? pathEnd(n - 2, false) : isStraight(n - 2) ? dir[n - 2] : endN != Vector3.zero ? endN
                 : n > 2 ? FlatNormal(2f * dir[n - 2] - tangent[n - 2]) : dir[n - 2];
             for (int i = 0; i < n; i++) if (tangent[i] == Vector3.zero) tangent[i] = dir[Math.Min(i, n - 2)];
 
@@ -200,28 +214,44 @@ namespace RealisticRoads
             for (int i = 0; i < n - 1; i++)
             {
                 Vector3 a = controls[i], b = controls[i + 1];
-                if (isStraight(i))
+                var path = pathOf(i);
+                if (path != null)
+                {
+                    for (int k = 1; k < path.Count - 1; k++) result.Add(path[k]);
+                    result.Add(b);
+                    controlSamples[i + 1] = result.Count - 1;
+                }
+                else if (isStraight(i))
                 {
                     // The line up to where the corner's rounding starts (or the next control).
                     Vector3 end = reach[i + 1] > 0f ? Vector3.Lerp(a, b, 1f - reach[i + 1] / Mathf.Max(length[i], 0.01f)) : b;
                     Vector3 from = result[result.Count - 1];
-                    int steps = Math.Max(1, (int)Math.Ceiling(FlatDistance(from, end) / LineSampleSpacing));
-                    for (int k = 1; k <= steps; k++) result.Add(Vector3.Lerp(from, end, k / (float)steps));
+                    // Nothing left between two roundings that meet: no repeated point there.
+                    float straightLength = FlatDistance(from, end);
+                    if (straightLength > 0.05f)
+                    {
+                        int steps = Math.Max(1, (int)Math.Ceiling(straightLength / LineSampleSpacing));
+                        for (int k = 1; k <= steps; k++) result.Add(Vector3.Lerp(from, end, k / (float)steps));
+                    }
                     if (reach[i + 1] > 0f)
                     {
-                        // Round the corner: a circular arc (as a cubic Bezier) from 'end'
-                        // to as far along the next span.
+                        // Round the corner: the exact circular arc from 'end' to as far
+                        // along the next span, round the centre on the inside of the turn.
                         int c = i + 1;
                         Vector3 next = Vector3.Lerp(b, controls[c + 1], reach[c] / Mathf.Max(length[c], 0.01f));
                         float angle = turn[c] / Rad2Deg;
                         float r = reach[c] / (float)Math.Tan(angle * 0.5f);
-                        float handle = 4f / 3f * (float)Math.Tan(angle * 0.25f) * r;
-                        Vector3 h1 = end + dir[i] * handle, h2 = next - dir[c] * handle;
-                        h1.y = end.y; h2.y = next.y;
+                        float sweep = SignedAngle(dir[i], dir[c]);              // + left, - right
+                        Vector3 center = end + Rotate(dir[i], sweep > 0f ? 90f : -90f) * r;
+                        Vector3 spoke = end - center;
+                        spoke.y = 0f;
                         int arcSteps = Math.Max(4, (int)Math.Ceiling(r * angle / ArcSampleSpacing));
                         for (int k = 1; k <= arcSteps; k++)
                         {
-                            result.Add(Bezier(end, h1, h2, next, k / (float)arcSteps));
+                            float f = k / (float)arcSteps;
+                            Vector3 p = k == arcSteps ? next : center + Rotate(spoke, sweep * f) * spoke.magnitude;
+                            p.y = end.y + (next.y - end.y) * f;
+                            result.Add(p);
                             if (k == arcSteps / 2) controlSamples[c] = result.Count - 1;
                         }
                     }
@@ -314,6 +344,7 @@ namespace RealisticRoads
 
         private const float LineSampleSpacing = 8f;   // metres between samples on a straight span
         private const float ArcSampleSpacing = 4f;     // and on a rounded corner
+        private const float MaxRoundedTurn = 175f;     // sharper turns (hairpins) are left as sharp corners
         private const float Rad2Deg = 57.29578f;
 
         // Index in SampleShaped's polyline of control point 'c' (of 'count'):

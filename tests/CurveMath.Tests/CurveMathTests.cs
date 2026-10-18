@@ -552,4 +552,43 @@ public class CurveMathTests
         CurveMath.DivideAdaptive(line, 120f, 30f, 40f, out var points, out var tangents, out _);
         Assert.True(CurveMath.MaxBend(tangents) <= 40f, "bend " + CurveMath.MaxBend(tangents));
     }
+
+    [Fact]
+    public void Mixed_DeckFollowsTheGivenPath()
+    {
+        // Span 1 runs along a road's path (a bend), the others are drawn.
+        var controls = new List<Vector3> { V(0, 0), V(100, 0), V(200, 100), V(300, 100) };
+        var path = new List<Vector3>();
+        for (int i = 0; i <= 20; i++)
+        {
+            double a = Math.PI / 2 * i / 20;
+            path.Add(V(100 + 100 * (float)Math.Sin(a), 100 - 100 * (float)Math.Cos(a)));
+        }
+        var paths = new List<List<Vector3>> { null, path, null };
+        var line = CurveMath.SampleMixed(controls, new[] { true, false, true }, 60f, Vector3.zero, Vector3.zero, out var at, out _, paths);
+        Assert.Equal(V(100, 0), line[at[1]]);
+        Assert.Equal(V(200, 100), line[at[2]]);
+        for (int k = at[1]; k <= at[2]; k++) Assert.Equal(100f, CurveMath.FlatDistance(line[k], V(100, 100)), 1);
+        Assert.Equal(V(300, 100), line.Last());
+    }
+
+    [Fact]
+    public void Mixed_HairpinIsSharpNotNaN()
+    {
+        var controls = new List<Vector3> { V(0, 0), V(100, 0), V(0, 0.5f) };   // turns back almost 180 degrees
+        var line = CurveMath.SampleMixed(controls, new[] { true, true }, 60f, Vector3.zero, Vector3.zero, out var at, out var sharp);
+        Assert.Single(sharp);
+        Assert.All(line, p => Assert.False(float.IsNaN(p.x) || float.IsNaN(p.z)));
+        Assert.Equal(V(100, 0), line[at[1]]);
+    }
+
+    [Fact]
+    public void Mixed_RoundingsThatMeetLeaveNoRepeatedPoint()
+    {
+        // A 40 m piece between two right angles: both roundings take half of it each.
+        var controls = new List<Vector3> { V(0, 0), V(200, 0), V(200, 40), V(400, 40) };
+        var line = CurveMath.SampleMixed(controls, new[] { true, true, true }, 60f, Vector3.zero, Vector3.zero, out _, out _);
+        for (int i = 1; i < line.Count; i++) Assert.True(CurveMath.FlatDistance(line[i - 1], line[i]) > 0.01f, "repeated point at " + i);
+        Assert.Equal(V(400, 40), line.Last());
+    }
 }

@@ -171,8 +171,17 @@ d.arc(p(-7, 19, 21, 47), 315, 360, fill=OURS, width=int(3 * S))
 d.ellipse(p(4, 30, 10, 36), fill=OURS)
 save(im, "snap")
 
+# deck: our road on columns above an existing road (a double decker)
+im, d = canvas()
+line(d, (3, 33, 37, 33), EXIST, 6)
+line(d, (3, 13, 37, 13), OURS, 6)
+for x in (6, 34):
+    line(d, (x, 16, x, 36), OURS, 3)
+line(d, (6, 18, 34, 18), OURS, 3)
+save(im, "deck")
+
 # preview sheet for checking by eye
-names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap"]
+names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")
