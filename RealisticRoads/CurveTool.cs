@@ -140,7 +140,7 @@ namespace RealisticRoads
             ClearPoints();
             hoverValid = false;
             mouseRayValid = false;
-            ToolActivator.SetInfo(null);
+            panel.Hide();
             HideButtons(0);
         }
 
@@ -174,7 +174,7 @@ namespace RealisticRoads
                          hoverNode + "|" + hoverSegment + "|" + hoverSide + "|" + (SelectedNetwork != null ? SelectedNetwork.name : "");
             if (key == previewKey && ++framesSincePreview < PreviewRefreshFrames)
             {
-                ToolActivator.SetInfo(InfoText());
+                ShowPanel();
                 PlaceButtons();
                 return;
             }
@@ -195,7 +195,7 @@ namespace RealisticRoads
                 liveTs.Add(hoverT);
             }
             preview = Divide(live, liveNodes, liveSides, liveSegments, liveTs);
-            ToolActivator.SetInfo(InfoText());
+            ShowPanel();
             PlaceButtons();
         }
 
@@ -977,29 +977,9 @@ namespace RealisticRoads
             }
         }
 
-        private static string IconFor(CrossingType type)
-        {
-            switch (type)
-            {
-                case CrossingType.Bridge: return Icons.Bridge;
-                case CrossingType.Overpass: return Icons.Overpass;
-                case CrossingType.Underpass: return Icons.Underpass;
-                case CrossingType.Tunnel: return Icons.Tunnel;
-                default: return Icons.Junction;
-            }
-        }
+        private static string IconFor(CrossingType type) => RoadPanel.IconFor(type);
 
-        private static string Letter(CrossingType type)
-        {
-            switch (type)
-            {
-                case CrossingType.Bridge: return "B";
-                case CrossingType.Overpass: return "O";
-                case CrossingType.Underpass: return "U";
-                case CrossingType.Tunnel: return "T";
-                default: return "J";
-            }
-        }
+        private static string Letter(CrossingType type) => RoadPanel.Letter(type);
 
         private void SetType(Crossing crossing, CrossingType type)
         {
@@ -1024,9 +1004,29 @@ namespace RealisticRoads
             choicesVersion++;
         }
 
+        private readonly RoadPanel panel = new RoadPanel();
+
+        private void ShowPanel()
+        {
+            if (!panel.Exists)
+            {
+                panel.Create();
+                panel.Build = BuildCurrent;
+                panel.Undo = NetworkBuilder.UndoLast;
+                panel.Clear = () =>
+                {
+                    ClearPoints();
+                    Mod.Log("Curve cleared");
+                };
+                panel.Close = () => ToolsModifierControl.SetTool<DefaultTool>();
+            }
+            panel.Show(Model());
+        }
+
         // Called by ToolActivator before the tool is destroyed.
         public void DestroyButtons()
         {
+            panel.Destroy();
             foreach (var button in buttons) if (button != null) Destroy(button.gameObject);
             buttons.Clear();
             buttonActions.Clear();
@@ -1043,12 +1043,20 @@ namespace RealisticRoads
             return bezier;
         }
 
-        private string InfoText()
+        // What the side panel shows for the current curve.
+        private PanelModel Model()
         {
-            string road = SelectedNetwork != null ? SelectedNetwork.name : "no road picked (choose one in the Roads menu)";
+            var model = new PanelModel
+            {
+                Road = SelectedNetwork != null ? Title(SelectedNetwork) : "No road picked: choose one in the game's Roads menu, then open RR",
+                HasPoints = points.Count > 0,
+            };
             var division = preview;
             if (division == null || division.Points.Count < 2 || division.Plan == null)
-                return "Curve tool: " + road + "\nClick to place points";
+            {
+                model.Summary = points.Count == 0 ? "Click on the map to place the first point" : "Place the next point";
+                return model;
+            }
 
             var plan = division.Plan;
             int raised = 0, lowered = 0;
@@ -1057,20 +1065,22 @@ namespace RealisticRoads
                 if (IsRaised(kind)) raised++;
                 if (IsLowered(kind)) lowered++;
             }
-            var text = "Curve tool: " + road +
-                       "\n" + division.Length.ToString("F0") + " m, " + (division.Points.Count - 1) + " segment(s)" +
-                       (raised > 0 ? ", raised in places" : "") +
-                       (lowered > 0 ? ", lowered in places" : "") +
-                       (division.Continues ? ", continues the road" : "") +
-                       (division.StartSplit != 0 || division.EndSplit != 0 ? ", branches off a road half" : "") +
-                       (division.Ok ? "" : "  -  TOO SHARP");
+            model.Summary = division.Length.ToString("N0") + " m in " + (division.Points.Count - 1) + " segment(s)" +
+                            (division.Cost > 0 ? "   ·   cost " + (division.Cost / 100).ToString("N0") : "");
+            var details = new List<string>();
+            if (raised > 0) details.Add("raised in places");
+            if (lowered > 0) details.Add("lowered in places");
+            if (division.Continues) details.Add("continues the road");
+            if (division.StartSplit != 0 || division.EndSplit != 0) details.Add("branches off a road half");
+            model.Details = details.Count > 0 ? string.Join(", ", details.ToArray()) : "at ground level";
+            if (!division.Ok) model.Problems.Add("A bend is too sharp (over " + MaxBend + " degrees per segment): spread the points out");
 
             var terrain = TerrainManager.instance;
             for (int c = 0; c < division.Crossings.Count; c++)
             {
                 var crossing = division.Crossings[c];
                 int index = division.CrossingIndex[c];
-                float relative = 0f;
+                float relative;
                 if (index >= 0)
                 {
                     var at = plan.Points[index];
@@ -1081,22 +1091,47 @@ namespace RealisticRoads
                     // Spanned by the deck: its height above the road or rail there.
                     relative = HeightAt(plan, crossing.Distance + division.StartOffset) - terrain.SampleRawHeightSmooth(crossing.Point);
                 }
-                text += "\nCrossing " + (c + 1) + " (" + crossing.ExistingName + "): " + crossing.Describe() +
-                        (relative >= 1f ? ", " + relative.ToString("F0") + " m up" :
-                         relative <= -1f ? ", " + (-relative).ToString("F0") + " m deep" : "");
+                var row = new PanelCrossing
+                {
+                    Title = (c + 1) + "   " + crossing.ExistingName,
+                    Detail = crossing.Describe() +
+                             (relative >= 1f ? ", " + relative.ToString("F0") + " m up" : relative <= -1f ? ", " + (-relative).ToString("F0") + " m deep" : ""),
+                    Selected = crossing.Type,
+                    HeightButtons = crossing.Type == CrossingType.Bridge,
+                };
+                foreach (var type in AllTypes) if (crossing.Allows(type)) row.Allowed.Add(type);
+                var c2 = crossing;
+                row.Pick = type => SetType(c2, type);
+                row.Raise = step => AddExtra(c2, step);
+                model.Crossings.Add(row);
             }
             for (int w = 0; w < division.WaterRuns.Count; w++)
             {
                 var run = division.WaterRuns[w];
                 float deck = HeightAt(plan, (run.From + run.To) * 0.5f) - terrain.SampleRawHeightSmoothWithWater(run.Middle, false, 0f);
-                text += "\nWater " + (w + 1) + " (" + (run.To - run.From).ToString("F0") + " m wide): bridge deck " +
-                        deck.ToString("F0") + " m above the water (+/- to change)";
+                var r = run;
+                model.Water.Add(new PanelWater
+                {
+                    Title = "Water " + (w + 1) + ", " + (run.To - run.From).ToString("F0") + " m wide: deck " + deck.ToString("F0") + " m above it",
+                    Raise = step => AddWaterExtra(r, step),
+                });
             }
-            if (division.Cost > 0) text += "\nCost: " + (division.Cost / 100).ToString("N0");
-            foreach (var problem in plan.Problems) text += "\n! " + problem;
-            foreach (var warning in plan.Warnings) text += "\n~ " + warning;
+            model.Problems.AddRange(plan.Problems);
+            model.Warnings.AddRange(plan.Warnings);
+            model.CanBuild = SelectedNetwork != null && division.Ok && plan.Ok;
+            return model;
+        }
 
-            return text + "\nEnter / double-click: build   Ctrl+Z: undo   Esc: clear   Icons: choose each crossing";
+        // The road's name as the game shows it.
+        private static string Title(NetInfo info)
+        {
+            try
+            {
+                string title = info.GetUncheckedLocalizedTitle();
+                if (!string.IsNullOrEmpty(title)) return title;
+            }
+            catch { }
+            return info.name;
         }
 
         // The planned road height 'at' metres along the curve.

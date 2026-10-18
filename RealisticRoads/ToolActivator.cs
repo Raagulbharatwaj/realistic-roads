@@ -12,7 +12,6 @@ namespace RealisticRoads
     {
         private static CurveTool curveTool;
         private static UIButton curveButton;
-        private static UILabel infoLabel;
 
         public static void Create(LoadMode mode)
         {
@@ -30,8 +29,7 @@ namespace RealisticRoads
                 curveTool.enabled = false;
 
                 curveButton = CreateButton("RealisticRoadsCurveButton", "RR",
-                    "Realistic Roads curve tool (Ctrl+Shift+C)", 120f, ToggleCurveTool);
-                infoLabel = CreateInfoLabel(172f);
+                    "Realistic Roads (Ctrl+Shift+C)\nPick a road in the Roads menu first, then draw it with curves", 120f, ToggleCurveTool);
                 NetworkBuilder.ClearUndo();
 
                 Mod.Log("Tools ready: RR / Ctrl+Shift+C = curve tool");
@@ -58,7 +56,6 @@ namespace RealisticRoads
                     UnityEngine.Object.Destroy(curveTool);
                 }
                 if (curveButton != null) UnityEngine.Object.Destroy(curveButton.gameObject);
-                if (infoLabel != null) UnityEngine.Object.Destroy(infoLabel.gameObject);
             }
             catch (Exception e)
             {
@@ -66,7 +63,6 @@ namespace RealisticRoads
             }
             curveTool = null;
             curveButton = null;
-            infoLabel = null;
         }
 
         public static void ToggleCurveTool()
@@ -93,32 +89,6 @@ namespace RealisticRoads
             }
         }
 
-        // Main thread. Shows text under the buttons; null hides it.
-        public static void SetInfo(string text)
-        {
-            if (infoLabel == null) return;
-            if (string.IsNullOrEmpty(text))
-            {
-                infoLabel.isVisible = false;
-                return;
-            }
-            if (infoLabel.text != text) infoLabel.text = text;
-            infoLabel.isVisible = true;
-        }
-
-        private static UILabel CreateInfoLabel(float y)
-        {
-            var label = (UILabel)UIView.GetAView().AddUIComponent(typeof(UILabel));
-            label.name = "RealisticRoadsInfo";
-            label.backgroundSprite = "GenericPanel";
-            label.padding = new RectOffset(8, 8, 6, 6);
-            label.textScale = 0.8f;
-            label.autoSize = true;
-            label.relativePosition = new Vector3(10f, y);
-            label.isVisible = false;
-            return label;
-        }
-
         private static UIButton CreateButton(string name, string text, string tooltip, float y, Action onClick)
         {
             var view = UIView.GetAView();
@@ -133,6 +103,17 @@ namespace RealisticRoads
             button.pressedBgSprite = "ButtonMenuPressed";
             button.focusedBgSprite = "ButtonMenu";
             button.textScale = text.Length > 2 ? 0.9f : 1.1f;
+            // The logo on the vanilla button background; the letters only if the icons can't load.
+            if (Icons.Atlas != null)
+            {
+                button.atlas = Icons.Atlas;
+                button.normalBgSprite = Icons.ButtonBackground;
+                button.hoveredBgSprite = Icons.ButtonBackgroundHover;
+                button.pressedBgSprite = Icons.ButtonBackgroundPressed;
+                button.focusedBgSprite = Icons.ButtonBackground;
+                button.normalFgSprite = button.hoveredFgSprite = button.pressedFgSprite = button.focusedFgSprite = Icons.Logo;
+                button.text = "";
+            }
 
             button.eventClick += (component, param) =>
             {

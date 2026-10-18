@@ -45,8 +45,16 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
 `City loaded, mode = ...` when the city is up. If `City loaded` never appears, send that output.
 
 ## 5. Curve tool: build CS2-style curves (milestones 3 + 4)
-1. Pick a road in the vanilla **Roads** menu (e.g. Basic Road or Oneway Road), then click **RR** or press **Ctrl+Shift+C**.
-   The panel under the buttons shows the road, length and segment count.
+1. Pick a road in the vanilla **Roads** menu (e.g. Basic Road or Oneway Road), then click the **RR** button (the
+   curved-road icon) or press **Ctrl+Shift+C**. The **Realistic Roads** panel opens (drag its title bar to move it;
+   the place is remembered). It shows:
+   - **Road**: the road you are drawing;
+   - **Curve**: length, segments, cost, and whether it is raised or lowered anywhere;
+   - **Crossings**: each crossing with its options as icons (the same as the icons above it on the map) and, for a
+     bridge, deck higher / lower;
+   - **Water**: each water bridge with higher / lower;
+   - **Can't build yet** (red) and **Notes** (yellow);
+   - **Build**, **Undo** and **Clear** buttons (same as Enter, Ctrl+Z and Esc). The X closes the tool.
 2. Click points on the ground. The curve follows the mouse as a road-width band through all of them:
    **green** = can be built, **red** = a bend is too tight (spread the points out).
 3. Clicking on the middle of an existing road starts or ends the curve there: that road is cut and the new one joins

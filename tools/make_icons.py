@@ -76,8 +76,41 @@ for name, fill, edge in (("bg", (30, 40, 50, 210), (90, 110, 130, 255)),
     d.rounded_rectangle(p(1, 1, 39, 39), radius=8 * S, fill=fill, outline=edge, width=2 * S)
     save(im, name)
 
+# logo: a road sweeping round a bend, white dashes down the middle, on a
+# transparent background (drawn on the button backgrounds below)
+def logo(size, name):
+    big = size * S
+    im = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    k = size / 40.0 * S
+    # an S-curve from the bottom-left to the top-right (cubic Bezier)
+    P = [(4, 35), (24, 35), (16, 5), (36, 5)]
+    pts = []
+    for i in range(41):
+        t = i / 40.0
+        x = sum(c * P[j][0] for j, c in enumerate(((1 - t) ** 3, 3 * t * (1 - t) ** 2, 3 * t * t * (1 - t), t ** 3)))
+        y = sum(c * P[j][1] for j, c in enumerate(((1 - t) ** 3, 3 * t * (1 - t) ** 2, 3 * t * t * (1 - t), t ** 3)))
+        pts.append((x * k, y * k))
+    d.line(pts, fill=OURS, width=int(12 * k), joint="curve")             # yellow edges
+    d.line(pts, fill=(80, 85, 95, 255), width=int(9 * k), joint="curve")   # asphalt
+    for i in range(0, 40, 4):                                             # dashed centre line
+        d.line(pts[i:i + 3], fill=DASH, width=int(1.5 * k))
+    im.resize((size, size), Image.LANCZOS).save(f"{out}/{name}.png")
+
+logo(40, "logo")
+logo(28, "logoSmall")
+
+# the RR button's backgrounds (46 px, like the game's menu buttons)
+for name, fill, edge in (("button", (35, 45, 60, 235), (100, 120, 145, 255)),
+                         ("buttonHover", (55, 75, 100, 240), (160, 190, 225, 255)),
+                         ("buttonPressed", (40, 95, 150, 245), (150, 200, 255, 255))):
+    im = Image.new("RGBA", (46 * S, 46 * S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([S, S, 45 * S, 45 * S], radius=9 * S, fill=fill, outline=edge, width=2 * S)
+    im.resize((46, 46), Image.LANCZOS).save(f"{out}/{name}.png")
+
 # preview sheet for checking by eye
-names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus"]
+names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")
