@@ -71,8 +71,17 @@ namespace RealisticRoads
             public readonly Stamps Stamps = new Stamps();
             // Existing nodes we moved (overpass lowering) and where they were.
             public readonly List<KeyValuePair<ushort, Vector3>> Moves = new List<KeyValuePair<ushort, Vector3>>();
+            // Existing segments whose end directions we turned (a slid node) and what they were.
+            public readonly List<Turned> Turns = new List<Turned>();
             public int Paid;                         // construction cost charged (refunded on undo)
             public ItemClass PaidClass;
+        }
+
+        private struct Turned
+        {
+            public ushort Segment;
+            public uint BuildIndex;
+            public Vector3 StartDirection, EndDirection;
         }
 
         // Only touched on the simulation thread.
@@ -411,6 +420,10 @@ namespace RealisticRoads
             var split = SplitSegment(segment, cuts.ToArray(), infos.ToArray(), build);
             FinishBridgeSide(plan, start, touched, build);
             FinishBridgeSide(plan, end, touched, build);
+            // The bridge's ends (no new nodes for this): their pillar or none, as the game picks it.
+            foreach (ushort node in split.Nodes) UpdatePillar(node);
+            if (NodeExists(start.Node)) UpdatePillar(start.Node);
+            if (NodeExists(end.Node)) UpdatePillar(end.Node);
             Mod.Log("  Underpass: " + existing.name + " bridged " + (2f * reach).ToString("F0") + " m; start " + Describe(start) +
                     ", end " + Describe(end) + ", " + split.Nodes.Count + " new node(s) on it");
         }
@@ -547,9 +560,16 @@ namespace RealisticRoads
                     ushort segment = net.m_nodes.m_buffer[node].GetSegment(i);
                     if (segment == 0) continue;
                     var s = net.m_segments.m_buffer[segment];
+                    build.Turns.Add(new Turned { Segment = segment, BuildIndex = s.m_buildIndex,
+                        StartDirection = s.m_startDirection, EndDirection = s.m_endDirection });
                     bool isStart = s.m_startNode == node;
-                    Vector3 other = net.m_nodes.m_buffer[isStart ? s.m_endNode : s.m_startNode].m_position;
-                    Vector3 away = Vector3.Dot(other - target, tangent) >= 0f ? tangent : -tangent;
+                    // Keep the way the road leaves the node (its own direction there,
+                    // not the chord to its far end, which a curved road can point
+                    // the other way round).
+                    Vector3 current = CurveMath.FlatNormal(isStart ? s.m_startDirection : s.m_endDirection);
+                    if (current == Vector3.zero)
+                        current = net.m_nodes.m_buffer[isStart ? s.m_endNode : s.m_startNode].m_position - target;
+                    Vector3 away = Vector3.Dot(current, tangent) >= 0f ? tangent : -tangent;
                     if (isStart) net.m_segments.m_buffer[segment].m_startDirection = away;
                     else net.m_segments.m_buffer[segment].m_endDirection = away;
                 }
@@ -588,7 +608,8 @@ namespace RealisticRoads
             }
             bool fromStart = s.m_startNode == node;
             float t = fromStart ? metres / length : 1f - metres / length;
-            SplitSegment(next, new[] { t }, fromStart ? new[] { bridge, existing } : new[] { existing, bridge }, build);
+            var split = SplitSegment(next, new[] { t }, fromStart ? new[] { bridge, existing } : new[] { existing, bridge }, build);
+            foreach (ushort end in split.Nodes) UpdatePillar(end);
         }
 
         // What the vanilla tool would charge for the new segments (the road's
@@ -771,6 +792,16 @@ namespace RealisticRoads
                 if (!NodeExists(build.Moves[i].Key)) continue;
                 net.MoveNode(build.Moves[i].Key, build.Moves[i].Value);
                 RefreshDirections(build.Moves[i].Key);
+            }
+            // And the roads at a slid node point the way they did.
+            for (int i = build.Turns.Count - 1; i >= 0; i--)
+            {
+                var turn = build.Turns[i];
+                var s = net.m_segments.m_buffer[turn.Segment];
+                if ((s.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || s.m_buildIndex != turn.BuildIndex) continue;
+                net.m_segments.m_buffer[turn.Segment].m_startDirection = turn.StartDirection;
+                net.m_segments.m_buffer[turn.Segment].m_endDirection = turn.EndDirection;
+                net.UpdateSegment(turn.Segment);
             }
 
             for (int i = build.Splits.Count - 1; i >= 0; i--)
