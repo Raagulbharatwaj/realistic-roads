@@ -817,9 +817,6 @@ namespace RealisticRoads
             {
                 var crossing = division.Crossings[c];
                 if (crossing.Type != CrossingType.Bridge && crossing.Type != CrossingType.Overpass) continue;
-                // Over a rail line the bridge keeps its node above the track (lifted,
-                // no pillar) so the wires pass under the deck.
-                if (crossing.Type == CrossingType.Bridge && crossing.OverRail) continue;
                 int k = division.CrossingIndex[c];
                 if (k <= 0 || k >= plan.Points.Count - 1) continue;
                 // Only with a raised node on each side to carry the deck, and only if

@@ -88,8 +88,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      canal or the like defaults to **bridge**. A curve may cross the same road several times (junctions,
      bridges or tunnels; overpass/underpass only once per piece of road);
    - **bridge**: our road goes over on a flyover (9 m clearance), the existing one is untouched. **+/-** sets the height.
-     Over a rail line on the ground the deck keeps a node right above the track (no pillar) and is 2 m higher there
-     (11 m over the rails), so the overhead wires pass under it; the track itself is never touched;
+     Over a rail line on the ground the deck is 2 m higher (11 m over the rails), so the overhead wires pass under it;
+     there is no node or pillar over the track, and the track itself is never touched;
    - **overpass**: the existing road is lowered 8 m into a cutting, ours crosses at ground level on a bridge deck.
      A road ramps down at 4 % (~210 m of plain road, no junction, each side); a rail line at a gentle 2 %
      (~485 m of plain track each side) and 1.5 m deeper in the middle, so its wires clear the deck. The crossing
@@ -122,7 +122,9 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
 4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
    elevated road (deck on pillars), 10 m above the water, with ramps on land at a gentle 4 % slope (3.5 % for rail).
    Raised stretches over land get a pillar every 48 m (roads) or 96 m (rail); bridges over water keep ~100 m spans.
-   Rail decks over a crossing span at least 60 m, so no short pieces bunch up next to it.
+   Rail decks over a crossing span at least 90 m, so no short pieces bunch up next to it.
+   A level crossing (junction) and ramps up to 3 m above the ground use the ground version of the road on an
+   embankment; only stretches that must be raised (bridges, water) or are higher use the elevated version.
 5. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.
 6. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
 
