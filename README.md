@@ -120,7 +120,7 @@ Junctions built with RR get the CS2 look automatically; JN changes any other jun
 2. Click a yellow junction: the vanilla junction piece (crosswalks, median blocks) is replaced by a flat asphalt
    floor and raised sidewalk corners that curve from road to road. The road ends move 3 m back for rounder corners.
 3. With the mouse over a CS2-style junction, **+** / **-** make the corners bigger / smaller (1 m steps, 0-20 m).
-   Click again to go back to vanilla.
+   Click again to go back to vanilla. **Ctrl+Z** switches the last junction you clicked back.
    **Page Up / Page Down** make the junction asphalt lighter / darker (all junctions, saved between games). The log
    shows `Junction asphalt shade X`: if you find a value that matches the roads, send it and it becomes the default.
 4. Traffic is unchanged; cars follow the new road ends. Saves keep the junctions; without the mod they are vanilla.
@@ -129,6 +129,26 @@ Please check and screenshot: the asphalt and sidewalk colours (they use the game
 Marking Tool's fillers), the curb height, any gaps or flicker where the roads meet the junction, and traffic lights.
 From far away the vanilla junction is still drawn. If drawing fails, the log says
 `Drawing CS2-style junctions failed` and the junctions show as vanilla.
+
+### Grade separation (JN, Tab)
+Raises a group of lanes over a junction: they split off the road, climb, fly over the junction and land on the road
+straight across, while the other lanes stay on the ground beside them.
+1. In JN press **Tab** (Tab again goes back to the junction look). Click a junction.
+2. Its roads show their car lanes: **yellow** go into the junction, **grey** come out. Click lanes on one road to raise
+   them; click more next to them to grow the group (all must go the same way), click an end lane to drop it.
+3. The preview shows each part: **green** stays on the ground (a road with sidewalks), **blue** is raised (an
+   elevated road, with barriers where the road type has them). Each part uses the loaded road type, vanilla or
+   Workshop, with the same lanes each way and the closest widths. If none fits, the info panel says which lane
+   groups on that road would work.
+4. Drag the **white circle** along the road (or **[** / **]**) to move the split, up to 500 m out. The far side splits
+   at the same distance (grey circle). Drag the **blue circle** at the junction up or down (or **Up** / **Down**) for
+   the deck height, 9-40 m above the junction. The ramps are worked out at up to 6 %; the split can't come closer
+   than the ramps need (the panel shows the range).
+5. **Enter** builds it; **Ctrl+Z** (in this mode) undoes the last grade separation and puts the old roads back. **Esc** drops the lanes, then the
+   junction, then leaves; right-click does the same without leaving.
+
+The roads between the junction and the split are replaced, so TM:PE settings on them are lost. Where one ground part
+and the raised part leave the split, it gets a smooth split; with two ground parts the split is a normal junction.
 
 ## 8. Road builder (RB, first version)
 Put a road together from lanes, CS2 Road Builder style. Design: [docs/R3_ROAD_BUILDER.md](docs/R3_ROAD_BUILDER.md).

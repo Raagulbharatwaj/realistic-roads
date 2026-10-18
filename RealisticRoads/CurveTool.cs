@@ -44,7 +44,8 @@ namespace RealisticRoads
         private static readonly Color JunctionColor = new Color(1f, 1f, 1f, 0.8f);
         public const float BridgeSpacing = 100f;     // spans over water (elevated pieces, pillars at each node)
         public const float BridgeMinSpacing = 40f;
-        private const float WaterJoin = 60f;         // wet patches closer than this are one water crossing
+        private const float WaterJoin = 60f;          // wet patches closer than this are one water crossing
+        private const float RaisedSpacing = 48f;      // node (pillar) spacing on raised stretches, like vanilla elevated roads
         private const float HeightStep = 5f;
         private const float MaxExtraHeight = 60f;
         private const float IconSize = 34f;
@@ -121,6 +122,9 @@ namespace RealisticRoads
             public ushort StartSplit;    // trunk end the start is half-snapped to (or 0)
             public ushort EndSplit;      // trunk end the end is half-snapped to (or 0)
             public int Cost;             // construction cost (game money units, /100 to show)
+            // Crossing distances are measured from the curve's own start; a
+            // half-snapped start adds the parallel piece before it.
+            public float StartOffset;
         }
 
         protected override void OnEnable()
@@ -531,19 +535,102 @@ namespace RealisticRoads
                 division.EndSplit = nodes[n];
             }
 
-            if (halfStart)
-                foreach (var run in division.WaterRuns) { run.From += CurveMath.FlatDistance(division.Points[0], division.Points[1]); run.To += CurveMath.FlatDistance(division.Points[0], division.Points[1]); }
+            if (halfStart && division.Points.Count > 1)
+            {
+                division.StartOffset = CurveMath.FlatDistance(division.Points[0], division.Points[1]);
+                foreach (var run in division.WaterRuns) { run.From += division.StartOffset; run.To += division.StartOffset; }
+            }
             // Ends on the middle of a road (only where the end isn't also half-snapped).
             ushort startSegment = !halfStart && nodes[0] == 0 ? segments[0] : (ushort)0;
             ushort endSegment = !halfEnd && nodes[n] == 0 ? segments[n] : (ushort)0;
             division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
                 division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
                 startSegment, ts[0], endSegment, ts[n]);
+            // Raised stretches get a node (and pillar) every RaisedSpacing, like the
+            // vanilla tool's elevated roads; plan again with them.
+            if (AddRaisedNodes(division))
+                division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
+                    division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
+                    startSegment, ts[0], endSegment, ts[n]);
+            DropNodesOverCrossings(division);
             division.Cost = NetworkBuilder.Cost(SelectedNetwork, division.Plan);
             int blocked = BuildingsInTheWay(division);
             if (blocked > 0)
                 division.Plan.Warnings.Add("Runs through " + blocked + " building(s): bulldoze them first (they are not removed)");
             return division;
+        }
+
+        // How far either side of a crossing our bridge's nodes go: past the other
+        // road's edge and ours, measured along our road (longer at an angle).
+        private float SideOffset(List<Vector3> polyline, Crossing crossing)
+        {
+            Vector3 point, ours;
+            CurveMath.PointAt(polyline, crossing.Distance, out point, out ours);
+            crossing.Skew = RoadPlanner.Skew(crossing, ours);
+            float half = SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f;
+            return RoadPlanner.SpanHalf(crossing, half, crossing.Type == CrossingType.Overpass);
+        }
+
+        // Splits raised pieces longer than RaisedSpacing (descending, so the
+        // indices still to visit don't move). True if any were split.
+        private bool AddRaisedNodes(Division division)
+        {
+            var plan = division.Plan;
+            if (plan == null) return false;
+            // Pieces touching the node on a crossed road stay whole: a node added
+            // there could land on that road (its span is spread out at an angle).
+            var keep = new HashSet<int>();
+            for (int c = 0; c < division.Crossings.Count; c++)
+                if (division.Crossings[c].Type == CrossingType.Bridge || division.Crossings[c].Type == CrossingType.Overpass)
+                    keep.Add(division.CrossingIndex[c]);
+            bool added = false;
+            for (int i = plan.Points.Count - 1; i >= 1; i--)
+            {
+                // Elevated stretches over land only: bridges over water keep their
+                // long, even spans (BridgeSpacing), with no extra pillar in the river.
+                if (plan.Kinds[i - 1] != NodeKind.Elevated || plan.Kinds[i] != NodeKind.Elevated) continue;
+                if (keep.Contains(i) || keep.Contains(i - 1)) continue;
+                float length = CurveMath.FlatDistance(division.Points[i - 1], division.Points[i]);
+                int pieces = Mathf.CeilToInt(length / RaisedSpacing - 0.15f);
+                if (pieces < 2) continue;
+                var bezier = PieceBezier(division, i);
+                for (int k = pieces - 1; k >= 1; k--)
+                {
+                    float t = k / (float)pieces;
+                    division.Points.Insert(i, CurveMath.Bezier(bezier.a, bezier.b, bezier.c, bezier.d, t));
+                    division.Tangents.Insert(i, CurveMath.FlatNormal(CurveMath.BezierDerivative(bezier.a, bezier.b, bezier.c, bezier.d, t)));
+                }
+                for (int c = 0; c < division.CrossingIndex.Count; c++)
+                    if (division.CrossingIndex[c] >= i) division.CrossingIndex[c] += pieces - 1;
+                added = true;
+            }
+            return added;
+        }
+
+        // The node right on a road or rail we bridge over (bridge, overpass) is
+        // dropped: the deck spans from the nodes either side, and the pillar that
+        // node would get doesn't stand on the road or track.
+        private static void DropNodesOverCrossings(Division division)
+        {
+            var plan = division.Plan;
+            if (plan == null) return;
+            for (int c = division.Crossings.Count - 1; c >= 0; c--)
+            {
+                var crossing = division.Crossings[c];
+                if (crossing.Type != CrossingType.Bridge && crossing.Type != CrossingType.Overpass) continue;
+                int k = division.CrossingIndex[c];
+                if (k <= 0 || k >= plan.Points.Count - 1) continue;
+                // Only with a raised node on each side to carry the deck, and only if
+                // the one piece left doesn't bend more than a piece may.
+                if (!IsRaised(plan.Kinds[k - 1]) || !IsRaised(plan.Kinds[k + 1])) continue;
+                if (CurveMath.BendAngle(division.Tangents[k - 1], division.Tangents[k + 1]) > MaxBend) continue;
+                division.Points.RemoveAt(k);
+                division.Tangents.RemoveAt(k);
+                RoadPlanner.RemoveNode(plan, k);
+                division.CrossingIndex[c] = -1;
+                for (int other = 0; other < division.CrossingIndex.Count; other++)
+                    if (division.CrossingIndex[other] > k) division.CrossingIndex[other]--;
+            }
         }
 
         // Buildings whose footprint the new road's ground-level stretches run
@@ -609,6 +696,7 @@ namespace RealisticRoads
             }
             var timesCrossed = new Dictionary<ushort, int>();
             var snapped = new List<int>();
+            var found = new List<Crossing>();
             foreach (var crossing in CrossingFinder.Find(polyline, SelectedNetwork, startNode, endNode))
             {
                 if (crossing.Distance < MinSpacing * 0.5f || crossing.Distance > division.Length - MinSpacing * 0.5f) continue;
@@ -623,6 +711,28 @@ namespace RealisticRoads
                 float extra;
                 crossing.ExtraHeight = crossingExtra.TryGetValue(crossing.Key, out extra) ? extra : 0f;
                 cuts.Add(new KeyValuePair<float, Crossing>(crossing.Distance, crossing));
+                found.Add(crossing);
+            }
+            // Over another road or rail (bridge, overpass): nodes either side of
+            // it too, so the node on it can be dropped later and no pillar
+            // stands on the road or track below. Not where that side node would
+            // land on another road or track we cross: the deck spans both.
+            var footprint = new Dictionary<Crossing, float>();
+            float ourHalf = SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f;
+            foreach (var crossing in found)
+                footprint[crossing] = crossing.Type == CrossingType.Bridge || crossing.Type == CrossingType.Overpass
+                    ? SideOffset(polyline, crossing)
+                    : crossing.ExistingHalfWidth + ourHalf + RoadPlanner.PillarClearance;
+            foreach (var crossing in found)
+            {
+                if (crossing.Type != CrossingType.Bridge && crossing.Type != CrossingType.Overpass) continue;
+                foreach (float at in new[] { crossing.Distance - footprint[crossing], crossing.Distance + footprint[crossing] })
+                {
+                    bool onAnother = false;
+                    foreach (var other in found)
+                        if (other != crossing && Mathf.Abs(at - other.Distance) < footprint[other]) onAnother = true;
+                    if (!onAnother) cuts.Add(new KeyValuePair<float, Crossing>(at, null));
+                }
             }
             cuts.Sort((p, q) => p.Key.CompareTo(q.Key));
 
@@ -955,8 +1065,18 @@ namespace RealisticRoads
             for (int c = 0; c < division.Crossings.Count; c++)
             {
                 var crossing = division.Crossings[c];
-                var at = plan.Points[division.CrossingIndex[c]];
-                float relative = at.y - terrain.SampleRawHeightSmooth(at);
+                int index = division.CrossingIndex[c];
+                float relative = 0f;
+                if (index >= 0)
+                {
+                    var at = plan.Points[index];
+                    relative = at.y - terrain.SampleRawHeightSmooth(at);
+                }
+                else
+                {
+                    // Spanned by the deck: its height above the road or rail there.
+                    relative = HeightAt(plan, crossing.Distance + division.StartOffset) - terrain.SampleRawHeightSmooth(crossing.Point);
+                }
                 text += "\nCrossing " + (c + 1) + " (" + crossing.ExistingName + "): " + crossing.Describe() +
                         (relative >= 1f ? ", " + relative.ToString("F0") + " m up" :
                          relative <= -1f ? ", " + (-relative).ToString("F0") + " m deep" : "");
