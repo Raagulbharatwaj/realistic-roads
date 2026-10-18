@@ -46,6 +46,7 @@ namespace RealisticRoads
         public const float BridgeSpacing = 100f;     // spans over water (elevated pieces, pillars at each node)
         public const float BridgeMinSpacing = 40f;
         private const float WaterJoin = 60f;          // wet patches closer than this are one water crossing
+        private const float MinWaterWidth = 4f;       // narrower wet patches are ignored
         private const float RaisedSpacing = 48f;      // node (pillar) spacing on raised stretches, like vanilla elevated roads
         private const float RailRaisedSpacing = 96f;  // rail: as few nodes as possible, long spans
         private const float HeightStep = 5f;
@@ -1023,22 +1024,32 @@ namespace RealisticRoads
         private List<WaterRun> FindWater(List<Vector3> polyline)
         {
             var runs = new List<WaterRun>();
-            float along = 0f;
+            float along = 0f, previous = 0f;
+            bool wasWet = false;
             WaterRun current = null;
             for (int i = 0; i < polyline.Count; i++)
             {
                 if (i > 0) along += CurveMath.FlatDistance(polyline[i - 1], polyline[i]);
                 bool wet = NetworkBuilder.IsOverWater(polyline[i]);
-                if (wet)
+                // Each wet stretch reaches halfway to the dry samples either side,
+                // so one wet sample is as wide as the sample spacing, not 0 m.
+                if (wet && !wasWet)
                 {
-                    if (current != null && along - current.To < WaterJoin) current.To = along;
+                    float from = i > 0 ? (previous + along) * 0.5f : along;
+                    if (current != null && from - current.To < WaterJoin) current.To = along;
                     else
                     {
-                        current = new WaterRun { From = along, To = along };
+                        current = new WaterRun { From = from, To = along };
                         runs.Add(current);
                     }
                 }
+                else if (wet) current.To = along;
+                else if (wasWet) current.To = (previous + along) * 0.5f;
+                wasWet = wet;
+                previous = along;
             }
+            // A wet sample or two at a shore or a puddle isn't a crossing.
+            runs.RemoveAll(run => run.To - run.From < MinWaterWidth);
             foreach (var run in runs)
             {
                 Vector3 middle, tangent;
@@ -1257,11 +1268,6 @@ namespace RealisticRoads
                 panel.Create();
                 panel.Build = BuildCurrent;
                 panel.Undo = NetworkBuilder.UndoLast;
-                panel.Clear = () =>
-                {
-                    ClearPoints();
-                    Mod.Log("Curve cleared");
-                };
                 panel.Close = () =>
                 {
                     ToolActivator.LeaveMode();

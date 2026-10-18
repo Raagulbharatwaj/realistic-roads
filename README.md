@@ -61,11 +61,13 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      crosses. Under it: how high and how deep it goes, the steepest grade and the number of pillars. Move the mouse
      along it to read the height at any spot (a white ring marks that spot on the map); click to keep the mark;
    - **Crossings**: each crossing with its options as icons (the same as the icons above it on the map) and, for a
-     bridge, deck higher / lower;
-   - **Water**: each water bridge with higher / lower;
-   - **Can't build yet** (red) and **Notes** (yellow);
-   - **Build**, **Undo** and **Clear** buttons (same as Enter, Ctrl+Z and Esc), and **Game tool** (draw this road
-     with the game's own tool instead, RR mode off). The X closes the tool.
+     bridge, deck higher / lower. Up to 4 are listed; the rest are changed with the icons on the map. Only real
+     roads, tracks, paths and canals count: ship and airplane routes and power lines are ignored;
+   - **Water**: each water bridge with higher / lower (up to 3 listed; the rest with the + / - on the map);
+   - **Can't build yet** (red) and **Notes** (yellow).
+   The actions are icons in the title bar: **Build** (check mark: green when the curve can be built, dimmed when
+   not; same as Enter), **Undo** (arrow: lit when there is something to undo; same as Ctrl+Z) and **Game tool**
+   (draw this road with the game's own tool instead, RR mode off). Esc clears the points; the X closes the tool.
 2. Click points on the ground. The curve follows the mouse and is drawn **in 3D at its planned heights**, with the
    real road pieces it will be built from (ground, elevated deck, ramps), like the vanilla road tool's preview, so
    flyovers, bridges and ramps look the way they will be built. The colour sits on the road at its own height:

@@ -145,7 +145,7 @@ namespace RealisticRoads
                         if (!seen.Add(current)) continue;
                         if ((segments[current].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
                         NetInfo existing = segments[current].Info;
-                        if (existing == null || existing.m_class == null) continue;
+                        if (existing == null || existing.m_class == null || !IsPhysical(existing)) continue;
 
                         SampleSegment(current, samples);
                         hits.Clear();
@@ -180,6 +180,17 @@ namespace RealisticRoads
         }
 
         // Points along an existing segment's curve (y = its real height).
+        // Something really there to cross: roads, tracks, paths, canals. Not the
+        // invisible ship, airplane and blimp routes or power lines, which the
+        // game also keeps as networks.
+        private static bool IsPhysical(NetInfo info)
+        {
+            var layer = info.m_class.m_layer;
+            if ((layer & (ItemClass.Layer.Default | ItemClass.Layer.MetroTunnels)) == ItemClass.Layer.None) return false;
+            string service = info.m_class.m_service.ToString();
+            return service != "Electricity";
+        }
+
         public static void SampleSegment(ushort segment, Vector3[] samples)
         {
             Vector3 a, b, c, d;

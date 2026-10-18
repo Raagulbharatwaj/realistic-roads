@@ -96,7 +96,9 @@ namespace RealisticRoads
         private string structure;
         private PanelModel current;
 
-        public Action Build, Undo, Clear, Close, GameTool;
+        public Action Build, Undo, Close, GameTool;
+        private UIButton buildButton, undoButton;
+        private const int MaxCrossingRows = 4, MaxWaterRows = 3;   // more are changed with the buttons on the map
 
         public bool Exists => panel != null;
 
@@ -134,7 +136,7 @@ namespace RealisticRoads
 
             var title = (UILabel)panel.AddUIComponent(typeof(UILabel));
             title.text = "Realistic Roads";
-            title.textScale = 1.1f;
+            title.textScale = 1.0f;
             title.relativePosition = new Vector3(44f, 11f);
             title.isInteractive = false;
 
@@ -146,6 +148,18 @@ namespace RealisticRoads
             close.pressedBgSprite = "buttonclosepressed";
             close.tooltip = "Leave the curve tool (Esc)";
             close.eventClick += (component, param) => { if (Close != null) Close(); };
+
+            // The actions, as icons in the title bar: build is green when the
+            // curve can be built, undo lit when there is something to undo.
+            float x = Width - 40f - 3f * (ActionSize + 4f);
+            ActionButton(Icons.GameTool, Icons.GameTool, Icons.Background, "Game", x,
+                "Draw this road with the game's own road tool instead", () => { if (GameTool != null) GameTool(); });
+            undoButton = ActionButton(Icons.Undo, Icons.UndoOff, Icons.Background, "Undo", x + ActionSize + 4f,
+                "Undo the last road built (Ctrl+Z)", () => { if (Undo != null) Undo(); });
+            buildButton = ActionButton(Icons.Build, Icons.BuildOff, Icons.BackgroundSelected, "Build", x + 2f * (ActionSize + 4f),
+                "Build it (Enter, or double-click the last point)", () => { if (Build != null) Build(); });
+            SetEnabled(buildButton, false);
+            SetEnabled(undoButton, false);
 
             panel.isVisible = false;
         }
@@ -179,6 +193,8 @@ namespace RealisticRoads
             if (panel == null) return;
             panel.isVisible = true;
             current = model;
+            SetEnabled(buildButton, model.CanBuild);
+            SetEnabled(undoButton, NetworkBuilder.UndoCount > 0);
             string shape = Shape(model);
             if (shape != structure)
             {
@@ -212,7 +228,7 @@ namespace RealisticRoads
                 foreach (var type in crossing.Allowed) shape.Append((int)type);
                 shape.Append(':').Append((int)crossing.Selected).Append(crossing.HeightButtons).Append(';');
             }
-            shape.Append('|').Append(model.Water.Count).Append('|').Append(model.Problems.Count).Append('|').Append(model.Warnings.Count);
+            shape.Append('|').Append(Mathf.Min(model.Water.Count, MaxWaterRows + 1)).Append('|').Append(model.Problems.Count).Append('|').Append(model.Warnings.Count);
             return shape.ToString();
         }
 
@@ -272,7 +288,7 @@ namespace RealisticRoads
             if (model.Crossings.Count > 0)
             {
                 y = Header("CROSSINGS", y);
-                for (int i = 0; i < model.Crossings.Count; i++)
+                for (int i = 0; i < Mathf.Min(model.Crossings.Count, MaxCrossingRows); i++)
                 {
                     int index = i;
                     y = Text(m => index < m.Crossings.Count ? m.Crossings[index].Title : "", TextColor, 0.8f, y);
@@ -297,12 +313,14 @@ namespace RealisticRoads
                     }
                     y += IconSize + RowGap + 4f;
                 }
+                if (model.Crossings.Count > MaxCrossingRows)
+                    y = Text(m => "+ " + (m.Crossings.Count - MaxCrossingRows) + " more: use the icons above each one on the map", DimColor, 0.75f, y);
             }
 
             if (model.Water.Count > 0)
             {
                 y = Header("WATER", y);
-                for (int i = 0; i < model.Water.Count; i++)
+                for (int i = 0; i < Mathf.Min(model.Water.Count, MaxWaterRows); i++)
                 {
                     int index = i;
                     float rowY = y;
@@ -315,6 +333,8 @@ namespace RealisticRoads
                         () => { if (index < current.Water.Count) current.Water[index].Raise(-current.Water[index].Step); });
                     y = Mathf.Max(rowY + IconSize, rowY + label.size.y) + RowGap;
                 }
+                if (model.Water.Count > MaxWaterRows)
+                    y = Text(m => "+ " + (m.Water.Count - MaxWaterRows) + " more: use the + / - on the map", DimColor, 0.75f, y);
             }
 
             if (model.Problems.Count > 0)
@@ -336,17 +356,6 @@ namespace RealisticRoads
                 }
             }
 
-            // Actions.
-            y += 6f;
-            float buttonWidth = (Width - 2f * Pad - 3f * 6f) / 4f;
-            TextButton("Build", "Build the curve (Enter, or double-click)", new Vector2(Pad, y), buttonWidth, model.CanBuild, () => { if (Build != null) Build(); });
-            TextButton("Undo", "Remove the last curve built (Ctrl+Z)", new Vector2(Pad + buttonWidth + 6f, y), buttonWidth, true, () => { if (Undo != null) Undo(); });
-            TextButton("Clear", "Clear the points (Esc)", new Vector2(Pad + 2f * (buttonWidth + 6f), y), buttonWidth, model.HasPoints, () => { if (Clear != null) Clear(); });
-            TextButton("Game tool", "Draw this road with the game's own road tool instead (RR stays off until you pick it again)",
-                new Vector2(Pad + 3f * (buttonWidth + 6f), y), buttonWidth, true, () => { if (GameTool != null) GameTool(); });
-            y += 36f;
-            y = Text(m => "Click: add a point   Right-click: remove the last one\nPage Up / Down: height of the next point\nOn a road: join it   Crossings: pick above or here",
-                DimColor, 0.7f, y);
             panel.size = new Vector2(Width, y + Pad);
         }
 
@@ -428,21 +437,43 @@ namespace RealisticRoads
             dynamic.Add(button);
         }
 
-        private void TextButton(string text, string tooltip, Vector2 at, float width, bool enabled, Action onClick)
+        private const float ActionSize = 30f;
+
+        private UIButton ActionButton(string icon, string iconOff, string background, string text, float x, string tooltip, Action onClick)
         {
             var button = (UIButton)panel.AddUIComponent(typeof(UIButton));
-            button.size = new Vector2(width, 30f);
-            button.relativePosition = new Vector3(at.x, at.y);
-            button.text = text;
-            button.textScale = 0.8f;
+            button.size = new Vector2(ActionSize, ActionSize);
+            button.relativePosition = new Vector3(x, 5f);
             button.tooltip = tooltip;
-            button.normalBgSprite = "ButtonMenu";
-            button.hoveredBgSprite = "ButtonMenuHovered";
-            button.pressedBgSprite = "ButtonMenuPressed";
-            button.disabledBgSprite = "ButtonMenuDisabled";
-            button.isEnabled = enabled;
-            button.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0 && button.isEnabled) onClick(); };
-            dynamic.Add(button);
+            if (Icons.Has(icon, iconOff, background, Icons.BackgroundHover, Icons.BackgroundOff))
+            {
+                button.atlas = Icons.Atlas;
+                button.normalFgSprite = button.hoveredFgSprite = button.pressedFgSprite = button.focusedFgSprite = icon;
+                button.disabledFgSprite = iconOff;
+                button.normalBgSprite = button.focusedBgSprite = background;
+                button.hoveredBgSprite = Icons.BackgroundHover;
+                button.pressedBgSprite = Icons.BackgroundSelected;
+                button.disabledBgSprite = Icons.BackgroundOff;
+            }
+            else
+            {
+                button.text = text;
+                button.textScale = 0.7f;
+                button.normalBgSprite = button.focusedBgSprite = "ButtonMenu";
+                button.hoveredBgSprite = "ButtonMenuHovered";
+                button.pressedBgSprite = "ButtonMenuPressed";
+                button.disabledBgSprite = "ButtonMenuDisabled";
+            }
+            button.eventClick += (component, param) =>
+            {
+                if ((param.buttons & UIMouseButton.Left) != 0 && button.isEnabled) onClick();
+            };
+            return button;
+        }
+
+        private static void SetEnabled(UIButton button, bool enabled)
+        {
+            if (button != null && button.isEnabled != enabled) button.isEnabled = enabled;
         }
 
         public static string StyleName(ProfileStyle style)
