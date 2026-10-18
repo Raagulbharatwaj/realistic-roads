@@ -404,4 +404,50 @@ public class CurveMathTests
         Assert.True(tested > 1000);
         Assert.True(stubs <= tested / 500, stubs + " stubs in " + tested + " curves");
     }
+
+    // Underpass bridge ends (rail numbers: keep 12, slide 80, piece 30, segment 160).
+    private static CurveMath.BridgeEnd End(float toNode, float reach, bool movable, bool hasBeyond, float beyond, out float slide) =>
+        CurveMath.ChooseBridgeEnd(toNode, reach, movable, hasBeyond, beyond, 12f, 80f, 30f, 160f, out slide);
+
+    [Fact]
+    public void BridgeEnd_NodeJustPastTheReach_BridgeRunsToIt()
+    {
+        Assert.Equal(CurveMath.BridgeEnd.Keep, End(40f, 32f, true, true, 90f, out _));
+    }
+
+    [Fact]
+    public void BridgeEnd_NodeFurtherOut_IsSlidInInsteadOfANewNode()
+    {
+        Assert.Equal(CurveMath.BridgeEnd.SlideIn, End(70f, 32f, true, true, 90f, out float slide));
+        Assert.Equal(38f, slide, 3);
+    }
+
+    [Fact]
+    public void BridgeEnd_NodeThatCantMove_GetsACutButNoSliver()
+    {
+        Assert.Equal(CurveMath.BridgeEnd.Cut, End(90f, 32f, false, true, 90f, out _));
+        // 20 m past the reach: a cut would leave a 20 m piece, so the bridge runs on.
+        Assert.Equal(CurveMath.BridgeEnd.Keep, End(52f, 32f, false, true, 90f, out _));
+    }
+
+    [Fact]
+    public void BridgeEnd_SlideWouldMakeTheNextSegmentTooLong_Cuts()
+    {
+        Assert.Equal(CurveMath.BridgeEnd.Cut, End(70f, 32f, true, true, 140f, out _));
+    }
+
+    [Fact]
+    public void BridgeEnd_NodeInsideTheBridge_IsSlidOut()
+    {
+        Assert.Equal(CurveMath.BridgeEnd.SlideOut, End(10f, 32f, true, true, 90f, out float slide));
+        Assert.Equal(22f, slide, 3);
+    }
+
+    [Fact]
+    public void BridgeEnd_NodeInsideButRoadBeyondTooShort_ContinuesIntoIt()
+    {
+        Assert.Equal(CurveMath.BridgeEnd.Continue, End(10f, 32f, true, true, 40f, out _));
+        Assert.Equal(CurveMath.BridgeEnd.Continue, End(10f, 32f, false, true, 90f, out _));
+        Assert.Equal(CurveMath.BridgeEnd.Keep, End(10f, 32f, true, false, 0f, out _));
+    }
 }

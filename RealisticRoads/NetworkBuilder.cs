@@ -346,40 +346,207 @@ namespace RealisticRoads
 
         private static float MinPieceOf(NetInfo info) => RoadPlanner.IsRail(info) ? MinRailPiece : MinPiece;
 
+        // Underpass bridge ends: how far a node may be slid along the road to
+        // become a bridge end instead of cutting a new one, and how long the
+        // segment beyond may get. Rail is long and straight: every node means
+        // another set of catenary masts, so it slides further.
+        private const float RoadKeepSlack = 4f, RailKeepSlack = 12f;
+        private const float RoadMaxSlide = 30f, RailMaxSlide = 80f;
+        private const float RoadMaxLength = 120f, RailMaxLength = 160f;
+
+        // One end of the bridge put into the road above an underpass.
+        private class BridgeSide
+        {
+            public CurveMath.BridgeEnd Choice;
+            public ushort Node;          // the crossed segment's end node on this side
+            public ushort Beyond;        // the segment past that node (0 at a dead end)
+            public float Over;           // Continue: metres the bridge reaches into 'Beyond'
+            public Vector3 Target;       // SlideIn / SlideOut: where the node goes
+            public Vector3 Tangent;      // and the road's direction there
+            public float CutT;           // Cut: where on the crossed segment (0..1)
+        }
+
         // The existing road above an underpass becomes a bridge for 'reach'
         // metres either side of the crossing, so it spans our cutting and its
-        // banks. Short of an end by less than MinPiece the bridge runs to that
-        // end; past an end it carries on into the next segment (through a
-        // plain road node), so a short segment can't leave the bridge's end
-        // standing in the cutting.
+        // banks. Each end of the bridge uses an existing node where it can: the
+        // bridge runs on to a node just past its end, or a node nearby is slid
+        // along the road to the end. Only if neither works is a new node cut.
         private static void BridgeOver(Plan plan, Crossing crossing, float reach, HashSet<ushort> touched, Build build)
         {
             var net = NetManager.instance;
-            var s = net.m_segments.m_buffer[crossing.Segment];
+            ushort segment = crossing.Segment;
+            var s = net.m_segments.m_buffer[segment];
             NetInfo existing = s.Info;
             NetInfo bridge = UnderpassBridge(existing);
             float length = Mathf.Max(s.m_averageLength, 1f);
             float at = crossing.ExistingT * length;
-            float from = at - reach, to = at + reach;
-            float minimum = MinPieceOf(existing);
+            Vector3 a, b, c, d;
+            CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+            var start = PlanBridgeSide(plan, segment, s.m_startNode, at, reach, a, b, c, d, length, true, touched);
+            var end = PlanBridgeSide(plan, segment, s.m_endNode, length - at, reach, a, b, c, d, length, false, touched);
+            // Both slid ends on one road beyond (a short loop): only one of them.
+            if (start.Beyond != 0 && start.Beyond == end.Beyond && IsSlide(start.Choice) && IsSlide(end.Choice))
+                end.Choice = end.Choice == CurveMath.BridgeEnd.SlideIn ? CurveMath.BridgeEnd.Cut : CurveMath.BridgeEnd.Continue;
 
             var cuts = new List<float>();
             var infos = new List<NetInfo>();
-            if (from > minimum)
+            if (start.Choice == CurveMath.BridgeEnd.Cut)
             {
-                cuts.Add(from / length);
+                cuts.Add(start.CutT);
                 infos.Add(existing);
             }
             infos.Add(bridge);
-            if (to < length - minimum)
+            if (end.Choice == CurveMath.BridgeEnd.Cut)
             {
-                cuts.Add(to / length);
+                cuts.Add(end.CutT);
                 infos.Add(existing);
             }
-            ushort startNode = s.m_startNode, endNode = s.m_endNode;
-            SplitSegment(crossing.Segment, cuts.ToArray(), infos.ToArray(), build);
-            if (from < 0f) ContinueBridge(plan, startNode, crossing.Segment, -from, touched, build);
-            if (to > length) ContinueBridge(plan, endNode, crossing.Segment, to - length, touched, build);
+            var split = SplitSegment(segment, cuts.ToArray(), infos.ToArray(), build);
+            FinishBridgeSide(plan, start, touched, build);
+            FinishBridgeSide(plan, end, touched, build);
+            Mod.Log("  Underpass: " + existing.name + " bridged " + (2f * reach).ToString("F0") + " m; start " + Describe(start) +
+                    ", end " + Describe(end) + ", " + split.Nodes.Count + " new node(s) on it");
+        }
+
+        private static bool IsSlide(CurveMath.BridgeEnd choice) =>
+            choice == CurveMath.BridgeEnd.SlideIn || choice == CurveMath.BridgeEnd.SlideOut;
+
+        private static string Describe(BridgeSide side)
+        {
+            switch (side.Choice)
+            {
+                case CurveMath.BridgeEnd.Keep: return "runs to node #" + side.Node;
+                case CurveMath.BridgeEnd.SlideIn:
+                case CurveMath.BridgeEnd.SlideOut: return "node #" + side.Node + " slid to it";
+                case CurveMath.BridgeEnd.Continue: return "carries on " + side.Over.ToString("F0") + " m into #" + side.Beyond;
+                default: return "new node";
+            }
+        }
+
+        // Works out one end of the underpass bridge ('atStart': the crossed
+        // segment's start side). 'toNode' is how far that side's node is from
+        // the crossing; a, b, c, d the crossed segment's curve.
+        private static BridgeSide PlanBridgeSide(Plan plan, ushort segment, ushort node, float toNode, float reach,
+            Vector3 a, Vector3 b, Vector3 c, Vector3 d, float length, bool atStart, HashSet<ushort> touched)
+        {
+            var net = NetManager.instance;
+            var side = new BridgeSide { Node = node };
+            if (SegmentCount(node) == 2)
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort other = net.m_nodes.m_buffer[node].GetSegment(i);
+                    if (other != 0 && other != segment) side.Beyond = other;
+                }
+            NetInfo existing = net.m_segments.m_buffer[segment].Info;
+            bool rail = RoadPlanner.IsRail(existing);
+            bool hasBeyond = side.Beyond != 0;
+            float beyond = hasBeyond ? Mathf.Max(net.m_segments.m_buffer[side.Beyond].m_averageLength, 1f) : 0f;
+            bool movable = CanSlide(plan, node, segment, side.Beyond, touched);
+            float slide;
+            side.Choice = CurveMath.ChooseBridgeEnd(toNode, reach, movable, hasBeyond, beyond,
+                rail ? RailKeepSlack : RoadKeepSlack, rail ? RailMaxSlide : RoadMaxSlide, MinPieceOf(existing),
+                rail ? RailMaxLength : RoadMaxLength, out slide);
+            // A bridge on into a road the curve also crosses, or one already changed, can't be: stop at the node.
+            if (side.Choice == CurveMath.BridgeEnd.Continue && (touched.Contains(side.Beyond) || CrossedByPlan(plan, side.Beyond)))
+                side.Choice = CurveMath.BridgeEnd.Keep;
+
+            // Where the bridge ends: on the crossed segment (a cut there), or
+            // 'Over' metres into the road beyond. Both kept, so a choice changed
+            // later (see BridgeOver) still has them.
+            float endAlong = atStart ? toNode - reach : length - (toNode - reach);
+            side.CutT = Mathf.Clamp01(endAlong / length);
+            side.Over = Mathf.Max(reach - toNode, 0f);
+            switch (side.Choice)
+            {
+                case CurveMath.BridgeEnd.SlideIn:
+                {
+                    float t = Mathf.Clamp01(endAlong / length);
+                    side.Target = CurveMath.Bezier(a, b, c, d, t);
+                    side.Tangent = CurveMath.BezierDerivative(a, b, c, d, t);
+                    break;
+                }
+                case CurveMath.BridgeEnd.SlideOut:
+                {
+                    Vector3 ba, bb, bc, bd;
+                    CrossingFinder.SegmentBezier(side.Beyond, out ba, out bb, out bc, out bd);
+                    bool fromStart = net.m_segments.m_buffer[side.Beyond].m_startNode == node;
+                    float t = Mathf.Clamp01(fromStart ? slide / beyond : 1f - slide / beyond);
+                    side.Target = CurveMath.Bezier(ba, bb, bc, bd, t);
+                    side.Tangent = CurveMath.BezierDerivative(ba, bb, bc, bd, t);
+                    break;
+                }
+            }
+            return side;
+        }
+
+        // After the crossed segment is cut: slide the node, or carry the bridge on.
+        private static void FinishBridgeSide(Plan plan, BridgeSide side, HashSet<ushort> touched, Build build)
+        {
+            if (IsSlide(side.Choice))
+            {
+                if (side.Beyond != 0) touched.Add(side.Beyond);
+                SlideNode(side.Node, side.Target, side.Tangent, build);
+            }
+            else if (side.Choice == CurveMath.BridgeEnd.Continue)
+            {
+                ContinueBridge(side.Node, side.Beyond, side.Over, touched, build);
+            }
+        }
+
+        // May this existing node be slid along its road? Only a plain node of
+        // this one road: no junction, no building (station, pillar), not one
+        // the curve uses or another crossing or lowering touches.
+        private static bool CanSlide(Plan plan, ushort node, ushort crossed, ushort beyond, HashSet<ushort> touched)
+        {
+            var net = NetManager.instance;
+            if (!NodeExists(node) || SegmentCount(node) > 2) return false;
+            var n = net.m_nodes.m_buffer[node];
+            if ((n.m_flags & NetNode.Flags.Untouchable) != NetNode.Flags.None || n.m_building != 0) return false;
+            if (node == plan.StartNode || node == plan.EndNode) return false;
+            if (beyond != 0)
+            {
+                if (touched.Contains(beyond) || CrossedByPlan(plan, beyond)) return false;
+                if ((net.m_segments.m_buffer[beyond].m_flags & NetSegment.Flags.Untouchable) != NetSegment.Flags.None) return false;
+            }
+            foreach (var other in plan.Crossings)
+            {
+                if (other.Segment == crossed) continue;
+                var s = net.m_segments.m_buffer[other.Segment];
+                if (s.m_startNode == node || s.m_endNode == node) return false;
+            }
+            foreach (var lowering in plan.Lowerings.Values)
+                if (lowering.Nodes.Contains(node)) return false;
+            return true;
+        }
+
+        private static bool CrossedByPlan(Plan plan, ushort segment)
+        {
+            foreach (var crossing in plan.Crossings) if (crossing.Segment == segment) return true;
+            return segment != 0 && (segment == plan.StartSegment || segment == plan.EndSegment);
+        }
+
+        // Moves an existing node along its road to 'target' (undo moves it
+        // back) and points its roads along 'tangent' there, so they keep
+        // following the road's line.
+        private static void SlideNode(ushort node, Vector3 target, Vector3 tangent, Build build)
+        {
+            var net = NetManager.instance;
+            build.Moves.Add(new KeyValuePair<ushort, Vector3>(node, net.m_nodes.m_buffer[node].m_position));
+            net.MoveNode(node, target);
+            tangent = CurveMath.FlatNormal(tangent);
+            if (tangent != Vector3.zero)
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort segment = net.m_nodes.m_buffer[node].GetSegment(i);
+                    if (segment == 0) continue;
+                    var s = net.m_segments.m_buffer[segment];
+                    bool isStart = s.m_startNode == node;
+                    Vector3 other = net.m_nodes.m_buffer[isStart ? s.m_endNode : s.m_startNode].m_position;
+                    Vector3 away = Vector3.Dot(other - target, tangent) >= 0f ? tangent : -tangent;
+                    if (isStart) net.m_segments.m_buffer[segment].m_startDirection = away;
+                    else net.m_segments.m_buffer[segment].m_endDirection = away;
+                }
+            RefreshDirections(node);
         }
 
         private static NetInfo UnderpassBridge(NetInfo existing)
@@ -391,20 +558,15 @@ namespace RealisticRoads
             return bridge;
         }
 
-        // The underpass bridge reaching 'metres' past 'node' into the road
-        // carrying on there. Not into a junction, or a road the curve also crosses.
-        private static void ContinueBridge(Plan plan, ushort node, ushort from, float metres, HashSet<ushort> touched, Build build)
+        // The underpass bridge reaching 'metres' past 'node' into 'next', the
+        // road carrying on there. 'next' is found before the crossed segment is
+        // cut: afterwards the node also holds the new bridge piece, which must
+        // not be mistaken for the road beyond (that cut the bridge again).
+        private static void ContinueBridge(ushort node, ushort next, float metres, HashSet<ushort> touched, Build build)
         {
             var net = NetManager.instance;
-            if (!NodeExists(node) || SegmentCount(node) != 2) return;
-            ushort next = 0;
-            for (int i = 0; i < 8; i++)
-            {
-                ushort segment = net.m_nodes.m_buffer[node].GetSegment(i);
-                if (segment != 0 && segment != from) next = segment;
-            }
-            if (next == 0 || touched.Contains(next)) return;
-            foreach (var other in plan.Crossings) if (other.Segment == next) return;
+            if (!NodeExists(node) || next == 0 || touched.Contains(next)) return;
+            if ((net.m_segments.m_buffer[next].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) return;
             touched.Add(next);
 
             var s = net.m_segments.m_buffer[next];

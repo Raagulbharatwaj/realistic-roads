@@ -40,6 +40,7 @@ namespace RealisticRoads
         private static readonly Color LowColor = new Color(1f, 0.6f, 0.15f, 0.55f);
         private static readonly Color SteepColor = new Color(0.75f, 0.3f, 1f, 0.6f);
         private static readonly Color JunctionColor = new Color(1f, 1f, 1f, 0.8f);
+        private static readonly Color PillarColor = new Color(1f, 1f, 1f, 0.7f);
         public const float BridgeSpacing = 100f;     // spans over water (elevated pieces, pillars at each node)
         public const float BridgeMinSpacing = 40f;
         private const float WaterJoin = 60f;          // wet patches closer than this are one water crossing
@@ -379,7 +380,19 @@ namespace RealisticRoads
             }
         }
 
-        // Main thread. Draws the curve as it will be built, and the points.
+        // Main thread. The road itself, in 3D at its planned heights (bridges,
+        // flyovers, ramps and cuttings as they will look), like the vanilla
+        // road tool's preview.
+        public override void RenderGeometry(RenderManager.CameraInfo cameraInfo)
+        {
+            base.RenderGeometry(cameraInfo);
+            var division = preview;
+            if (division != null && division.Points.Count >= 2 && division.Plan != null)
+                RoadPreview.Render(SelectedNetwork, division.Plan);
+        }
+
+        // Main thread. Colours the curve as it will be built, marks where the
+        // pillars stand, and draws the points.
         public override void RenderOverlay(RenderManager.CameraInfo cameraInfo)
         {
             base.RenderOverlay(cameraInfo);
@@ -389,19 +402,22 @@ namespace RealisticRoads
             if (division != null && division.Points.Count >= 2 && division.Plan != null)
             {
                 float width = SelectedNetwork != null ? SelectedNetwork.m_halfWidth * 2f : 8f;
-                var kinds = division.Plan.Kinds;
-                for (int i = 1; i < division.Points.Count; i++)
+                var plan = division.Plan;
+                var kinds = plan.Kinds;
+                bool inThreeD = RoadPreview.Available;
+                for (int i = 1; i < plan.Points.Count; i++)
                 {
-                    var bezier = PieceBezier(division, i);
-                    float bend = CurveMath.BendAngle(division.Tangents[i - 1], division.Tangents[i]);
-                    Color color;
-                    if (bend > MaxBend) color = BadColor;
-                    else if (division.Plan.Steep != null && division.Plan.Steep[i]) color = SteepColor;
-                    else if (IsRaised(kinds[i - 1]) || IsRaised(kinds[i])) color = BridgeColor;
-                    else if (IsLowered(kinds[i - 1]) || IsLowered(kinds[i])) color = LowColor;
-                    else color = GoodColor;
-                    overlay.DrawBezier(cameraInfo, color, bezier, width, 100000f, -100000f, -1f, 1280f, false, true);
+                    var style = StyleOf(plan, i);
+                    bool lowered = IsLowered(kinds[i - 1]) || IsLowered(kinds[i]);
+                    Color color = style == ProfileStyle.TooSharp ? BadColor
+                        : style == ProfileStyle.Steep ? SteepColor
+                        : style == ProfileStyle.Raised ? BridgeColor
+                        : style == ProfileStyle.Lowered ? LowColor
+                        : GoodColor;
+                    if (inThreeD) DrawAtHeight(cameraInfo, overlay, color, RoadPreview.PieceBezier(plan, i), width, lowered);
+                    else overlay.DrawBezier(cameraInfo, color, PieceBezier(division, i), width, 100000f, -100000f, -1f, 1280f, false, true);
                 }
+                DrawPillarSpots(cameraInfo, overlay, division);
 
                 var problems = !division.Plan.Ok;
                 foreach (var crossing in division.Crossings)
@@ -410,7 +426,9 @@ namespace RealisticRoads
                         : crossing.Type == CrossingType.Bridge || crossing.Type == CrossingType.Overpass ? BridgeColor
                         : crossing.Type == CrossingType.Underpass || crossing.Type == CrossingType.Tunnel ? LowColor
                         : JunctionColor;
-                    overlay.DrawCircle(cameraInfo, color, crossing.Point, width + 6f, -1f, 1280f, false, true);
+                    // On the crossed road only (not on our deck above it), when in 3D.
+                    float low = inThreeD ? crossing.Point.y - 4f : -1f, high = inThreeD ? crossing.Point.y + 4f : 1280f;
+                    overlay.DrawCircle(cameraInfo, color, crossing.Point, width + 6f, low, high, false, true);
                 }
             }
 
@@ -419,6 +437,141 @@ namespace RealisticRoads
 
             if (hoverValid && mouseRayValid)
                 overlay.DrawCircle(cameraInfo, hoverNode != 0 || hoverSegment != 0 ? SnapColor : HoverColor, hoverMarker, HoverSize, -1f, 1280f, false, true);
+        }
+
+        // The colour only on what is at the road's own height: the 3D preview's
+        // deck for a raised piece (not the ground under it, which made a
+        // flyover look like a flat band), the ground for a piece on it. A
+        // lowered piece is shown on the ground above, where it will be dug.
+        // In short pieces, each with its own height range.
+        private static void DrawAtHeight(RenderManager.CameraInfo cameraInfo, OverlayEffect overlay, Color color, Bezier3 bezier,
+            float width, bool lowered)
+        {
+            var terrain = TerrainManager.instance;
+            float length = CurveMath.FlatDistance(bezier.a, bezier.d);
+            float rise = Mathf.Abs(bezier.d.y - bezier.a.y);
+            // Level pieces in one go; ramps in short parts (about 1.5 m of rise each).
+            int pieces = rise < 3f ? 1 : Mathf.Clamp(Mathf.CeilToInt(rise / 1.5f), 2, 16);
+            if (lowered) pieces = Mathf.Max(pieces, Mathf.Clamp(Mathf.CeilToInt(length / 24f), 1, 8));
+            for (int k = 0; k < pieces; k++)
+            {
+                var part = bezier.Cut(k / (float)pieces, (k + 1) / (float)pieces);
+                float low = Mathf.Min(Mathf.Min(part.a.y, part.b.y), Mathf.Min(part.c.y, part.d.y));
+                float high = Mathf.Max(Mathf.Max(part.a.y, part.b.y), Mathf.Max(part.c.y, part.d.y));
+                if (lowered) high = Mathf.Max(high, terrain.SampleRawHeightSmooth((part.a + part.d) * 0.5f));
+                overlay.DrawBezier(cameraInfo, color, part, width, 100000f, -100000f, low - 2f, high + 2f, false, true);
+            }
+        }
+
+        // A small ring on the ground (or the water) under every raised node
+        // that gets a pillar, so it is easy to see none lands on a road or
+        // track.
+        private static void DrawPillarSpots(RenderManager.CameraInfo cameraInfo, OverlayEffect overlay, Division division)
+        {
+            var plan = division.Plan;
+            var terrain = TerrainManager.instance;
+            foreach (int i in PillarNodes(division))
+            {
+                Vector3 p = plan.Points[i];
+                float ground = terrain.SampleRawHeightSmoothWithWater(p, false, 0f);
+                overlay.DrawCircle(cameraInfo, PillarColor, new Vector3(p.x, ground, p.z), 5f, ground - 4f, ground + 4f, false, true);
+            }
+        }
+
+        // The plan's nodes that get a pillar: raised ones (not the ends) high
+        // enough for one, except a node over a road or track we bridge (the
+        // builder gives that one none).
+        private static List<int> PillarNodes(Division division)
+        {
+            var plan = division.Plan;
+            var noPillar = new HashSet<int>();
+            for (int c = 0; c < division.Crossings.Count; c++)
+            {
+                var type = division.Crossings[c].Type;
+                if (type == CrossingType.Bridge || type == CrossingType.Overpass) noPillar.Add(division.CrossingIndex[c]);
+            }
+            var terrain = TerrainManager.instance;
+            var result = new List<int>();
+            for (int i = 1; i < plan.Points.Count - 1; i++)
+            {
+                if (!IsRaised(plan.Kinds[i]) || noPillar.Contains(i)) continue;
+                Vector3 p = plan.Points[i];
+                if (p.y - terrain.SampleRawHeightSmoothWithWater(p, false, 0f) < 3f) continue;   // too low for a pillar
+                result.Add(i);
+            }
+            return result;
+        }
+
+        // How piece i (between points i-1 and i) is built, for its colour on
+        // the map and in the profile.
+        private static ProfileStyle StyleOf(Plan plan, int i)
+        {
+            if (CurveMath.BendAngle(plan.Tangents[i - 1], plan.Tangents[i]) > MaxBend) return ProfileStyle.TooSharp;
+            if (plan.Steep != null && i < plan.Steep.Length && plan.Steep[i]) return ProfileStyle.Steep;
+            if (IsRaised(plan.Kinds[i - 1]) || IsRaised(plan.Kinds[i])) return ProfileStyle.Raised;
+            if (IsLowered(plan.Kinds[i - 1]) || IsLowered(plan.Kinds[i])) return ProfileStyle.Lowered;
+            return ProfileStyle.Ground;
+        }
+
+        // The curve seen from the side, for the panel: road height, ground and
+        // water at evenly spaced points, pillars and crossed roads.
+        private const int ProfileSamples = 160;
+
+        private static PanelProfile MakeProfile(Division division, out string text)
+        {
+            text = "";
+            var plan = division.Plan;
+            int n = plan.Points.Count;
+            if (n < 2) return null;
+            var along = new float[n];
+            for (int i = 1; i < n; i++) along[i] = along[i - 1] + CurveMath.FlatDistance(plan.Points[i - 1], plan.Points[i]);
+            float length = along[n - 1];
+            if (length < 1f) return null;
+
+            var terrain = TerrainManager.instance;
+            var profile = new PanelProfile
+            {
+                Length = length,
+                Road = new float[ProfileSamples],
+                Ground = new float[ProfileSamples],
+                Water = new float[ProfileSamples],
+                Style = new ProfileStyle[ProfileSamples],
+            };
+            float highest = 0f, deepest = 0f;
+            int piece = 1;
+            var bezier = RoadPreview.PieceBezier(plan, 1);
+            for (int s = 0; s < ProfileSamples; s++)
+            {
+                float d = length * s / (ProfileSamples - 1);
+                int before = piece;
+                while (piece < n - 1 && along[piece] < d) piece++;
+                if (piece != before) bezier = RoadPreview.PieceBezier(plan, piece);
+                float span = along[piece] - along[piece - 1];
+                float t = span > 0.01f ? Mathf.Clamp01((d - along[piece - 1]) / span) : 0f;
+                Vector3 p = bezier.Position(t);
+                profile.Road[s] = p.y;
+                profile.Ground[s] = terrain.SampleRawHeightSmooth(p);
+                profile.Water[s] = terrain.SampleRawHeightSmoothWithWater(p, false, 0f);
+                profile.Style[s] = StyleOf(plan, piece);
+                highest = Mathf.Max(highest, p.y - profile.Water[s]);
+                deepest = Mathf.Max(deepest, profile.Ground[s] - p.y);
+            }
+            foreach (int i in PillarNodes(division)) profile.Pillars.Add(along[i]);
+            foreach (var crossing in division.Crossings)
+                profile.Crossings.Add(new KeyValuePair<float, float>(Mathf.Clamp(crossing.Distance, 0f, length), crossing.Point.y));
+
+            float steepest = 0f;
+            for (int i = 1; i < n; i++)
+                if (along[i] - along[i - 1] > 0.5f)
+                    steepest = Mathf.Max(steepest, Mathf.Abs(plan.Points[i].y - plan.Points[i - 1].y) / (along[i] - along[i - 1]));
+            var parts = new List<string>();
+            if (highest >= 1f) parts.Add("up to " + highest.ToString("F0") + " m above the ground");
+            if (deepest >= 1f) parts.Add("down to " + deepest.ToString("F0") + " m below it");
+            parts.Add("steepest " + (steepest * 100f).ToString("0.#") + " %");
+            if (profile.Pillars.Count > 0) parts.Add(profile.Pillars.Count + " pillar(s)");
+            text = string.Join(", ", parts.ToArray());
+            text = char.ToUpper(text[0]) + text.Substring(1);
+            return profile;
         }
 
         private static bool IsRaised(NodeKind kind)
@@ -1015,6 +1168,9 @@ namespace RealisticRoads
             if (lowered > 0) details.Add("lowered in places");
             if (division.Continues) details.Add("continues the road");
             model.Details = details.Count > 0 ? string.Join(", ", details.ToArray()) : "at ground level";
+            string profileText;
+            model.Profile = MakeProfile(division, out profileText);
+            model.ProfileText = profileText;
             if (!division.Ok) model.Problems.Add("A bend is too sharp (over " + MaxBend + " degrees per segment): spread the points out");
 
             var terrain = TerrainManager.instance;

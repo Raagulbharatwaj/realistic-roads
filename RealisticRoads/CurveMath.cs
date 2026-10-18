@@ -574,6 +574,50 @@ namespace RealisticRoads
             return raised;
         }
 
+        // --- the bridge put into a road over an underpass -----------------------
+
+        public enum BridgeEnd
+        {
+            Cut,        // a new node where the bridge ends
+            Keep,       // the bridge runs on to the existing node just past its end
+            SlideIn,    // the existing node past the end is slid in to it
+            SlideOut,   // the existing node before the end is slid out to it, into the road beyond
+            Continue,   // the bridge carries on into the road beyond, cut there
+        }
+
+        // How one end of that bridge is made, with as few new nodes as possible.
+        // 'toNode': metres from the crossing to the crossed segment's end node on
+        // this side; 'reach': how far the bridge must reach. 'movable': that node
+        // may be slid (a plain node of this road only); 'beyond': length of the
+        // segment past it (hasBeyond false at a dead end). A slide is at most
+        // 'maxSlide', leaves the segment beyond at least 'minPiece' long and at
+        // most 'maxLength'. 'slide' gets how far the node moves.
+        public static BridgeEnd ChooseBridgeEnd(float toNode, float reach, bool movable, bool hasBeyond, float beyond,
+            float keepSlack, float maxSlide, float minPiece, float maxLength, out float slide)
+        {
+            slide = 0f;
+            if (toNode >= reach)
+            {
+                float gap = toNode - reach;
+                if (gap <= keepSlack) return BridgeEnd.Keep;
+                if (movable && gap <= maxSlide && (!hasBeyond || beyond + gap <= maxLength))
+                {
+                    slide = gap;
+                    return BridgeEnd.SlideIn;
+                }
+                // Never a sliver of road between the cut and the node.
+                return gap < minPiece ? BridgeEnd.Keep : BridgeEnd.Cut;
+            }
+            float over = reach - toNode;
+            if (!hasBeyond) return BridgeEnd.Keep;   // a dead end: the bridge just runs to it
+            if (movable && over <= maxSlide && beyond - over >= minPiece)
+            {
+                slide = over;
+                return BridgeEnd.SlideOut;
+            }
+            return BridgeEnd.Continue;
+        }
+
         // The left-hand direction on the ground when facing 'd' (same side the
         // game calls leftSide for a segment going away from a node).
         public static Vector3 Left(Vector3 d)

@@ -1,0 +1,100 @@
+using System;
+using System.Reflection;
+using ColossalFramework.Math;
+using UnityEngine;
+
+namespace RealisticRoads
+{
+    // The planned road drawn the way the game's own road tool previews a road:
+    // the real road pieces (ground, elevated, bridge) at their planned heights,
+    // so a flyover, a ramp or a cutting is seen in 3D instead of as a coloured
+    // band lying on the ground. Uses the road tool's own (private)
+    // NetTool.RenderSegment, as Move It does for its previews. If a game update
+    // removes it, the curve tool falls back to the band alone. Main thread.
+    public static class RoadPreview
+    {
+        private delegate void RenderSegmentFn(NetInfo info, NetSegment.Flags flags, Vector3 startPosition, Vector3 endPosition,
+            Vector3 startDirection, Vector3 endDirection, bool smoothStart, bool smoothEnd);
+
+        private static RenderSegmentFn renderSegment;
+        private static bool lookedUp;
+        private static bool failed;
+
+        public static bool Available
+        {
+            get
+            {
+                if (!lookedUp) LookUp();
+                return renderSegment != null && !failed;
+            }
+        }
+
+        private static void LookUp()
+        {
+            lookedUp = true;
+            try
+            {
+                foreach (var method in typeof(NetTool).GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (method.Name != "RenderSegment") continue;
+                    var p = method.GetParameters();
+                    if (p.Length != 8 || p[0].ParameterType != typeof(NetInfo) || p[1].ParameterType != typeof(NetSegment.Flags)) continue;
+                    renderSegment = (RenderSegmentFn)Delegate.CreateDelegate(typeof(RenderSegmentFn), method, false);
+                    if (renderSegment != null) break;
+                }
+                Mod.Log(renderSegment != null
+                    ? "3D preview ready (NetTool.RenderSegment)"
+                    : "3D preview not available (NetTool.RenderSegment not found); the curve is shown as a band only");
+            }
+            catch (Exception e)
+            {
+                renderSegment = null;
+                Mod.LogError("3D preview not available; the curve is shown as a band only", e);
+            }
+        }
+
+        // Draws every piece of the plan with the road version it will be built
+        // with (from RoadPlanner.SegmentInfo), between its planned node heights.
+        public static void Render(NetInfo info, Plan plan)
+        {
+            if (info == null || plan == null || plan.Points == null || plan.Kinds == null || !Available) return;
+            try
+            {
+                for (int i = 1; i < plan.Points.Count; i++)
+                {
+                    NetInfo piece = RoadPlanner.SegmentInfo(info, plan.Kinds[i - 1], plan.Kinds[i]) ?? info;
+                    if (piece.m_segments == null || piece.m_segments.Length == 0) continue;
+                    Vector3 start, end;
+                    Directions(plan, i, out start, out end);
+                    renderSegment(piece, NetSegment.Flags.All, plan.Points[i - 1], plan.Points[i], start, end, false, false);
+                }
+            }
+            catch (Exception e)
+            {
+                failed = true;
+                Mod.LogError("Drawing the 3D preview failed; the curve is shown as a band only", e);
+            }
+        }
+
+        // Piece i's directions (forward at both ends) with the slope between
+        // its nodes, as the builder gives the game.
+        public static void Directions(Plan plan, int i, out Vector3 start, out Vector3 end)
+        {
+            Vector3 a = plan.Points[i - 1], d = plan.Points[i];
+            float run = CurveMath.FlatDistance(a, d);
+            float slope = run > 0.01f ? (d.y - a.y) / run : 0f;
+            start = new Vector3(plan.Tangents[i - 1].x, slope, plan.Tangents[i - 1].z).normalized;
+            end = new Vector3(plan.Tangents[i].x, slope, plan.Tangents[i].z).normalized;
+        }
+
+        // Piece i as the game will build it, at its planned heights.
+        public static Bezier3 PieceBezier(Plan plan, int i)
+        {
+            Vector3 start, end;
+            Directions(plan, i, out start, out end);
+            var bezier = new Bezier3 { a = plan.Points[i - 1], d = plan.Points[i] };
+            NetSegment.CalculateMiddlePoints(bezier.a, start, bezier.d, -end, false, false, out bezier.b, out bezier.c);
+            return bezier;
+        }
+    }
+}
