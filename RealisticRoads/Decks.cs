@@ -30,7 +30,8 @@ namespace RealisticRoads
         private const float PillarHalf = 1.5f;        // a pillar needs this much free either side of a road's middle
         private const float MedianOffset = 1f;        // the deck's node this close to the lower road's middle uses its median
         private const float Search = 40f;             // how far around a point roads are looked for
-        private const int MaxPathSegments = 60;       // how far a deck follows a road
+        private const float MaxPathLength = 20000f;   // how far a deck follows roads (metres)
+        private const int MaxPathNodes = 4000;        // nodes looked at, at most
         private const float PathStep = 4f;            // metres between samples along a followed road
 
         // Main thread. The road under 'p' (its centre within its half width of
@@ -94,71 +95,160 @@ namespace RealisticRoads
         }
 
         // Main thread. The way along existing roads from (segA, tA) to (segB,
-        // tB): the fewest segments, through any junction, at most
-        // MaxPathSegments. Null if there is none; 'used' gets its segments.
+        // tB): the shortest in metres, through any junction, at most MaxPathLength.
+        // A point at a node (t 0 or 1) is that node, whichever of its roads it
+        // was given with. Null if there is none; 'used' gets its segments.
         public static List<Vector3> RoadPath(ushort segA, float tA, ushort segB, float tB, HashSet<ushort> used)
         {
             if (segA == 0 || segB == 0) return null;
             var net = NetManager.instance;
             var segments = net.m_segments.m_buffer;
             var path = new List<Vector3>();
-            if (segA == segB)
+            float lengthA = Mathf.Max(segments[segA].m_averageLength, 1f), lengthB = Mathf.Max(segments[segB].m_averageLength, 1f);
+            ushort aStart = segments[segA].m_startNode, aEnd = segments[segA].m_endNode;
+            ushort bStart = segments[segB].m_startNode, bEnd = segments[segB].m_endNode;
+
+            // Along the one segment, unless going round through the network is shorter.
+            float direct = segA == segB ? Mathf.Abs(tA - tB) * lengthA : float.MaxValue;
+
+            // Shortest distances to nodes from the start point (Dijkstra over nodes;
+            // each road is an edge as long as the road).
+            var distance = new Dictionary<ushort, float> { { aStart, tA * lengthA } };
+            float toEnd = (1f - tA) * lengthA;
+            if (!distance.ContainsKey(aEnd) || toEnd < distance[aEnd]) distance[aEnd] = toEnd;
+            var previous = new Dictionary<ushort, KeyValuePair<ushort, ushort>>();   // node -> (node before, road between)
+            var done = new HashSet<ushort>();
+            var open = new Heap();
+            foreach (var pair in distance) open.Push(pair.Value, pair.Key);
+            float best = direct;
+            ushort bestNode = 0;
+            while (open.Count > 0)
             {
+                float nodeDistance;
+                ushort node = open.Pop(out nodeDistance);
+                if (done.Contains(node) || nodeDistance > distance[node]) continue;   // an outdated entry
+                if (nodeDistance >= best || nodeDistance > MaxPathLength || done.Count > MaxPathNodes) break;
+                done.Add(node);
+                // Onto the target road from this node.
+                float finish = node == bStart ? tB * lengthB : node == bEnd ? (1f - tB) * lengthB : float.MaxValue;
+                if (nodeDistance + finish < best)
+                {
+                    best = nodeDistance + finish;
+                    bestNode = node;
+                }
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort road = net.m_nodes.m_buffer[node].GetSegment(i);
+                    if (road == 0) continue;
+                    var info = segments[road].Info;
+                    if (info == null || info.m_class == null || !CrossingFinder.IsPhysical(info)) continue;
+                    ushort other = segments[road].m_startNode == node ? segments[road].m_endNode : segments[road].m_startNode;
+                    float through = nodeDistance + Mathf.Max(segments[road].m_averageLength, 1f);
+                    float known;
+                    if (done.Contains(other) || (distance.TryGetValue(other, out known) && known <= through)) continue;
+                    distance[other] = through;
+                    previous[other] = new KeyValuePair<ushort, ushort>(node, road);
+                    open.Push(through, other);
+                }
+            }
+
+            if (bestNode == 0)
+            {
+                if (segA != segB) return null;
                 AddPart(path, segA, tA, tB);
                 if (used != null) used.Add(segA);
                 return path.Count >= 2 ? path : null;
             }
 
-            // Breadth first over segments; each step leaves a segment through one of its nodes.
-            var from = new Dictionary<ushort, KeyValuePair<ushort, ushort>>();   // segment -> (previous segment, node entered by)
-            var queue = new Queue<KeyValuePair<ushort, ushort>>();               // (segment, node it is left by)
-            var depth = new Dictionary<ushort, int> { { segA, 0 } };
-            queue.Enqueue(new KeyValuePair<ushort, ushort>(segA, segments[segA].m_startNode));
-            queue.Enqueue(new KeyValuePair<ushort, ushort>(segA, segments[segA].m_endNode));
-            ushort found = 0;
-            while (queue.Count > 0 && found == 0)
+            // Back from the node we leave by onto segB to the one we started from.
+            var chain = new List<KeyValuePair<ushort, ushort>>();   // (road, node it is entered by), in order
+            ushort at = bestNode;
+            while (previous.ContainsKey(at))
             {
-                var step = queue.Dequeue();
-                ushort node = step.Value;
-                if (depth[step.Key] >= MaxPathSegments) continue;
-                for (int i = 0; i < 8; i++)
-                {
-                    ushort next = net.m_nodes.m_buffer[node].GetSegment(i);
-                    if (next == 0 || next == step.Key || depth.ContainsKey(next)) continue;
-                    var info = segments[next].Info;
-                    if (info == null || info.m_class == null || !CrossingFinder.IsPhysical(info)) continue;
-                    depth[next] = depth[step.Key] + 1;
-                    from[next] = new KeyValuePair<ushort, ushort>(step.Key, node);
-                    if (next == segB)
-                    {
-                        found = next;
-                        break;
-                    }
-                    ushort other = segments[next].m_startNode == node ? segments[next].m_endNode : segments[next].m_startNode;
-                    queue.Enqueue(new KeyValuePair<ushort, ushort>(next, other));
-                }
+                var step = previous[at];
+                chain.Add(new KeyValuePair<ushort, ushort>(step.Value, step.Key));
+                at = step.Key;
             }
-            if (found == 0) return null;
-
-            // Back from segB to segA: each segment with the node it was entered by.
-            var chain = new List<KeyValuePair<ushort, ushort>>();
-            for (ushort s = segB; s != segA; s = from[s].Key) chain.Add(new KeyValuePair<ushort, ushort>(s, from[s].Value));
             chain.Reverse();
-            ushort firstExit = chain[0].Value;
-            AddPart(path, segA, tA, segments[segA].m_startNode == firstExit ? 0f : 1f);
-            for (int k = 0; k < chain.Count; k++)
+            // 'at' is now the first node: off segA towards it.
+            AddPart(path, segA, tA, at == aStart ? 0f : 1f);
+            foreach (var link in chain)
             {
-                ushort s = chain[k].Key;
-                float entry = segments[s].m_startNode == chain[k].Value ? 0f : 1f;
-                float exit = k + 1 < chain.Count ? (segments[s].m_startNode == chain[k + 1].Value ? 0f : 1f) : tB;
-                AddPart(path, s, entry, exit);
+                ushort road = link.Key;
+                float entry = segments[road].m_startNode == link.Value ? 0f : 1f;
+                AddPart(path, road, entry, 1f - entry);
             }
+            AddPart(path, segB, bestNode == bStart ? 0f : 1f, tB);
             if (used != null)
             {
                 used.Add(segA);
+                used.Add(segB);
                 foreach (var link in chain) used.Add(link.Key);
             }
             return path.Count >= 2 ? path : null;
+        }
+
+        // A min-heap of (distance, node) for the search above.
+        private class Heap
+        {
+            private readonly List<KeyValuePair<float, ushort>> items = new List<KeyValuePair<float, ushort>>();
+            public int Count => items.Count;
+
+            public void Push(float key, ushort node)
+            {
+                items.Add(new KeyValuePair<float, ushort>(key, node));
+                for (int i = items.Count - 1; i > 0;)
+                {
+                    int parent = (i - 1) / 2;
+                    if (items[parent].Key <= items[i].Key) break;
+                    var swap = items[i]; items[i] = items[parent]; items[parent] = swap;
+                    i = parent;
+                }
+            }
+
+            public ushort Pop(out float key)
+            {
+                var top = items[0];
+                key = top.Key;
+                items[0] = items[items.Count - 1];
+                items.RemoveAt(items.Count - 1);
+                for (int i = 0; ;)
+                {
+                    int left = 2 * i + 1, right = left + 1, smallest = i;
+                    if (left < items.Count && items[left].Key < items[smallest].Key) smallest = left;
+                    if (right < items.Count && items[right].Key < items[smallest].Key) smallest = right;
+                    if (smallest == i) break;
+                    var swap = items[i]; items[i] = items[smallest]; items[smallest] = swap;
+                    i = smallest;
+                }
+                return top.Value;
+            }
+        }
+
+        // The preview plans again on every mouse move: paths between points
+        // already placed are kept (until the curve is built or cleared).
+        private static readonly Dictionary<string, KeyValuePair<List<Vector3>, ushort[]>> pathCache =
+            new Dictionary<string, KeyValuePair<List<Vector3>, ushort[]>>();
+
+        public static List<Vector3> CachedRoadPath(ushort segA, float tA, ushort segB, float tB, HashSet<ushort> used)
+        {
+            string key = segA + ":" + tA.ToString("F3") + ">" + segB + ":" + tB.ToString("F3");
+            KeyValuePair<List<Vector3>, ushort[]> hit;
+            if (!pathCache.TryGetValue(key, out hit))
+            {
+                var segs = new HashSet<ushort>();
+                var path = RoadPath(segA, tA, segB, tB, segs);
+                hit = new KeyValuePair<List<Vector3>, ushort[]>(path, new List<ushort>(segs).ToArray());
+                if (pathCache.Count >= 64) pathCache.Clear();
+                pathCache[key] = hit;
+            }
+            if (used != null) foreach (ushort s in hit.Value) used.Add(s);
+            return hit.Key;
+        }
+
+        public static void ForgetPaths()
+        {
+            pathCache.Clear();
         }
 
         // Samples of a segment's curve from t0 to t1 (either way round), after
@@ -189,6 +279,7 @@ namespace RealisticRoads
         private const int Version = 1;
         private const float ColumnMargin = 1.5f;     // columns stand this far outside the lower road (and our deck)
         private const float Column = 1.2f;           // column width
+        private const float MinColumn = 0.5f;        // shortest column
         private const float BeamDepth = 1.4f;        // beam size along the road
         private const float BeamHeight = 1.4f;
         private const float DeckUnderside = 1.2f;    // the beam's top this far below the node (the deck's surface)
@@ -208,7 +299,7 @@ namespace RealisticRoads
         private static readonly Dictionary<string, KeyValuePair<Material, Vector2>> materials = new Dictionary<string, KeyValuePair<Material, Vector2>>();
         private static readonly HashSet<string> missing = new HashSet<string>();
         private static MaterialPropertyBlock block;
-        private static bool failed;
+        private static readonly HashSet<ushort> failedFrames = new HashSet<ushort>();   // drawing threw: skipped (logged once)
 
         // Any thread (the game asks for node pillars on the simulation thread).
         // True if this node carries one of our frames (so no pillar of its own).
@@ -256,14 +347,16 @@ namespace RealisticRoads
 
         public static void Clear()
         {
+            // Loading runs off the main thread: meshes go to Render to be destroyed.
             lock (frames)
             {
-                foreach (var frame in frames.Values) if (frame.Mesh != null) UnityEngine.Object.Destroy(frame.Mesh);
+                lock (unused)
+                    foreach (var frame in frames.Values) if (frame.Mesh != null) unused.Add(frame.Mesh);
                 frames.Clear();
             }
             materials.Clear();
             missing.Clear();
-            failed = false;
+            failedFrames.Clear();
         }
 
         // The pillar building of a road's elevated version (by name), for its material.
@@ -284,18 +377,23 @@ namespace RealisticRoads
         // Postfix of NetManager.EndRenderingImpl: every frame near the camera.
         public static void Render(RenderManager.CameraInfo cameraInfo)
         {
-            if (failed) return;
+            lock (unused)
+            {
+                foreach (var mesh in unused) if (mesh != null) UnityEngine.Object.Destroy(mesh);
+                unused.Clear();
+            }
             List<Frame> list;
             lock (frames)
             {
                 if (frames.Count == 0) return;
                 list = new List<Frame>(frames.Values);
             }
-            try
+            var nodes = NetManager.instance.m_nodes.m_buffer;
+            var stale = new List<ushort>();
+            foreach (var frame in list)
             {
-                var nodes = NetManager.instance.m_nodes.m_buffer;
-                var stale = new List<ushort>();
-                foreach (var frame in list)
+                if (failedFrames.Contains(frame.Node)) continue;
+                try
                 {
                     var n = nodes[frame.Node];
                     if ((n.m_flags & NetNode.Flags.Created) == NetNode.Flags.None || n.m_buildIndex != frame.BuildIndex)
@@ -321,19 +419,55 @@ namespace RealisticRoads
                     int layer = pillar != null ? pillar.m_prefabDataLayer : 0;
                     Graphics.DrawMesh(frame.Mesh, n.m_position, Quaternion.identity, material.Key, layer, null, 0, block);
                 }
-                if (stale.Count > 0)
-                    lock (frames)
-                        foreach (ushort node in stale)
-                        {
-                            Frame frame;
-                            if (frames.TryGetValue(node, out frame) && frame.Mesh != null) UnityEngine.Object.Destroy(frame.Mesh);
-                            frames.Remove(node);
-                        }
+                catch (Exception e)
+                {
+                    // Only this frame: the others are still drawn.
+                    failedFrames.Add(frame.Node);
+                    if (failedFrames.Count <= 16) Mod.LogError("Drawing the deck frame at node #" + frame.Node + " failed; it is not shown", e);
+                }
+            }
+            if (stale.Count > 0) Forget(stale);
+        }
+
+        // Frames whose nodes are gone (Ctrl+Z, bulldozed). Any thread.
+        public static void Forget(IEnumerable<ushort> nodes)
+        {
+            var meshes = new List<Mesh>();
+            lock (frames)
+                foreach (ushort node in nodes)
+                {
+                    Frame frame;
+                    if (!frames.TryGetValue(node, out frame)) continue;
+                    if (frame.Mesh != null) meshes.Add(frame.Mesh);
+                    frames.Remove(node);
+                }
+            // Meshes are Unity objects: destroyed on the main thread, in Render.
+            lock (unused) unused.AddRange(meshes);
+        }
+
+        private static readonly List<Mesh> unused = new List<Mesh>();
+
+        // After a city loads (simulation thread): nodes carrying a frame have
+        // no pillar of their own, whatever was saved.
+        public static void RemovePillars()
+        {
+            try
+            {
+                List<Frame> list;
+                lock (frames) list = new List<Frame>(frames.Values);
+                var nodes = NetManager.instance.m_nodes.m_buffer;
+                int removed = 0;
+                foreach (var frame in list)
+                {
+                    if (!Holds(frame.Node) || nodes[frame.Node].m_building == 0) continue;
+                    nodes[frame.Node].UpdateBuilding(frame.Node, null, 0f);
+                    removed++;
+                }
+                if (removed > 0) Mod.Log("Deck frames: removed " + removed + " pillar(s) standing on the road below");
             }
             catch (Exception e)
             {
-                failed = true;
-                Mod.LogError("Drawing deck frames failed; they are not shown this session", e);
+                Mod.LogError("Checking the pillars under deck frames failed", e);
             }
         }
 
@@ -378,7 +512,9 @@ namespace RealisticRoads
             var triangles = new List<int>();
             foreach (var foot in new[] { a, b })
             {
-                float ground = terrain.SampleRawHeightSmooth(foot) - 1f;
+                // From just under the ground up to the beam; never upside down (the
+                // ground beside an elevated road below can be higher than the beam).
+                float ground = Mathf.Min(terrain.SampleRawHeightSmooth(foot) - 1f, beamBottom - MinColumn);
                 Box(vertices, normals, triangles, new Vector3(foot.x, (ground + beamBottom) * 0.5f, foot.z) - node,
                     across, along, Column, beamBottom - ground, Column);
             }

@@ -799,6 +799,7 @@ namespace RealisticRoads
                 if (build.Stamps.OwnsSegment(segment)) net.ReleaseSegment(segment, true);
             foreach (var node in build.Nodes)
                 if (build.Stamps.OwnsNode(node) && SegmentCount(node) == 0) net.ReleaseNode(node);
+            DeckFrames.Forget(build.Nodes);
 
             // Existing nodes we lowered go back up.
             for (int i = build.Moves.Count - 1; i >= 0; i--)

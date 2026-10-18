@@ -138,7 +138,7 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      can mix both; a curve next to a straight piece leaves it along its line, without a kink.
    - **Corner** with **-** / **+**: corners between two straight pieces are rounded with this radius (60 m to start,
      50 to 300 m). Below 50 m the corner is **sharp**: a node right on it, the two straight pieces meeting there at an
-     angle.
+     angle. A hairpin (a turn of more than 175°) is always sharp.
    - **Snap** (on: green): a straight piece snaps its direction to 15° turns from the last piece (from north for the
      first one), or along or square to a road within 100 m when it is within 5° of that; and its length to 8 m steps.
      A guide line shows the snapped direction (yellow when it lines up with a road). Hold **Shift** to draw freely.
@@ -150,7 +150,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    - **Deck** (double and triple deckers): the next pieces run a level up, over the roads below. Like the other
      modes, a piece is a deck if its end point was placed with Deck on.
      - Click on a road with Deck on: the point goes over the road's middle (no junction with it). Between two such
-       points the deck **follows that road** exactly, through its bends and junctions. Elsewhere it is drawn freely
+       points the deck **follows that road** exactly, through its bends and junctions, the shortest way in metres.
+       A point on a junction counts as that junction, whichever of its roads it was clicked on. Elsewhere it is drawn freely
        (curved or straight) over whatever is below.
      - A deck stays 9 m clear of the road under it (11 m over a rail line on the ground, for the wires), or 9 m above
        the ground where there is no road; over an elevated road it is a third level. Roads it passes over are crossed

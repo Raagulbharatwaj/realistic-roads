@@ -176,6 +176,7 @@ namespace RealisticRoads
             // Deck stretches (metres along the curve), and per node: on a deck,
             // and the road under it.
             public List<KeyValuePair<float, float>> DeckRanges = new List<KeyValuePair<float, float>>();
+            public List<Vector3> Polyline;     // the sampled curve the points are on (ranges are along it)
             public bool[] OnDeck;
             public DeckBelow[] Below;
             public int Cost;             // construction cost (game money units, /100 to show)
@@ -259,7 +260,7 @@ namespace RealisticRoads
                 liveNodes.Add(aimNode);
                 liveSegments.Add(aimSegment);
                 liveTs.Add(aimT);
-                liveLifts.Add(LiftFor(aimNode, aimSegment));
+                liveLifts.Add(lift);
                 liveStraight.Add(straightMode);
                 liveDeck.Add(deckMode);
                 liveRoad.Add(deckMode ? aimRoad : (ushort)0);
@@ -409,7 +410,9 @@ namespace RealisticRoads
             pointMarkers.Add(aimMarker);
             pointSegments.Add(aimSegment);
             pointTs.Add(aimT);
-            pointLifts.Add(LiftFor(aimNode, aimSegment));
+            // The height as set: a point on a road only takes the road's height
+            // while it is an end of the curve (see Divide); in the middle it keeps this.
+            pointLifts.Add(lift);
             pointStraight.Add(straightMode);
             pointDeck.Add(deckMode);
             pointRoad.Add(deckMode ? aimRoad : (ushort)0);
@@ -846,7 +849,9 @@ namespace RealisticRoads
             // While planning the points are handles: bigger, the grabbed one white.
             for (int i = 0; i < points.Count; i++)
             {
-                Color color = i == dragIndex ? HoverColor : pointNodes[i] != 0 || pointSegments[i] != 0 ? SnapColor : PointColor;
+                // Yellow: joined to a road, which only an end of the curve is.
+                bool end = i == 0 || i == points.Count - 1;
+                Color color = i == dragIndex ? HoverColor : end && (pointNodes[i] != 0 || pointSegments[i] != 0) ? SnapColor : PointColor;
                 overlay.DrawCircle(cameraInfo, color, pointMarkers[i], planning ? HandleSize : PointSize, -1f, 1280f, false, true);
             }
 
@@ -1070,6 +1075,10 @@ namespace RealisticRoads
             if (controls.Count < 2) return new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>(), InTangents = new List<Vector3>() };
 
             int n = controls.Count - 1;
+            // An end on a road joins it at its height; any other point keeps its own.
+            lifts = new List<float>(lifts);
+            if (nodes[0] != 0 || segments[0] != 0) lifts[0] = 0f;
+            if (nodes[n] != 0 || segments[n] != 0) lifts[n] = 0f;
             // Span i (point i to i+1) is straight if point i+1 was placed in straight mode.
             var straight = new List<bool>();
             for (int i = 1; i <= n; i++) straight.Add(i < pointModes.Count && pointModes[i]);
@@ -1082,7 +1091,7 @@ namespace RealisticRoads
                 bool onDeck = i < deckModes.Count && deckModes[i];
                 deck.Add(onDeck);
                 paths.Add(onDeck && roads[i - 1] != 0 && roads[i] != 0
-                    ? Decks.RoadPath(roads[i - 1], roadTs[i - 1], roads[i], roadTs[i], under) : null);
+                    ? Decks.CachedRoadPath(roads[i - 1], roadTs[i - 1], roads[i], roadTs[i], under) : null);
             }
             // A straight end piece meets the road there at its own angle; a curved one may continue it.
             Vector3 startDir = straight[0] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[0], controls[1] - controls[0], true);
@@ -1260,6 +1269,7 @@ namespace RealisticRoads
             List<float> corners;
             var polyline = CurveMath.SampleMixed(controls, straight, cornerRadius, startDir, endDir, out controlSamples, out corners, paths);
             division.Length = CurveMath.Length(polyline);
+            division.Polyline = polyline;
             if (division.Length < 1f) return division;
 
             // Stretches over water get long bridge spans; crossings become fixed nodes.
@@ -1419,7 +1429,8 @@ namespace RealisticRoads
         }
 
         private const float CornerProbe = 1f;
-        private const float AlongAngle = 20f;     // a road within this angle of a deck is the one it runs along
+        private const float AlongAngle = 20f;
+        private const float NodeSearchSlack = 150f;   // looking along the curve for a node stops this far past the closest     // a road within this angle of a deck is the one it runs along
 
         private static bool InDeck(List<KeyValuePair<float, float>> ranges, float at)
         {
@@ -1445,12 +1456,32 @@ namespace RealisticRoads
             int n = division.Points.Count;
             division.OnDeck = new bool[n];
             division.Below = new DeckBelow[n];
-            if (division.DeckRanges.Count == 0) return;
-            float along = 0f;
+            if (division.DeckRanges.Count == 0 || division.Polyline == null) return;
+            // Each node's distance along the sampled curve (the ranges are measured
+            // along it; adding up the straight pieces between nodes falls short on bends).
+            var line = division.Polyline;
+            int sample = 0;
+            float sampleAlong = 0f;
             for (int i = 0; i < n; i++)
             {
-                if (i > 0) along += CurveMath.FlatDistance(division.Points[i - 1], division.Points[i]);
-                if (!InDeck(division.DeckRanges, along)) continue;
+                Vector3 p = division.Points[i];
+                int best = sample;
+                float bestDistance = CurveMath.FlatDistance(line[sample], p), bestAlong = sampleAlong, walked = sampleAlong;
+                for (int k = sample + 1; k < line.Count; k++)
+                {
+                    walked += CurveMath.FlatDistance(line[k - 1], line[k]);
+                    float d = CurveMath.FlatDistance(line[k], p);
+                    if (d < bestDistance)
+                    {
+                        best = k;
+                        bestDistance = d;
+                        bestAlong = walked;
+                    }
+                    else if (d > bestDistance + NodeSearchSlack) break;
+                }
+                sample = best;
+                sampleAlong = bestAlong;
+                if (!InDeck(division.DeckRanges, bestAlong)) continue;
                 division.OnDeck[i] = true;
                 division.Below[i] = Decks.Under(division.Points[i]);
             }
@@ -1540,11 +1571,6 @@ namespace RealisticRoads
 
         // The height a point placed now gets: none on an existing road (it
         // takes that road's height), else the current Page Up / Page Down height.
-        private float LiftFor(ushort node, ushort segment)
-        {
-            return node != 0 || segment != 0 ? 0f : lift;
-        }
-
         private void ChangeLift(float step)
         {
             lift = Mathf.Clamp(Mathf.Round((lift + step) * 10f) / 10f, MinLift, MaxLift);
@@ -2080,6 +2106,7 @@ namespace RealisticRoads
             pointDeck.Clear();
             pointRoad.Clear();
             pointRoadT.Clear();
+            Decks.ForgetPaths();
             ClearTyped();
             crossingTypes.Clear();
             crossingExtra.Clear();

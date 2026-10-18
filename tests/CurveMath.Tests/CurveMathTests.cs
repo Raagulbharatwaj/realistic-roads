@@ -571,4 +571,24 @@ public class CurveMathTests
         for (int k = at[1]; k <= at[2]; k++) Assert.Equal(100f, CurveMath.FlatDistance(line[k], V(100, 100)), 1);
         Assert.Equal(V(300, 100), line.Last());
     }
+
+    [Fact]
+    public void Mixed_HairpinIsSharpNotNaN()
+    {
+        var controls = new List<Vector3> { V(0, 0), V(100, 0), V(0, 0.5f) };   // turns back almost 180 degrees
+        var line = CurveMath.SampleMixed(controls, new[] { true, true }, 60f, Vector3.zero, Vector3.zero, out var at, out var sharp);
+        Assert.Single(sharp);
+        Assert.All(line, p => Assert.False(float.IsNaN(p.x) || float.IsNaN(p.z)));
+        Assert.Equal(V(100, 0), line[at[1]]);
+    }
+
+    [Fact]
+    public void Mixed_RoundingsThatMeetLeaveNoRepeatedPoint()
+    {
+        // A 40 m piece between two right angles: both roundings take half of it each.
+        var controls = new List<Vector3> { V(0, 0), V(200, 0), V(200, 40), V(400, 40) };
+        var line = CurveMath.SampleMixed(controls, new[] { true, true, true }, 60f, Vector3.zero, Vector3.zero, out _, out _);
+        for (int i = 1; i < line.Count; i++) Assert.True(CurveMath.FlatDistance(line[i - 1], line[i]) > 0.01f, "repeated point at " + i);
+        Assert.Equal(V(400, 40), line.Last());
+    }
 }

@@ -155,6 +155,8 @@ namespace RealisticRoads
             Mod.Log("City loaded, mode = " + mode);
             Mod.ShowPendingWarning();
             ToolActivator.Create(mode);
+            // Nodes carrying a deck frame keep no pillar of their own, whatever was saved.
+            SimulationManager.instance.AddAction(DeckFrames.RemovePillars);
         }
 
         public override void OnLevelUnloading()
