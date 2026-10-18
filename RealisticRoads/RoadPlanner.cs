@@ -279,8 +279,7 @@ namespace RealisticRoads
                     solved = solvedAgain;
                 }
             }
-            if (!solved)
-                plan.Problems.Add("Not enough room to ramp up/down at " + MaxGrade * 100f + "% slope: spread the points out or move the crossing away from the ends");
+            if (!solved) plan.Problems.Add(RampProblem(crossings, crossingIndex, distance, ground, minH, maxH));
 
             // Plain ground: small embankments and cuttings keep the road within its
             // own slope limit; what is still steeper is built anyway and marked.
@@ -359,6 +358,31 @@ namespace RealisticRoads
         // our road: past its edge and ours with room for a pillar, and for an
         // overpass past the banks of the cutting it was lowered into.
         public const float PillarClearance = 4f;
+
+        // Why the heights don't fit, with numbers: the crossing whose ramp
+        // doesn't fit between it and an end of the curve, how much road it
+        // needs either side and how much there is.
+        private static string RampProblem(List<Crossing> crossings, List<int> crossingIndex, float[] distance, float[] ground,
+            float[] minH, float[] maxH)
+        {
+            int n = distance.Length;
+            string grade = (MaxGrade * 100f).ToString("0.#") + " %";
+            for (int c = 0; c < crossings.Count; c++)
+            {
+                int k = crossingIndex[c];
+                if (k < 0 || k >= n) continue;
+                float rise = minH[k] > ground[k] ? minH[k] - ground[k] : maxH[k] < ground[k] ? ground[k] - maxH[k] : 0f;
+                if (rise < 1f) continue;
+                float need = rise / MaxGrade;
+                float before = distance[k], after = distance[n - 1] - distance[k];
+                if (before >= need && after >= need) continue;
+                return "Not enough room for the " + crossings[c].Describe() + " (" + crossings[c].ExistingName + "): at " + grade +
+                       " it needs about " + need.ToString("N0") + " m of road before and after it to go " + rise.ToString("F0") +
+                       " m " + (minH[k] > ground[k] ? "up" : "down") + ", and has " + before.ToString("N0") + " m before and " +
+                       after.ToString("N0") + " m after. Start or end the curve further away, or pick another crossing type";
+            }
+            return "Not enough room to ramp up and down at " + grade + " between the crossings: spread the points out, or space the crossings further apart";
+        }
 
         // Rail we build gets long spans: its deck over a crossing is at least
         // this long either side, so no short pieces bunch up there.
