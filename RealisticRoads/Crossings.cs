@@ -31,6 +31,9 @@ namespace RealisticRoads
         public bool CanConnect;         // the two networks may join (road x road, rail x rail, road x rail)
         public int Occurrence;          // 0 for the first time our curve crosses this segment, 1 the second, ...
         public ushort SnapNode;         // an end node of the segment within NodeSnap of the crossing (else 0)
+        // A rail line on the ground (overhead wires): a bridge over it keeps its
+        // node above the track, lifted, with no pillar. Decided once, here.
+        public bool OverRail;
 
         // A junction this close to an existing node joins at that node instead of cutting the road.
         public const float NodeSnap = 6f;
@@ -165,6 +168,7 @@ namespace RealisticRoads
                             crossing.ExistingElevation = crossing.Point.y - terrain.SampleRawHeightSmooth(crossing.Point);
                             crossing.ExistingHalfWidth = existing.m_halfWidth;
                             crossing.ExistingName = existing.name;
+                            crossing.OverRail = RoadPlanner.IsRail(existing) && crossing.ExistingAtGround;
                             result.Add(crossing);
                         }
                     }

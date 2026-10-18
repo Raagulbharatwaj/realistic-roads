@@ -61,9 +61,9 @@ namespace RealisticRoads
     // Main thread: works out heights and road versions for a curve.
     public static class RoadPlanner
     {
-        // Ramp grade for the road being planned: 6 % for roads, 3.5 % for rail
+        // Ramp grade for the road being planned: 4 % for roads, 3.5 % for rail
         // (trains can't climb road grades). Set by Make; one plan at a time per thread.
-        public const float RoadGrade = 0.06f;
+        public const float RoadGrade = 0.04f;
         public const float RailGrade = 0.035f;
         [ThreadStatic] private static float maxGrade;
         public static float MaxGrade => maxGrade > 0f ? maxGrade : RoadGrade;
@@ -161,6 +161,7 @@ namespace RealisticRoads
                     break;
                 }
 
+            var overpasses = new List<int>();
             for (int c = 0; c < crossings.Count; c++)
             {
                 var crossing = crossings[c];
@@ -183,24 +184,25 @@ namespace RealisticRoads
                     case CrossingType.Bridge:
                         // Up to the deck's ends either side (the node on the crossing
                         // itself is dropped later, so the side nodes carry the height).
-                        Limit(distance, k, SpanHalf(crossing, info.m_halfWidth, false) + 1f,
+                        Limit(distance, k, DeckHalf(crossing, info, false) + 1f,
                             crossing.Point.y + OverClearance + crossing.ExtraHeight, true, minH, false);
+                        // Over rail the node on the track stays (no pillar) and sits
+                        // higher, so the overhead wires pass under the deck.
+                        if (crossing.OverRail)
+                            minH[k] = Mathf.Max(minH[k], crossing.Point.y + OverClearance + crossing.ExtraHeight + RailDeckLift);
                         break;
                     case CrossingType.Overpass:
                         // We stay at ground level on a bridge deck; the existing road goes down.
                         Fix(k, crossing.Point.y, minH, maxH, isFixed);
                         // The deck spans the lowered road and its cutting's banks.
-                        float deckHalf = SpanHalf(crossing, info.m_halfWidth, true) + 1f;
+                        float deckHalf = DeckHalf(crossing, info, true) + 1f;
                         Mark(distance, k, deckHalf, forceBridge, false);
                         // The node on the crossing is dropped later; the deck between
                         // the side nodes must not sag below the height the lowering
                         // was planned for, or the headroom underneath shrinks.
                         for (int i = 0; i < n; i++)
                             if (i != k && Mathf.Abs(distance[i] - distance[k]) <= deckHalf) minH[i] = Mathf.Max(minH[i], crossing.Point.y);
-                        string problem;
-                        var lowering = PlanLowering(crossing, info.m_halfWidth, plan.Tangents[k], out problem);
-                        if (lowering != null) plan.Lowerings[c] = lowering;
-                        else plan.Problems.Add(problem);
+                        overpasses.Add(c);
                         break;
                     case CrossingType.Underpass:
                         Limit(distance, k, window, crossing.Point.y - CutDepth, false, maxH, false);
@@ -215,6 +217,7 @@ namespace RealisticRoads
                 }
             }
 
+            PlanLowerings(plan, info, overpasses);
             CheckLoweringsApart(plan);
             CheckRepeatedCrossings(plan);
 
@@ -319,6 +322,21 @@ namespace RealisticRoads
         // our road: past its edge and ours with room for a pillar, and for an
         // overpass past the banks of the cutting it was lowered into.
         public const float PillarClearance = 4f;
+
+        // Rail we build gets long spans: its deck over a crossing is at least
+        // this long either side, so no short pieces bunch up there.
+        public const float RailDeckHalf = 30f;
+        // Over a rail line our deck's node on the track is this much higher than
+        // the clearance, so the overhead wires pass under it.
+        public const float RailDeckLift = 2f;
+
+        public static float DeckHalf(Crossing crossing, NetInfo ours, bool overpass)
+        {
+            float half = SpanHalf(crossing, ours != null ? ours.m_halfWidth : 8f, overpass);
+            return IsRail(ours) ? Mathf.Max(half, RailDeckHalf) : half;
+        }
+
+        public static bool IsRail(NetInfo info) => info != null && GradeFor(info) == RailGrade;
 
         public static float SpanHalf(Crossing crossing, float ourHalfWidth, bool overpass)
         {
@@ -447,172 +465,270 @@ namespace RealisticRoads
 
         // --- overpass: lowering the existing road -------------------------------
 
-        // How to lower the existing road under an overpass: cut its segment
-        // around the crossing, drop that part by CutDepth and ramp it back up
-        // along the road on both sides. Null (with a reason) if the road has a
-        // junction too close or runs over water.
-        private static Lowering PlanLowering(Crossing crossing, float ourHalfWidth, Vector3 ourDirection, out string problem)
-        {
-            // Crossing at an angle, our road is wider measured along the existing one.
-            ourHalfWidth /= Skew(crossing, ourDirection);
+        // How deep and how steeply an existing road or rail is lowered under an
+        // overpass. Rail gets a long, gentle dip, and its middle goes a little
+        // deeper so the overhead wires clear our deck.
+        public const float LoweredRailGrade = 0.02f;
+        public const float WireDepth = 1.5f;
+        private const float MinSplit = 8f;   // a cut closer than this to a node uses the node
 
-            // First with the shortest ramp, then with more of the road to ramp along.
-            float ramp = CutDepth / MaxGrade + 10f;
-            Lowering lowering = PlanLowering(crossing, ourHalfWidth, ramp, false, out problem);
-            if (lowering == null && problem != null && problem.StartsWith("Not enough room"))
-                lowering = PlanLowering(crossing, ourHalfWidth, ramp * 2f, true, out problem);
-            return lowering;
+        // A stretch of an existing road or rail: its nodes in order, with their
+        // distance along it; Segments[i] runs from Nodes[i] to Nodes[i + 1].
+        private class Line
+        {
+            public readonly List<ushort> Nodes = new List<ushort>();
+            public readonly List<float> Along = new List<float>();
+            public readonly List<ushort> Segments = new List<ushort>();
+            public bool StartFixed = true, EndFixed = true;   // false at a dead end (free to lower)
         }
 
-        private static Lowering PlanLowering(Crossing crossing, float ourHalfWidth, float ramp, bool logFailure, out string problem)
+        private static Line LineThrough(ushort segment)
+        {
+            var s = NetManager.instance.m_segments.m_buffer[segment];
+            var line = new Line();
+            line.Nodes.Add(s.m_startNode);
+            line.Nodes.Add(s.m_endNode);
+            line.Along.Add(0f);
+            line.Along.Add(Mathf.Max(s.m_averageLength, 1f));
+            line.Segments.Add(segment);
+            return line;
+        }
+
+        // Walks the line on past its start (or end) until 'until' is reached,
+        // stopping at a junction (the node there stays put) or a dead end.
+        private static void Extend(Line line, bool atStart, float until)
+        {
+            var net = NetManager.instance;
+            for (int guard = 0; guard < 64; guard++)
+            {
+                int last = line.Nodes.Count - 1;
+                if (atStart ? line.Along[0] <= until : line.Along[last] >= until) return;
+                ushort node = atStart ? line.Nodes[0] : line.Nodes[last];
+                ushort from = atStart ? line.Segments[0] : line.Segments[line.Segments.Count - 1];
+                int count = NetworkBuilder.SegmentCount(node);
+                if (count != 2)
+                {
+                    if (count == 1) { if (atStart) line.StartFixed = false; else line.EndFixed = false; }
+                    return;
+                }
+                ushort next = 0;
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort segment = net.m_nodes.m_buffer[node].GetSegment(i);
+                    if (segment != 0 && segment != from) next = segment;
+                }
+                if (next == 0 || line.Segments.Contains(next)) return;   // a ring: stop, the node stays
+                var s = net.m_segments.m_buffer[next];
+                ushort other = s.m_startNode == node ? s.m_endNode : s.m_startNode;
+                float length = Mathf.Max(s.m_averageLength, 1f);
+                if (atStart)
+                {
+                    line.Nodes.Insert(0, other);
+                    line.Along.Insert(0, line.Along[0] - length);
+                    line.Segments.Insert(0, next);
+                }
+                else
+                {
+                    line.Nodes.Add(other);
+                    line.Along.Add(line.Along[last] + length);
+                    line.Segments.Add(next);
+                }
+            }
+        }
+
+        // Where a crossing is along the line (NaN if its segment isn't on it).
+        private static float AlongOf(Line line, Crossing crossing)
+        {
+            int i = line.Segments.IndexOf(crossing.Segment);
+            if (i < 0) return float.NaN;
+            var s = NetManager.instance.m_segments.m_buffer[crossing.Segment];
+            float length = line.Along[i + 1] - line.Along[i];
+            float t = s.m_startNode == line.Nodes[i] ? crossing.ExistingT : 1f - crossing.ExistingT;
+            return line.Along[i] + t * length;
+        }
+
+        // Lowers the existing road or rail under every overpass. Overpasses on
+        // the same line whose ramps would meet share one lowered stretch that
+        // stays down between them, instead of rising and dipping again. Each
+        // crossing gets one new node (none if an existing node is right there).
+        private static void PlanLowerings(Plan plan, NetInfo info, List<int> overpasses)
+        {
+            var done = new HashSet<int>();
+            foreach (int first in overpasses)
+            {
+                if (done.Contains(first)) continue;
+                var lead = plan.Crossings[first];
+                var existing = NetManager.instance.m_segments.m_buffer[lead.Segment].Info;
+                bool rail = IsRail(existing);
+                float grade = rail ? LoweredRailGrade : RoadGrade;
+                float depth = CutDepth + (rail ? WireDepth : 0f);
+                float ramp = depth / grade + 10f;
+
+                // The group: overpasses on this line within two ramps of one another.
+                var line = LineThrough(lead.Segment);
+                var group = new List<int> { first };
+                var at = new List<float> { AlongOf(line, lead) };
+                for (bool grew = true; grew;)
+                {
+                    grew = false;
+                    float lowest = at[0], highest = at[0];
+                    foreach (float a in at) { lowest = Mathf.Min(lowest, a); highest = Mathf.Max(highest, a); }
+                    Extend(line, true, lowest - 2f * ramp);
+                    Extend(line, false, highest + 2f * ramp);
+                    foreach (int other in overpasses)
+                    {
+                        if (group.Contains(other) || done.Contains(other)) continue;
+                        float a = AlongOf(line, plan.Crossings[other]);
+                        if (float.IsNaN(a)) continue;
+                        foreach (float b in at)
+                            if (Mathf.Abs(a - b) < 2f * ramp)
+                            {
+                                group.Add(other);
+                                at.Add(a);
+                                grew = true;
+                                break;
+                            }
+                    }
+                }
+                foreach (int c in group) done.Add(c);
+
+                string problem;
+                if (!LowerGroup(plan, info, line, group, at, grade, depth, out problem))
+                    plan.Problems.Add(problem.StartsWith("Not enough room")
+                        ? problem + " (needs about " + ramp.ToString("F0") + " m of plain " + (rail ? "track" : "road") +
+                          " each side at " + (grade * 100f).ToString("0.#") + " %)"
+                        : problem);
+            }
+        }
+
+        private static bool LowerGroup(Plan plan, NetInfo info, Line line, List<int> group, List<float> at,
+            float grade, float depth, out string problem)
         {
             problem = null;
             var net = NetManager.instance;
-            var segment = net.m_segments.m_buffer[crossing.Segment];
-            float length = Mathf.Max(segment.m_averageLength, 1f);
-            float span = ourHalfWidth + 6f;
-            float t0 = Mathf.Clamp(crossing.ExistingT - span / length, 0.02f, 0.96f);
-            float t1 = Mathf.Clamp(crossing.ExistingT + span / length, 0.04f, 0.98f);
-            float tx = Mathf.Clamp(crossing.ExistingT, t0 + 0.01f, t1 - 0.01f);
-            float low = crossing.Point.y - CutDepth;
+            string name = plan.Crossings[group[0]].ExistingName;
 
-            // Existing nodes along the road on both sides, until the ramp fits.
-            // Both walks share one visited set: on a ring road they would meet.
-            var visited = new HashSet<ushort>();
-            var back = WalkChain(crossing.Segment, segment.m_startNode, crossing.ExistingT * length, ramp, visited, out problem);
-            if (back == null) { problem = problem + " on the " + crossing.ExistingName; return null; }
-            var forward = WalkChain(crossing.Segment, segment.m_endNode, (1f - crossing.ExistingT) * length, ramp, visited, out problem);
-            if (forward == null) { problem = problem + " on the " + crossing.ExistingName; return null; }
-
-            // One line of nodes: far back ... start, split points, end ... far forward.
-            var ids = new List<ushort>();
-            var along = new List<float>();
+            // Points: the line's nodes, and a cut at each crossing (or the node
+            // right there). Each crossing's low point, deck edges and the stretch
+            // between crossings in the group are held down.
+            var along = new List<float>(line.Along);
             var current = new List<float>();
-            var fixedEnd = new List<bool>();
-            for (int i = back.Count - 1; i >= 0; i--)
+            foreach (ushort node in line.Nodes) current.Add(net.m_nodes.m_buffer[node].m_position.y);
+            var ids = new List<ushort>(line.Nodes);
+            var splitOf = new int[group.Count];     // index in the points of each crossing's low point
+            var splitT = new float[group.Count];    // where its segment is cut (<0: at a node)
+            for (int g = 0; g < group.Count; g++)
             {
-                ids.Add(back[i].Key); along.Add(-back[i].Value);
-                current.Add(net.m_nodes.m_buffer[back[i].Key].m_position.y);
-                fixedEnd.Add(i == back.Count - 1 && back.Count > 0 && LastIsFixed(back));
-            }
-            int firstSplit = ids.Count;
-            float[] splitT = { t0, tx, t1 };
-            foreach (float t in splitT)
-            {
-                ids.Add(0);
-                along.Add((t - crossing.ExistingT) * length);
-                current.Add(crossing.Point.y);
-                fixedEnd.Add(false);
-            }
-            for (int i = 0; i < forward.Count; i++)
-            {
-                ids.Add(forward[i].Key); along.Add(forward[i].Value);
-                current.Add(net.m_nodes.m_buffer[forward[i].Key].m_position.y);
-                fixedEnd.Add(i == forward.Count - 1 && LastIsFixed(forward));
+                var crossing = plan.Crossings[group[g]];
+                float length = Mathf.Max(net.m_segments.m_buffer[crossing.Segment].m_averageLength, 1f);
+                int nearest = 0;
+                for (int i = 1; i < along.Count; i++) if (Mathf.Abs(along[i] - at[g]) < Mathf.Abs(along[nearest] - at[g])) nearest = i;
+                // Never onto a pinned end of the line (a junction, or where the walk
+                // stopped): that node stays put, so nothing would be lowered there.
+                bool pinned = (nearest == 0 && line.StartFixed) || (nearest == along.Count - 1 && line.EndFixed);
+                if (ids[nearest] != 0 && !pinned && Mathf.Abs(along[nearest] - at[g]) < MinSplit)
+                {
+                    splitOf[g] = nearest;
+                    splitT[g] = -1f;
+                    continue;
+                }
+                splitT[g] = Mathf.Clamp(crossing.ExistingT, MinSplit / length, 1f - MinSplit / length);
+                int insert = 0;
+                while (insert < along.Count && along[insert] < at[g]) insert++;
+                along.Insert(insert, at[g]);
+                current.Insert(insert, crossing.Point.y);
+                ids.Insert(insert, 0);
+                for (int h = 0; h < g; h++) if (splitOf[h] >= insert) splitOf[h]++;
+                splitOf[g] = insert;
             }
 
-            int m = ids.Count;
+            int m = along.Count;
             var minH = new float[m];
             var maxH = new float[m];
             var isFixed = new bool[m];
             for (int i = 0; i < m; i++)
             {
                 minH[i] = -Unlimited;
-                // Under our deck: the split points, and any existing node that close
-                // to the crossing (a node near the segment's end can be under it too).
-                bool underDeck = (i >= firstSplit && i < firstSplit + 3) || Mathf.Abs(along[i]) <= span;
-                maxH[i] = underDeck ? low : Unlimited;
-                if (fixedEnd[i]) { minH[i] = maxH[i] = current[i]; isFixed[i] = true; }
+                maxH[i] = Unlimited;
             }
-            float[] heights;
-            if (!CurveMath.SolveHeights(along.ToArray(), current.ToArray(), minH, maxH, isFixed, MaxGrade, out heights))
+            var order = new List<int>();
+            for (int g = 0; g < group.Count; g++) order.Add(g);
+            order.Sort((x, y) => at[x].CompareTo(at[y]));
+            for (int o = 0; o < order.Count; o++)
             {
-                problem = "Not enough room to lower the " + crossing.ExistingName +
-                          " (it climbs or drops too steeply near the crossing; try a bridge, or cross somewhere flatter)";
-                if (logFailure)
+                int g = order[o];
+                var crossing = plan.Crossings[group[g]];
+                // Under the deck: the cutting's full depth; deeper still at the middle.
+                float span = (info.m_halfWidth / Mathf.Max(crossing.Skew, 0.35f)) + 6f;
+                for (int i = 0; i < m; i++)
+                    if (Mathf.Abs(along[i] - at[g]) <= span) maxH[i] = Mathf.Min(maxH[i], crossing.Point.y - CutDepth);
+                // The one cut is the low point; deep enough that the road, climbing
+                // from it at the grade, still clears the deck's edge.
+                maxH[splitOf[g]] = Mathf.Min(maxH[splitOf[g]], Mathf.Min(crossing.Point.y - depth, crossing.Point.y - CutDepth - grade * span));
+                // Between this overpass and the next one: stay down, running evenly.
+                if (o + 1 < order.Count)
                 {
-                    // Enough detail to see from the log why it didn't fit.
-                    var detail = new System.Text.StringBuilder("Overpass: lowering the " + crossing.ExistingName + " #" +
-                                                               crossing.Segment + " failed, along / now / planned / fixed:");
+                    int h = order[o + 1];
+                    float lowA = crossing.Point.y - CutDepth, lowB = plan.Crossings[group[h]].Point.y - CutDepth;
                     for (int i = 0; i < m; i++)
-                        detail.Append("\n  " + (ids[i] != 0 ? "node #" + ids[i] : "split") + "  " + along[i].ToString("F0") + " m  " +
-                                      current[i].ToString("F1") + "  " + heights[i].ToString("F1") + (isFixed[i] ? "  fixed" : "") +
-                                      (maxH[i] < Unlimited ? "  max " + maxH[i].ToString("F1") : ""));
-                    // The preview plans every frame: log each different failure once.
-                    string text = detail.ToString();
-                    if (text != lastLoweringFailure) Mod.Log(text);
-                    lastLoweringFailure = text;
+                        if (along[i] > at[g] && along[i] < at[h])
+                            maxH[i] = Mathf.Min(maxH[i], Mathf.Lerp(lowA, lowB, (along[i] - at[g]) / Mathf.Max(at[h] - at[g], 0.1f)));
                 }
-                return null;
+            }
+            if (line.StartFixed) { minH[0] = maxH[0] = current[0]; isFixed[0] = true; }
+            if (line.EndFixed) { minH[m - 1] = maxH[m - 1] = current[m - 1]; isFixed[m - 1] = true; }
+
+            float[] heights;
+            if (!CurveMath.SolveHeights(along.ToArray(), current.ToArray(), minH, maxH, isFixed, grade, out heights))
+            {
+                problem = "Not enough room to lower the " + name +
+                          " (a junction is too close, or it climbs or drops too steeply near the crossing; try a bridge, or cross somewhere flatter)";
+                var detail = new System.Text.StringBuilder("Overpass: lowering the " + name + " failed, along / now / planned / max:");
+                for (int i = 0; i < m; i++)
+                    detail.Append("\n  " + (ids[i] != 0 ? "node #" + ids[i] : "cut") + "  " + along[i].ToString("F0") + " m  " +
+                                  current[i].ToString("F1") + "  " + heights[i].ToString("F1") + (isFixed[i] ? "  fixed" : "") +
+                                  (maxH[i] < Unlimited ? "  max " + maxH[i].ToString("F1") : ""));
+                // The preview plans again and again: log each different failure once.
+                string text = detail.ToString();
+                if (text != lastLoweringFailure) Mod.Log(text);
+                lastLoweringFailure = text;
+                return false;
             }
 
-            var lowering = new Lowering
-            {
-                Segment = crossing.Segment,
-                SplitAt = splitT,
-                SplitHeights = new[] { heights[firstSplit], heights[firstSplit + 1], heights[firstSplit + 2] },
-            };
+            // Every crossing's low point must really be down (a pinned node can't be).
+            for (int g = 0; g < group.Count; g++)
+                if (heights[splitOf[g]] > plan.Crossings[group[g]].Point.y - CutDepth + 0.1f)
+                {
+                    problem = "Not enough room to lower the " + name + " (a junction is too close to the crossing)";
+                    return false;
+                }
+
+            // The first overpass of the group moves the existing nodes; each one cuts its own segment.
             var terrain = TerrainManager.instance;
+            var lead = new Lowering();
             for (int i = 0; i < m; i++)
             {
                 if (ids[i] == 0 || heights[i] > current[i] - 0.5f) continue;
                 Vector3 p = net.m_nodes.m_buffer[ids[i]].m_position;
                 if (terrain.SampleRawHeightSmoothWithWater(p, false, 0f) - terrain.SampleRawHeightSmooth(p) > 0.5f)
                 {
-                    problem = "Can't lower the " + crossing.ExistingName + ": there is water";
-                    return null;
+                    problem = "Can't lower the " + name + ": there is water";
+                    return false;
                 }
-                lowering.Nodes.Add(ids[i]);
-                lowering.NodeHeights.Add(heights[i]);
+                lead.Nodes.Add(ids[i]);
+                lead.NodeHeights.Add(heights[i]);
             }
-            return lowering;
-        }
-
-        // Nodes along an existing road from 'node' (reached by 'segment',
-        // 'distance' metres from the crossing) until 'reach' metres. Each entry:
-        // node id and its distance. Null if a junction comes first.
-        private static List<KeyValuePair<ushort, float>> WalkChain(ushort segment, ushort node, float distance, float reach,
-            HashSet<ushort> visited, out string problem)
-        {
-            problem = null;
-            var net = NetManager.instance;
-            var chain = new List<KeyValuePair<ushort, float>>();
-            for (int guard = 0; guard < 64; guard++)
+            for (int g = 0; g < group.Count; g++)
             {
-                if (!visited.Add(node))
-                {
-                    problem = "The road loops back on itself too close to the crossing";
-                    return null;
-                }
-                chain.Add(new KeyValuePair<ushort, float>(node, distance));
-                if (distance >= reach) return chain;
-                int count = NetworkBuilder.SegmentCount(node);
-                if (count == 1) return chain;  // dead end: free to lower
-                if (count != 2)
-                {
-                    problem = "A junction is too close (needs ~" + reach.ToString("F0") + " m of plain road each side)";
-                    return null;
-                }
-                ushort next = 0;
-                for (int i = 0; i < 8; i++)
-                {
-                    ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
-                    if (s != 0 && s != segment) next = s;
-                }
-                var seg = net.m_segments.m_buffer[next];
-                distance += seg.m_averageLength;
-                node = seg.m_startNode == node ? seg.m_endNode : seg.m_startNode;
-                segment = next;
+                var lowering = g == 0 ? lead : new Lowering();
+                lowering.Segment = plan.Crossings[group[g]].Segment;
+                lowering.SplitAt = splitT[g] < 0f ? new float[0] : new[] { splitT[g] };
+                lowering.SplitHeights = splitT[g] < 0f ? new float[0] : new[] { heights[splitOf[g]] };
+                plan.Lowerings[group[g]] = lowering;
             }
-            problem = "Road too fragmented to lower";
-            return null;
+            return true;
         }
 
-        // The last node of a walk stays where it is unless the road ends there.
-        private static bool LastIsFixed(List<KeyValuePair<ushort, float>> chain)
-        {
-            return NetworkBuilder.SegmentCount(chain[chain.Count - 1].Key) != 1;
-        }
 
         // --- helpers -------------------------------------------------------------
 
