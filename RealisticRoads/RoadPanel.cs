@@ -12,8 +12,8 @@ namespace RealisticRoads
         public string Height = "";                // the next point's height (Page Up / Page Down)
         public string Summary = "";               // length, segments, cost
         public string Details = "";               // raised / lowered / continues ...
-        public readonly List<PanelCrossing> Crossings = new List<PanelCrossing>();
-        public readonly List<PanelWater> Water = new List<PanelWater>();
+        // Crossings and water bridges, in order along the road (numbered as on the map).
+        public readonly List<PanelCrossing> Items = new List<PanelCrossing>();
         public readonly List<string> Problems = new List<string>();
         public readonly List<string> Warnings = new List<string>();
         public bool CanBuild;
@@ -37,22 +37,17 @@ namespace RealisticRoads
         public readonly List<KeyValuePair<float, float>> Crossings = new List<KeyValuePair<float, float>>();   // metres along, crossed road's height
     }
 
+    // One thing along the road: a crossing (its options as icons) or a water
+    // bridge (no options, only higher / lower).
     public class PanelCrossing
     {
-        public string Title = "";                 // "1  Train Track"
-        public string Detail = "";                // "Bridge, 11 m up"
+        public string Title = "";                 // "3   at 1,240 m   Train Track"
+        public string Detail = "";                // "bridge over it, 11 m above it"
         public readonly List<CrossingType> Allowed = new List<CrossingType>();
         public CrossingType Selected;
         public bool HeightButtons;                // bridge: +/- for the deck
         public float Step;                        // metres per +/- click
         public Action<CrossingType> Pick;
-        public Action<float> Raise;
-    }
-
-    public class PanelWater
-    {
-        public string Title = "";
-        public float Step;                        // metres per +/- click
         public Action<float> Raise;
     }
 
@@ -98,7 +93,8 @@ namespace RealisticRoads
 
         public Action Build, Undo, Close, GameTool;
         private UIButton buildButton, undoButton;
-        private const int MaxCrossingRows = 4, MaxWaterRows = 3;   // more are changed with the buttons on the map
+        private const float MaxListHeight = 330f;   // the list along the road scrolls beyond this
+        private UIComponent parent;                 // where the row helpers add their parts (the panel or the list)
 
         public bool Exists => panel != null;
 
@@ -220,15 +216,15 @@ namespace RealisticRoads
             // A text that wraps to more or fewer lines moves everything under it.
             float wide = Width - 2f * Pad;
             shape.Append(Lines(model.Road, wide, 0.85f)).Append(Lines(model.Summary, wide, 0.85f)).Append(Lines(model.Details, wide, 0.75f));
-            foreach (var crossing in model.Crossings) shape.Append(Lines(crossing.Title, wide, 0.8f)).Append(Lines(crossing.Detail, wide, 0.75f));
+            foreach (var item in model.Items) shape.Append(Lines(item.Title, wide, 0.8f)).Append(Lines(item.Detail, wide, 0.75f));
             foreach (var problem in model.Problems) shape.Append(Lines("• " + problem, wide, 0.75f));
             foreach (var warning in model.Warnings) shape.Append(Lines("• " + warning, wide, 0.75f));
-            foreach (var crossing in model.Crossings)
+            foreach (var crossing in model.Items)
             {
                 foreach (var type in crossing.Allowed) shape.Append((int)type);
                 shape.Append(':').Append((int)crossing.Selected).Append(crossing.HeightButtons).Append(';');
             }
-            shape.Append('|').Append(Mathf.Min(model.Water.Count, MaxWaterRows + 1)).Append('|').Append(model.Problems.Count).Append('|').Append(model.Warnings.Count);
+            shape.Append('|').Append(model.Items.Count).Append('|').Append(model.Problems.Count).Append('|').Append(model.Warnings.Count);
             return shape.ToString();
         }
 
@@ -237,6 +233,7 @@ namespace RealisticRoads
             foreach (var component in dynamic) if (component != null) UnityEngine.Object.Destroy(component.gameObject);
             dynamic.Clear();
             texts.Clear();
+            parent = panel;
             float y = 46f;
 
             y = Header("ROAD", y);
@@ -285,56 +282,49 @@ namespace RealisticRoads
                 y += 18f;
             }
 
-            if (model.Crossings.Count > 0)
+            if (model.Items.Count > 0)
             {
-                y = Header("CROSSINGS", y);
-                for (int i = 0; i < Mathf.Min(model.Crossings.Count, MaxCrossingRows); i++)
+                y = Header("ALONG THE ROAD", y);
+                // In a scrolling box when long (mouse wheel), so the panel stays on screen.
+                var box = (UIScrollablePanel)panel.AddUIComponent(typeof(UIScrollablePanel));
+                box.relativePosition = new Vector3(0f, y);
+                box.clipChildren = true;
+                box.scrollWheelDirection = UIOrientation.Vertical;
+                box.builtinKeyNavigation = false;
+                dynamic.Add(box);
+                parent = box;
+                float rowY = 0f;
+                for (int i = 0; i < model.Items.Count; i++)
                 {
                     int index = i;
-                    y = Text(m => index < m.Crossings.Count ? m.Crossings[index].Title : "", TextColor, 0.8f, y);
-                    y = Text(m => index < m.Crossings.Count ? m.Crossings[index].Detail : "", DimColor, 0.75f, y - 2f);
+                    rowY = Text(m => index < m.Items.Count ? m.Items[index].Title : "", TextColor, 0.8f, rowY);
+                    rowY = Text(m => index < m.Items.Count ? m.Items[index].Detail : "", DimColor, 0.75f, rowY - 2f);
                     float x = Pad;
-                    var crossing = model.Crossings[i];
-                    foreach (var type in crossing.Allowed)
+                    var item = model.Items[i];
+                    foreach (var type in item.Allowed)
                     {
                         var t = type;
-                        IconButton(IconFor(t), Letter(t), Describe(t), new Vector2(x, y), crossing.Selected == t,
+                        IconButton(IconFor(t), Letter(t), Describe(t), new Vector2(x, rowY), item.Selected == t,
                             () => { var c = Row(index); if (c != null && c.Pick != null) c.Pick(t); });
                         x += IconSize + 3f;
                     }
-                    if (crossing.HeightButtons)
+                    if (item.HeightButtons)
                     {
-                        x += 8f;
-                        string step = crossing.Step.ToString("0.#");
-                        IconButton(Icons.Plus, "+", "Deck higher (+" + step + " m)", new Vector2(x, y), false,
+                        if (item.Allowed.Count > 0) x += 8f;
+                        string step = item.Step.ToString("0.#");
+                        IconButton(Icons.Plus, "+", "Higher (+" + step + " m)", new Vector2(x, rowY), false,
                             () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(c.Step); });
-                        IconButton(Icons.Minus, "-", "Deck lower (-" + step + " m)", new Vector2(x + IconSize + 3f, y), false,
+                        IconButton(Icons.Minus, "-", "Lower (-" + step + " m)", new Vector2(x + IconSize + 3f, rowY), false,
                             () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(-c.Step); });
                     }
-                    y += IconSize + RowGap + 4f;
+                    if (item.Allowed.Count > 0 || item.HeightButtons) rowY += IconSize;
+                    rowY += RowGap + 6f;
                 }
-                if (model.Crossings.Count > MaxCrossingRows)
-                    y = Text(m => "+ " + (m.Crossings.Count - MaxCrossingRows) + " more: use the icons above each one on the map", DimColor, 0.75f, y);
-            }
-
-            if (model.Water.Count > 0)
-            {
-                y = Header("WATER", y);
-                for (int i = 0; i < Mathf.Min(model.Water.Count, MaxWaterRows); i++)
-                {
-                    int index = i;
-                    float rowY = y;
-                    var label = Label(m => index < m.Water.Count ? m.Water[index].Title : "", TextColor, 0.8f, new Vector2(Pad, rowY + 7f),
-                        Width - 2f * Pad - 2f * (IconSize + 3f));
-                    string step = model.Water[i].Step.ToString("0.#");
-                    IconButton(Icons.Plus, "+", "Bridge higher over the water (+" + step + " m)", new Vector2(Width - Pad - 2f * IconSize - 3f, rowY), false,
-                        () => { if (index < current.Water.Count) current.Water[index].Raise(current.Water[index].Step); });
-                    IconButton(Icons.Minus, "-", "Bridge lower over the water (-" + step + " m)", new Vector2(Width - Pad - IconSize, rowY), false,
-                        () => { if (index < current.Water.Count) current.Water[index].Raise(-current.Water[index].Step); });
-                    y = Mathf.Max(rowY + IconSize, rowY + label.size.y) + RowGap;
-                }
-                if (model.Water.Count > MaxWaterRows)
-                    y = Text(m => "+ " + (m.Water.Count - MaxWaterRows) + " more: use the + / - on the map", DimColor, 0.75f, y);
+                parent = panel;
+                float shown = Mathf.Min(rowY, MaxListHeight);
+                box.size = new Vector2(Width, shown);
+                y += shown;
+                if (rowY > MaxListHeight) y = Text(m => "Scroll the list for more (" + m.Items.Count + " in all)", DimColor, 0.7f, y);
             }
 
             if (model.Problems.Count > 0)
@@ -373,11 +363,11 @@ namespace RealisticRoads
             return lines;
         }
 
-        private PanelCrossing Row(int index) => current != null && index < current.Crossings.Count ? current.Crossings[index] : null;
+        private PanelCrossing Row(int index) => current != null && index < current.Items.Count ? current.Items[index] : null;
 
         private float Header(string text, float y)
         {
-            var label = (UILabel)panel.AddUIComponent(typeof(UILabel));
+            var label = (UILabel)(parent ?? panel).AddUIComponent(typeof(UILabel));
             label.text = text;
             label.textScale = 0.75f;
             label.textColor = HeaderColor;
@@ -395,7 +385,7 @@ namespace RealisticRoads
 
         private UILabel Label(Func<PanelModel, string> text, Color32 color, float scale, Vector2 at, float width)
         {
-            var label = (UILabel)panel.AddUIComponent(typeof(UILabel));
+            var label = (UILabel)(parent ?? panel).AddUIComponent(typeof(UILabel));
             string value = current != null ? text(current) : "";
             label.autoSize = false;
             label.wordWrap = true;
@@ -412,7 +402,7 @@ namespace RealisticRoads
 
         private void IconButton(string icon, string letter, string tooltip, Vector2 at, bool selected, Action onClick)
         {
-            var button = (UIButton)panel.AddUIComponent(typeof(UIButton));
+            var button = (UIButton)(parent ?? panel).AddUIComponent(typeof(UIButton));
             button.size = new Vector2(IconSize, IconSize);
             button.relativePosition = new Vector3(at.x, at.y);
             button.tooltip = tooltip;

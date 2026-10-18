@@ -71,6 +71,7 @@ namespace RealisticRoads
         private const float EmbankmentHeight = 3f;    // up to this a ramp stays the ground version on an embankment
         public const float BridgeClearance = 10f;     // above water (before the player's +/-)
         public const float OverClearance = 9f;        // flyover deck above the road/rail below
+        public const float ShipClearance = 20f;       // deck above a ship or ferry route (on the water)
         public const float UnderClearance = 7f;       // headroom under an elevated road we pass beneath
         public const float TunnelDepth = 12f;         // tunnel under the existing road
         public const float CutDepth = 8f;             // open cutting under a short bridge
@@ -217,8 +218,10 @@ namespace RealisticRoads
                         // itself is dropped later, so the side nodes carry the height).
                         // Over rail on the ground the whole deck is higher, so the
                         // overhead wires pass under it.
+                        // Over a ship or ferry route the deck leaves room for the ships.
                         Limit(distance, k, DeckHalf(crossing, info, false) + 1f,
-                            crossing.Point.y + OverClearance + crossing.ExtraHeight + (crossing.OverRail ? RailDeckLift : 0f), true, minH, false);
+                            crossing.Point.y + (crossing.ShipPath ? ShipClearance : OverClearance) + crossing.ExtraHeight +
+                            (crossing.OverRail ? RailDeckLift : 0f), true, minH, false);
                         break;
                     case CrossingType.Overpass:
                         // We stay at ground level on a bridge deck; the existing road goes down.
