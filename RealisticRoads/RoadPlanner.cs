@@ -84,10 +84,12 @@ namespace RealisticRoads
         private const float MaxEmbankment = 6f;       // plain road raised or lowered at most this much to ease a slope
         private const int ProbesPerPiece = 4;         // underground check points per lowered piece
         private static string lastLoweringFailure;
+        private const float LiftSnap = 6f;            // a point's height applies to the node this close to it
 
         public static Plan Make(NetInfo info, List<Vector3> points, List<Vector3> tangents,
             List<Crossing> crossings, List<int> crossingIndex, List<WaterRun> waterRuns, ushort startNode, ushort endNode,
-            ushort startSegment = 0, float startT = 0f, ushort endSegment = 0, float endT = 0f)
+            ushort startSegment = 0, float startT = 0f, ushort endSegment = 0, float endT = 0f,
+            List<KeyValuePair<Vector3, float>> lifts = null)
         {
             var plan = new Plan
             {
@@ -153,6 +155,29 @@ namespace RealisticRoads
             // Ends on the middle of a road join it at its height.
             if (startSegment != 0) Fix(0, points[0].y, minH, maxH, isFixed);
             if (endSegment != 0) Fix(n - 1, points[n - 1].y, minH, maxH, isFixed);
+            // Heights the player gave points (Page Up / Page Down): the node there
+            // is held that far above the ground (or the water); the road ramps
+            // to it and away from it at the grade. Crossings below may still
+            // override it (a junction stays at the other road's height).
+            if (lifts != null)
+                foreach (var lift in lifts)
+                {
+                    int best = -1;
+                    float bestDistance = LiftSnap;
+                    for (int i = 0; i < n; i++)
+                    {
+                        if (isFixed[i]) continue;
+                        float d = CurveMath.FlatDistance(points[i], lift.Key);
+                        if (d < bestDistance)
+                        {
+                            best = i;
+                            bestDistance = d;
+                        }
+                    }
+                    if (best < 0) continue;
+                    float level = water[best] ? terrain.SampleRawHeightSmoothWithWater(points[best], false, 0f) : ground[best];
+                    Fix(best, level + lift.Value, minH, maxH, isFixed);
+                }
             foreach (var crossing in crossings)
                 if (crossing.Segment != 0 && (crossing.Segment == startSegment || crossing.Segment == endSegment))
                 {

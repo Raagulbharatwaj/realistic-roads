@@ -9,6 +9,7 @@ namespace RealisticRoads
     public class PanelModel
     {
         public string Road = "";
+        public string Height = "";                // the next point's height (Page Up / Page Down)
         public string Summary = "";               // length, segments, cost
         public string Details = "";               // raised / lowered / continues ...
         public readonly List<PanelCrossing> Crossings = new List<PanelCrossing>();
@@ -31,6 +32,7 @@ namespace RealisticRoads
         public float Length;                      // metres along the curve
         public float[] Road, Ground, Water;       // heights at evenly spaced samples
         public ProfileStyle[] Style;              // per sample
+        public Vector3[] Positions;               // where each sample is on the map
         public readonly List<float> Pillars = new List<float>();     // metres along the curve
         public readonly List<KeyValuePair<float, float>> Crossings = new List<KeyValuePair<float, float>>();   // metres along, crossed road's height
     }
@@ -85,12 +87,16 @@ namespace RealisticRoads
         private UITextureSprite profileSprite;
         private Texture2D profileTexture;
         private PanelProfile drawnProfile;
+        private Color32[] profilePixels;          // the drawn profile without the cursor line
+        private UILabel profileReadout;
+        private float cursorAlong = -1f;          // metres along the curve under the mouse on the side view (-1: none)
+        private bool cursorPinned;                // clicked: stays when the mouse leaves
         private readonly List<UIComponent> dynamic = new List<UIComponent>();
         private readonly List<KeyValuePair<UILabel, Func<PanelModel, string>>> texts = new List<KeyValuePair<UILabel, Func<PanelModel, string>>>();
         private string structure;
         private PanelModel current;
 
-        public Action Build, Undo, Clear, Close;
+        public Action Build, Undo, Clear, Close, GameTool;
 
         public bool Exists => panel != null;
 
@@ -152,6 +158,10 @@ namespace RealisticRoads
             profileSprite = null;
             profileTexture = null;
             drawnProfile = null;
+            profilePixels = null;
+            profileReadout = null;
+            cursorAlong = -1f;
+            cursorPinned = false;
             dynamic.Clear();
             texts.Clear();
             structure = null;
@@ -190,7 +200,7 @@ namespace RealisticRoads
         {
             var shape = new System.Text.StringBuilder();
             shape.Append(model.HasPoints).Append(model.CanBuild).Append(model.Profile != null).Append('|');
-            shape.Append(Lines(model.ProfileText, Width - 2f * Pad, 0.75f));
+            shape.Append(Lines(model.ProfileText, Width - 2f * Pad, 0.75f)).Append(Lines(model.Height, Width - 2f * Pad, 0.75f));
             // A text that wraps to more or fewer lines moves everything under it.
             float wide = Width - 2f * Pad;
             shape.Append(Lines(model.Road, wide, 0.85f)).Append(Lines(model.Summary, wide, 0.85f)).Append(Lines(model.Details, wide, 0.75f));
@@ -215,20 +225,30 @@ namespace RealisticRoads
 
             y = Header("ROAD", y);
             y = Text(m => m.Road, TextColor, 0.85f, y);
+            y = Text(m => m.Height, DimColor, 0.75f, y);
 
             y = Header("CURVE", y);
             y = Text(m => m.Summary, TextColor, 0.85f, y);
             y = Text(m => m.Details, DimColor, 0.75f, y);
 
             profileSprite = null;
+            profileReadout = null;
             drawnProfile = null;
+            profilePixels = null;
             if (model.Profile != null)
             {
                 y = Header("SIDE VIEW", y);
                 profileSprite = (UITextureSprite)panel.AddUIComponent(typeof(UITextureSprite));
                 profileSprite.size = new Vector2(ProfileWidth, ProfileHeight);
                 profileSprite.relativePosition = new Vector3(Pad, y);
-                profileSprite.isInteractive = false;
+                profileSprite.tooltip = "Move the mouse along it to see the height there (marked on the map); click to keep the mark";
+                profileSprite.eventMouseMove += (component, param) => SetCursor(MouseAlong(), false);
+                profileSprite.eventMouseLeave += (component, param) => { if (!cursorPinned) SetCursor(-1f, false); };
+                profileSprite.eventClick += (component, param) =>
+                {
+                    cursorPinned = !cursorPinned;
+                    SetCursor(cursorPinned ? MouseAlong() : -1f, true);
+                };
                 dynamic.Add(profileSprite);
                 y += ProfileHeight + 3f;
                 float x = Pad;
@@ -237,6 +257,16 @@ namespace RealisticRoads
                 Legend("pillar", PillarLine, x, y);
                 y += 16f;
                 y = Text(m => m.ProfileText, DimColor, 0.75f, y);
+                profileReadout = (UILabel)panel.AddUIComponent(typeof(UILabel));
+                profileReadout.autoSize = false;
+                profileReadout.size = new Vector2(Width - 2f * Pad, 16f);
+                profileReadout.textScale = 0.75f;
+                profileReadout.textColor = TextColor;
+                profileReadout.relativePosition = new Vector3(Pad, y);
+                profileReadout.isInteractive = false;
+                profileReadout.text = "";
+                dynamic.Add(profileReadout);
+                y += 18f;
             }
 
             if (model.Crossings.Count > 0)
@@ -308,12 +338,14 @@ namespace RealisticRoads
 
             // Actions.
             y += 6f;
-            float buttonWidth = (Width - 2f * Pad - 2f * 6f) / 3f;
+            float buttonWidth = (Width - 2f * Pad - 3f * 6f) / 4f;
             TextButton("Build", "Build the curve (Enter, or double-click)", new Vector2(Pad, y), buttonWidth, model.CanBuild, () => { if (Build != null) Build(); });
             TextButton("Undo", "Remove the last curve built (Ctrl+Z)", new Vector2(Pad + buttonWidth + 6f, y), buttonWidth, true, () => { if (Undo != null) Undo(); });
             TextButton("Clear", "Clear the points (Esc)", new Vector2(Pad + 2f * (buttonWidth + 6f), y), buttonWidth, model.HasPoints, () => { if (Clear != null) Clear(); });
+            TextButton("Game tool", "Draw this road with the game's own road tool instead (RR stays off until you pick it again)",
+                new Vector2(Pad + 3f * (buttonWidth + 6f), y), buttonWidth, true, () => { if (GameTool != null) GameTool(); });
             y += 36f;
-            y = Text(m => "Click: add a point   Right-click: remove the last one\nOn a road: join it   Crossings: pick above or here",
+            y = Text(m => "Click: add a point   Right-click: remove the last one\nPage Up / Down: height of the next point\nOn a road: join it   Crossings: pick above or here",
                 DimColor, 0.7f, y);
             panel.size = new Vector2(Width, y + Pad);
         }
@@ -402,7 +434,7 @@ namespace RealisticRoads
             button.size = new Vector2(width, 30f);
             button.relativePosition = new Vector3(at.x, at.y);
             button.text = text;
-            button.textScale = 0.9f;
+            button.textScale = 0.8f;
             button.tooltip = tooltip;
             button.normalBgSprite = "ButtonMenu";
             button.hoveredBgSprite = "ButtonMenuHovered";
@@ -525,10 +557,77 @@ namespace RealisticRoads
                     for (int y = Mathf.Max(cy - 1, 0); y <= Mathf.Min(cy + 1, h - 1); y++) pixels[y * w + x] = CrossingMark;
             }
 
+            profilePixels = pixels;
+            if (cursorAlong > profile.Length) cursorAlong = profile.Length;
+            ShowCursor();
+            profileSprite.texture = profileTexture;
+        }
+
+        // --- the side view's cursor ------------------------------------------------
+
+        // Metres along the curve under the mouse on the side view (-1 if it isn't over it).
+        private float MouseAlong()
+        {
+            var profile = drawnProfile;
+            if (profileSprite == null || profile == null) return -1f;
+            var view = UIView.GetAView();
+            Vector2 gui = view.ScreenPointToGUI(Input.mousePosition / view.inputScale);
+            float x = gui.x - profileSprite.absolutePosition.x;
+            if (x < 0f || x > ProfileWidth) return -1f;
+            return Mathf.Clamp01(x / (ProfileWidth - 1)) * profile.Length;
+        }
+
+        private void SetCursor(float along, bool force)
+        {
+            if (cursorPinned && !force) return;
+            if (Mathf.Abs(along - cursorAlong) < 0.01f && !force) return;
+            cursorAlong = along;
+            ShowCursor();
+        }
+
+        // Where the side view's cursor is on the map (for the curve tool to mark it).
+        public bool TryGetCursor(out Vector3 position)
+        {
+            position = Vector3.zero;
+            var profile = drawnProfile;
+            if (panel == null || !panel.isVisible || profile == null || profile.Positions == null || cursorAlong < 0f) return false;
+            position = profile.Positions[Sample(profile, cursorAlong)];
+            return true;
+        }
+
+        private static int Sample(PanelProfile profile, float along)
+        {
+            int last = profile.Road.Length - 1;
+            return Mathf.Clamp(Mathf.RoundToInt(along / Mathf.Max(profile.Length, 1f) * last), 0, last);
+        }
+
+        // The profile with a white line where the cursor is, and its readout under it.
+        private void ShowCursor()
+        {
+            var profile = drawnProfile;
+            if (profileTexture == null || profilePixels == null || profile == null) return;
+            const int w = ProfileWidth, h = ProfileHeight;
+            var pixels = profilePixels;
+            if (cursorAlong >= 0f)
+            {
+                pixels = (Color32[])profilePixels.Clone();
+                int x = Mathf.Clamp(Mathf.RoundToInt(cursorAlong / Mathf.Max(profile.Length, 1f) * (w - 1)), 0, w - 1);
+                for (int y = 0; y < h; y++) pixels[y * w + x] = CrossingMark;
+            }
             profileTexture.SetPixels32(pixels);
             profileTexture.Apply();
-            profileSprite.texture = profileTexture;
-            profileSprite.Invalidate();
+            if (profileSprite != null) profileSprite.Invalidate();
+            if (profileReadout != null) profileReadout.text = Readout(profile, cursorAlong);
+        }
+
+        private string Readout(PanelProfile profile, float along)
+        {
+            if (along < 0f) return "Point at the side view to see the height there";
+            int i = Sample(profile, along);
+            float above = profile.Road[i] - Mathf.Max(profile.Ground[i], profile.Water[i]);
+            string height = above >= 1f ? above.ToString("F0") + " m above the " + (profile.Water[i] > profile.Ground[i] + 0.3f ? "water" : "ground")
+                : above <= -1f ? (-above).ToString("F0") + " m below the ground" : "on the ground";
+            return along.ToString("F0") + " m along: " + height + ", " + StyleName(profile.Style[i]) + (cursorPinned ? "  (pinned)" : "");
         }
 
         private static int Row(float height, float low, float high, int rows)
