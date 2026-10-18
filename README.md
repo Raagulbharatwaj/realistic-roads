@@ -1,7 +1,8 @@
 # Realistic Roads (Cities: Skylines 1 mod)
 
-CS2-style road building for CS1: smooth curves in one action, bridges, flyovers, overpasses, underpasses and
-tunnels at crossings, smooth road splits and CS2-style junctions.
+CS2-style road building for CS1: draw a whole curve in one go, see it planned, and build it, with bridges,
+flyovers, overpasses, underpasses and tunnels at every crossing. The mod is now only the curve tool (RR); the
+smooth split, junction and road builder tools were removed to focus on it.
 
 - Plan and lessons learned: [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md)
 - Original brief: [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md)
@@ -31,10 +32,9 @@ The build copies `RealisticRoads.dll` + `CitiesHarmony.API.dll` to:
 ## 4. Test in game
 1. Close the game before every build (Windows locks loaded DLLs).
 2. Launch CS1 > **Content Manager > Mods** > tick **Realistic Roads**.
-3. Load a city. The **RR**, **SPL**, **JN** and **RB** buttons appear on the left (right-drag to move them).
-4. Options > Mod Settings > Realistic Roads:
-   - **CS2-style look for junctions the curve tool builds** (on by default);
-   - **Detailed logging** (off by default): logs every segment the game creates, from any tool.
+3. Load a city. The **RR** button appears on the left (right-drag to move it).
+4. Options > Mod Settings > Realistic Roads: **Detailed logging** (off by default) logs every segment the game
+   creates, from any tool.
 
 The log is `C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\output_log.txt`. To see the
 mod's lines and any errors:
@@ -55,17 +55,23 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    in the panel); otherwise it meets it at an angle like a normal junction.
    **Splits:** on the end of a road at least ~1.3x wider than the road you are drawing, the snap circle jumps to the
    **left or right half** under your cursor. The new road starts from that half, runs parallel for a short way, then
-   curves off. Attach a second branch to the other half and the smooth split is applied automatically.
+   curves off. Attach a second branch to the other half for a split.
    **Crossings:** where the curve crosses an existing road or track, a ring marks the crossing and a row of
    **icons** above it picks what happens (selected one is green; our road is yellow in the icons):
    - **junction** (default): junction, or level crossing for road x rail; passes over/under an elevated or
      underground road. Only networks that may join get one (roads, rail, road x rail); a road crossing a path,
      canal or the like defaults to **bridge**. A curve may cross the same road several times (junctions,
      bridges or tunnels; overpass/underpass only once per piece of road);
-   - **bridge**: our road goes over on a flyover (9 m clearance), the existing one is untouched. **+/-** sets the height;
-   - **overpass**: the existing road is lowered 8 m into a cutting (ramping down along it at 6 %), ours crosses at
-     ground level on a bridge deck. Needs ~140 m of plain road (no junction) on each side of the crossing;
-   - **underpass**: the existing road gets a short bridge, ours is dug 8 m down into an open cutting under it;
+   - **bridge**: our road goes over on a flyover (9 m clearance), the existing one is untouched. **+/-** sets the height.
+     Over a rail line the deck keeps a node right above the track (no pillar), 2 m higher, and the track dips 1 m
+     under it, so the overhead wires pass under the deck;
+   - **overpass**: the existing road is lowered 8 m into a cutting, ours crosses at ground level on a bridge deck.
+     A road ramps down at 4 % (~210 m of plain road, no junction, each side); a rail line at a gentle 2 %
+     (~485 m of plain track each side) and 1.5 m deeper in the middle, so its wires clear the deck. The crossing
+     gets one new node (none if one is already there). Several overpasses over the same line whose ramps would
+     meet share one lowered stretch: the line stays down between them instead of rising and dipping again;
+   - **underpass**: the existing road gets a short bridge, ours is dug 8 m down into an open cutting under it.
+     On rail no piece shorter than 30 m is left: the bridge runs on to the next node instead;
    - **tunnel**: ours goes 12 m under through a tunnel. Like the vanilla tool: an open cutting while it is less than
      8 m down, one slope piece with the portal, then the tunnel (no more rows of portals).
    Crossing at an angle, bridges, cuttings and lowered stretches get longer to fit the skewed footprint.
@@ -86,7 +92,9 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    curve won't build until they are fixed; warnings ("~") don't stop it. Preview colours: green ground, blue raised,
    orange lowered, purple steep, red too sharp.
 4. Points can go over trees and water. Over water the preview turns **blue**: that part is built as the road's
-   elevated road (deck on pillars), 10 m above the water, with ramps on land at a gentle 6 % slope.
+   elevated road (deck on pillars), 10 m above the water, with ramps on land at a gentle 4 % slope (3.5 % for rail).
+   Raised stretches over land get a pillar every 48 m (roads) or 96 m (rail); bridges over water keep ~100 m spans.
+   Rail decks over a crossing span at least 60 m, so no short pieces bunch up next to it.
 5. **Enter** or **double-click** builds it. Right-click removes the last point, **Esc** clears, Esc again leaves the tool.
 6. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
 
@@ -97,87 +105,6 @@ Bridges work; flyovers, tunnels, cuttings and level crossings are new: check the
 Ctrl+Z undoes a curve including any junctions/bridges it put into existing roads (those segments are rebuilt, so
 TM:PE settings or custom names on them are lost). Long curves are cut into ~120 m segments (shorter only in tight bends, ~100 m over water).
 
-## 6. Test smooth splits (milestone S1)
-1. Load a city with a road that splits in two (e.g. a one-way road splitting into two one-way roads).
-2. Click **SPL** (below RR) or press **Ctrl+Shift+J**.
-3. Hover over junctions. The circle shows: **green** = smoothed, **yellow** = a split that can be smoothed, **red** = not a split.
-   On a yellow/green junction, small blue dots show where the road edges will meet the trunk.
-4. Click a yellow junction: it turns green, the junction block and its crosswalks should disappear, and the two
-   branches should run back into the trunk side by side, with a gore nose where they part.
-   The log shows `Smooth split ON at node #...` with the branch angle and each branch's share of the trunk.
-   If one branch is as wide as the trunk (the road carrying on) and the other is narrower (a ramp), the wide one
-   keeps the trunk's full width and the ramp starts inside the trunk's outer edge and peels off; the log says
-   `carries on at full width`.
-5. Click it again to go back to the vanilla junction. Clicking a red one logs why it is not a split.
-6. Watch a few cars drive through, then save, quit, reload the city and check the shape is still there.
-
-Screenshots of before/after help a lot: the shape is computed, and the numbers may need tuning.
-
-## 7. CS2-style junctions (JN)
-Junctions built with RR get the CS2 look automatically; JN changes any other junction.
-1. Click **JN** (below SPL) or press **Ctrl+Shift+N**. Hover junctions: **green** = CS2-style, **yellow** = can be,
-   **red** = can't (rail, paths, elevated or underground for now; the info panel says why).
-2. Click a yellow junction: the vanilla junction piece (crosswalks, median blocks) is replaced by a flat asphalt
-   floor and raised sidewalk corners that curve from road to road. The road ends move 3 m back for rounder corners.
-3. With the mouse over a CS2-style junction, **+** / **-** make the corners bigger / smaller (1 m steps, 0-20 m).
-   Click again to go back to vanilla. **Ctrl+Z** switches the last junction you clicked back.
-   **Page Up / Page Down** make the junction asphalt lighter / darker (all junctions, saved between games). The log
-   shows `Junction asphalt shade X`: if you find a value that matches the roads, send it and it becomes the default.
-4. Traffic is unchanged; cars follow the new road ends. Saves keep the junctions; without the mod they are vanilla.
-
-Please check and screenshot: the asphalt and sidewalk colours (they use the game's road shader, like Intersection
-Marking Tool's fillers), the curb height, any gaps or flicker where the roads meet the junction, and traffic lights.
-From far away the vanilla junction is still drawn. If drawing fails, the log says
-`Drawing CS2-style junctions failed` and the junctions show as vanilla.
-
-### Grade separation (JN, Tab)
-Raises a group of lanes over a junction: they split off the road, climb, fly over the junction and land on the road
-straight across, while the other lanes stay on the ground beside them.
-1. In JN press **Tab** (Tab again goes back to the junction look). Click a junction.
-2. Its roads show their car lanes: **yellow** go into the junction, **grey** come out. Click lanes on one road to raise
-   them; click more next to them to grow the group (all must go the same way), click an end lane to drop it.
-3. The preview shows each part: **green** stays on the ground (a road with sidewalks), **blue** is raised (an
-   elevated road, with barriers where the road type has them). Each part uses the loaded road type, vanilla or
-   Workshop, with the same lanes each way and the closest widths. If none fits, the info panel says which lane
-   groups on that road would work.
-4. Drag the **white circle** along the road (or **[** / **]**) to move the split, up to 500 m out. The far side splits
-   at the same distance (grey circle). Drag the **blue circle** at the junction up or down (or **Up** / **Down**) for
-   the deck height, 9-40 m above the junction. The ramps are worked out at up to 6 %; the split can't come closer
-   than the ramps need (the panel shows the range).
-5. **Enter** builds it; **Ctrl+Z** (in this mode) undoes the last grade separation and puts the old roads back. **Esc** drops the lanes, then the
-   junction, then leaves; right-click does the same without leaving.
-
-The roads between the junction and the split are replaced, so TM:PE settings on them are lost. Where one ground part
-and the raised part leave the split, it gets a smooth split; with two ground parts the split is a normal junction.
-
-## 8. Road builder (RB, first version)
-Put a road together from lanes, CS2 Road Builder style. Design: [docs/R3_ROAD_BUILDER.md](docs/R3_ROAD_BUILDER.md).
-1. Click **RB** (below JN) or press **Ctrl+Shift+B**. The panel shows the road to scale, left to right in the direction
-   you draw it: `Walk` sidewalk, `<` / `>` car lanes (backward / forward), `Bus`, `Bk` bike, `P` parking, and medians
-   (`=` painted, `Grs` grass, `Tree` trees).
-2. Start from a **preset**, click a piece to select it, then **Add** lanes after it, **< >** to move it,
-   **Narrower / Wider** (0.5 m steps; both sidewalks change together), **Flip** its direction, **Style** for a
-   median, **Remove**. **Speed -/+** sets the speed limit. Errors (`!`) and warnings (`~`) show live under the road.
-3. Type a name and press **Create road**. It is saved to
-   `%LOCALAPPDATA%\Colossal Order\Cities_Skylines\RealisticRoads\Roads` and selected: press **RR** to draw it. After
-   you load a city again it is also in the vanilla roads menu, next to the road it was made from.
-4. Your roads are listed at the bottom: click one to load it into the editor, **Delete** removes it (only when none of
-   it is built). Create always makes a new road type; roads already built keep theirs.
-
-How it works for now (milestone R3.2): the mod copies the closest vanilla road (e.g. Medium Road with grass for 2+2
-lanes with a grass median), with its elevated, bridge, slope and tunnel versions, and puts in your lanes. Traffic,
-parking, bus stops and bikes use your lanes; **the look is the vanilla road stretched to the new width**, so lane
-markings won't match your lanes yet (generated road surfaces are the next step, R3.3).
-
-Please check and send the log (search for `Road builder` and `Mesh `):
-- the panel works and Create says the road is selected; build it with RR (with a bridge and a tunnel);
-- cars, buses and bikes use the lanes you made (TM:PE's lane view helps);
-- for now, don't save cities with road builder roads you want to keep: they are missing when the city loads again (the
-  load-time hook that kept them stopped cities from loading; it is being reworked);
-- if the log says `prefab indices changed`, don't save that city and send the log.
-Saved cities need the mod for these roads: without it the game reports them missing.
-
-## 9. What's next
-See [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md) for the current plan (R1-R4),
-[docs/R3_ROAD_BUILDER.md](docs/R3_ROAD_BUILDER.md) for the road builder design and
+## 6. What's next
+See [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md) for the plan and
 [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) for the original brief.

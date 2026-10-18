@@ -9,7 +9,6 @@
 
   <ItemGroup>
     <Compile Include="..\..\RealisticRoads\CurveMath.cs" Link="CurveMath.cs" />
-    <Compile Include="..\..\RealisticRoads\RoadConfig.cs" Link="RoadConfig.cs" />
   </ItemGroup>
 
   <ItemGroup>

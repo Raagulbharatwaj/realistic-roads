@@ -46,6 +46,7 @@ namespace RealisticRoads
         public const float BridgeMinSpacing = 40f;
         private const float WaterJoin = 60f;          // wet patches closer than this are one water crossing
         private const float RaisedSpacing = 48f;      // node (pillar) spacing on raised stretches, like vanilla elevated roads
+        private const float RailRaisedSpacing = 96f;  // rail: as few nodes as possible, long spans
         private const float HeightStep = 5f;
         private const float MaxExtraHeight = 60f;
         private const float IconSize = 34f;
@@ -478,7 +479,7 @@ namespace RealisticRoads
 
             Mod.Log("Building " + SelectedNetwork.name + ": " + division.Length.ToString("F0") + " m in " +
                     (division.Points.Count - 1) + " segment(s), " + division.Crossings.Count + " crossing(s)");
-            NetworkBuilder.BuildCurve(SelectedNetwork, division.Plan, division.StartSplit, division.EndSplit);
+            NetworkBuilder.BuildCurve(SelectedNetwork, division.Plan);
             ClearPoints();
         }
 
@@ -567,8 +568,7 @@ namespace RealisticRoads
             Vector3 point, ours;
             CurveMath.PointAt(polyline, crossing.Distance, out point, out ours);
             crossing.Skew = RoadPlanner.Skew(crossing, ours);
-            float half = SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f;
-            return RoadPlanner.SpanHalf(crossing, half, crossing.Type == CrossingType.Overpass);
+            return RoadPlanner.DeckHalf(crossing, SelectedNetwork, crossing.Type == CrossingType.Overpass);
         }
 
         // Splits raised pieces longer than RaisedSpacing (descending, so the
@@ -591,7 +591,8 @@ namespace RealisticRoads
                 if (plan.Kinds[i - 1] != NodeKind.Elevated || plan.Kinds[i] != NodeKind.Elevated) continue;
                 if (keep.Contains(i) || keep.Contains(i - 1)) continue;
                 float length = CurveMath.FlatDistance(division.Points[i - 1], division.Points[i]);
-                int pieces = Mathf.CeilToInt(length / RaisedSpacing - 0.15f);
+                float spacing = RoadPlanner.IsRail(SelectedNetwork) ? RailRaisedSpacing : RaisedSpacing;
+                int pieces = Mathf.CeilToInt(length / spacing - 0.15f);
                 if (pieces < 2) continue;
                 var bezier = PieceBezier(division, i);
                 for (int k = pieces - 1; k >= 1; k--)
@@ -618,6 +619,9 @@ namespace RealisticRoads
             {
                 var crossing = division.Crossings[c];
                 if (crossing.Type != CrossingType.Bridge && crossing.Type != CrossingType.Overpass) continue;
+                // Over a rail line the bridge keeps its node above the track (lifted,
+                // no pillar) so the wires pass under the deck.
+                if (crossing.Type == CrossingType.Bridge && RoadPlanner.CrossesRail(crossing)) continue;
                 int k = division.CrossingIndex[c];
                 if (k <= 0 || k >= plan.Points.Count - 1) continue;
                 // Only with a raised node on each side to carry the deck, and only if

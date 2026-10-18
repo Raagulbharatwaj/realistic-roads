@@ -14,12 +14,12 @@ namespace RealisticRoads
     public class Mod : IUserMod
     {
         public string Name => "Realistic Roads";
-        public string Description => "CS2-style road drawing: long curves, bridges, tunnels, overpasses and underpasses at each crossing, smooth splits, CS2-style junctions.";
+        public string Description => "CS2-style road drawing: long curves, bridges, tunnels, overpasses and underpasses at each crossing.";
 
         // Settings (Options > Mod Settings), kept between games.
         // Read on the main thread when the mod starts; plain fields after that,
         // so any thread may read them (PlayerPrefs is main-thread only).
-        private static bool debugLogging, autoJunctions = true;
+        private static bool debugLogging;
 
         public static bool DebugLogging
         {
@@ -27,16 +27,9 @@ namespace RealisticRoads
             set { debugLogging = value; SetSetting("RealisticRoads.DebugLogging", value); }
         }
 
-        public static bool AutoJunctions
-        {
-            get { return autoJunctions; }
-            set { autoJunctions = value; SetSetting("RealisticRoads.AutoJunctions", value); }
-        }
-
         private static void LoadSettings()
         {
             debugLogging = Setting("RealisticRoads.DebugLogging", false);
-            autoJunctions = Setting("RealisticRoads.AutoJunctions", true);
         }
 
         private static bool Setting(string key, bool fallback)
@@ -100,7 +93,6 @@ namespace RealisticRoads
         public void OnSettingsUI(UIHelperBase helper)
         {
             var group = helper.AddGroup("Realistic Roads");
-            group.AddCheckbox("CS2-style look for junctions the curve tool builds", AutoJunctions, value => AutoJunctions = value);
             group.AddCheckbox("Detailed logging (every segment the game creates)", DebugLogging, value => DebugLogging = value);
         }
 
@@ -162,14 +154,6 @@ namespace RealisticRoads
         {
             Mod.Log("City loaded, mode = " + mode);
             Mod.ShowPendingWarning();
-            try
-            {
-                RoadTypes.CreateMissing();
-            }
-            catch (Exception e)
-            {
-                Mod.LogError("Road builder: registering library roads failed", e);
-            }
             ToolActivator.Create(mode);
         }
 

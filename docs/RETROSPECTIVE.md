@@ -101,6 +101,11 @@ The user's decisions:
 
 ### Plan
 
+**Update:** the smooth split tool (SPL), the junction tool (JN, with the CS2 junction look and grade
+separation) and the road builder (RB) have been removed from the mod. The plan is now to perfect the curve
+tool (RR) and finish the features around it: building realistic roads and improving the existing network as
+the curve crosses it. R2-R4 below are kept only as a record; their code is in the git history.
+
 **R1 – Builder like the vanilla tool (small, now).**
 - ~~Slope segments from underground to surface, OnGround flags, FindDirection after building or
   moving.~~ Done.
@@ -130,7 +135,7 @@ The user's decisions:
   on load. Without the mod those roads are missing, so a "Convert to vanilla" button swaps them back to the road
   they were cloned from.
 - The R2 junction renderer draws these roads' junctions too, so custom roads get CS2 junctions.
-- Full design and milestones: [R3_ROAD_BUILDER.md](R3_ROAD_BUILDER.md).
+- Full design and milestones: `docs/R3_ROAD_BUILDER.md` in the git history.
 
 **R4 – Merges and splits with proper road types.**
 - Use R3 to generate the transition road types a split or merge needs (e.g. 3 lanes to 2+1, a 3+1

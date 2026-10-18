@@ -11,12 +11,7 @@ namespace RealisticRoads
     public static class ToolActivator
     {
         private static CurveTool curveTool;
-        private static SplitTool splitTool;
-        private static JunctionTool junctionTool;
-        private static UIButton junctionButton;
         private static UIButton curveButton;
-        private static UIButton splitButton;
-        private static UIButton roadBuilderButton;
         private static UILabel infoLabel;
 
         public static void Create(LoadMode mode)
@@ -33,30 +28,13 @@ namespace RealisticRoads
                 var controller = ToolsModifierControl.toolController;
                 curveTool = controller.gameObject.AddComponent<CurveTool>();
                 curveTool.enabled = false;
-                splitTool = controller.gameObject.AddComponent<SplitTool>();
-                splitTool.enabled = false;
-                junctionTool = controller.gameObject.AddComponent<JunctionTool>();
-                junctionTool.enabled = false;
 
                 curveButton = CreateButton("RealisticRoadsCurveButton", "RR",
                     "Realistic Roads curve tool (Ctrl+Shift+C)", 120f, ToggleCurveTool);
-                splitButton = CreateButton("RealisticRoadsSplitButton", "SPL",
-                    "Realistic Roads smooth split tool (Ctrl+Shift+J)\nClick a junction where a road splits in two", 172f, ToggleSplitTool);
-
-                junctionButton = CreateButton("RealisticRoadsJunctionButton", "JN",
-                    "Realistic Roads junction tool (Ctrl+Shift+N)\nClick a junction for the CS2 look", 224f, ToggleJunctionTool);
-
-                roadBuilderButton = CreateButton("RealisticRoadsRoadBuilderButton", "RB",
-                    "Realistic Roads road builder (Ctrl+Shift+B)\nPut a road together from lanes", 276f, ToggleRoadBuilder);
-                RoadBuilderPanel.Create();
-
-                infoLabel = CreateInfoLabel(328f);
+                infoLabel = CreateInfoLabel(172f);
                 NetworkBuilder.ClearUndo();
 
-                Mod.Log("Tools ready: RR / Ctrl+Shift+C = curve tool, SPL / Ctrl+Shift+J = smooth split tool, " +
-                        "JN / Ctrl+Shift+N = junction tool, RB / Ctrl+Shift+B = road builder");
-                SmoothSplits.RefreshAll();
-                Junctions.RefreshAll();
+                Mod.Log("Tools ready: RR / Ctrl+Shift+C = curve tool");
             }
             catch (Exception e)
             {
@@ -72,46 +50,23 @@ namespace RealisticRoads
                 var current = ToolsModifierControl.toolController != null
                     ? ToolsModifierControl.toolController.CurrentTool
                     : null;
-                if (current != null && (current == curveTool || current == splitTool || current == junctionTool))
+                if (current != null && current == curveTool)
                     ToolsModifierControl.SetTool<DefaultTool>();
                 if (curveTool != null)
                 {
                     curveTool.DestroyButtons();
                     UnityEngine.Object.Destroy(curveTool);
                 }
-                if (splitTool != null) UnityEngine.Object.Destroy(splitTool);
-                if (junctionTool != null) UnityEngine.Object.Destroy(junctionTool);
-                if (junctionButton != null) UnityEngine.Object.Destroy(junctionButton.gameObject);
                 if (curveButton != null) UnityEngine.Object.Destroy(curveButton.gameObject);
-                if (splitButton != null) UnityEngine.Object.Destroy(splitButton.gameObject);
                 if (infoLabel != null) UnityEngine.Object.Destroy(infoLabel.gameObject);
-                if (roadBuilderButton != null) UnityEngine.Object.Destroy(roadBuilderButton.gameObject);
-                RoadBuilderPanel.Destroy();
             }
             catch (Exception e)
             {
                 Mod.LogError("Removing the tools failed", e);
             }
             curveTool = null;
-            splitTool = null;
             curveButton = null;
-            splitButton = null;
-            junctionTool = null;
-            junctionButton = null;
             infoLabel = null;
-            roadBuilderButton = null;
-        }
-
-        public static void ToggleRoadBuilder()
-        {
-            try
-            {
-                RoadBuilderPanel.Toggle();
-            }
-            catch (Exception e)
-            {
-                Mod.LogError("Opening the road builder failed", e);
-            }
         }
 
         public static void ToggleCurveTool()
@@ -135,46 +90,6 @@ namespace RealisticRoads
             catch (Exception e)
             {
                 Mod.LogError("Switching the curve tool failed", e);
-            }
-        }
-
-        public static void ToggleJunctionTool()
-        {
-            if (junctionTool == null) return;
-            try
-            {
-                if (junctionTool.IsActive)
-                {
-                    ToolsModifierControl.SetTool<DefaultTool>();
-                    Mod.Log("Junction tool off");
-                    return;
-                }
-                ToolsModifierControl.toolController.CurrentTool = junctionTool;
-                Mod.Log("Junction tool on: green = CS2-style, yellow = can be, red = can't");
-            }
-            catch (Exception e)
-            {
-                Mod.LogError("Switching the junction tool failed", e);
-            }
-        }
-
-        public static void ToggleSplitTool()
-        {
-            if (splitTool == null) return;
-            try
-            {
-                if (splitTool.IsActive)
-                {
-                    ToolsModifierControl.SetTool<DefaultTool>();
-                    Mod.Log("Smooth split tool off");
-                    return;
-                }
-                ToolsModifierControl.toolController.CurrentTool = splitTool;
-                Mod.Log("Smooth split tool on: green = smoothed, yellow = can smooth, red = not a split");
-            }
-            catch (Exception e)
-            {
-                Mod.LogError("Switching the smooth split tool failed", e);
             }
         }
 
@@ -255,25 +170,16 @@ namespace RealisticRoads
         }
     }
 
-    // Ctrl+Shift+C toggles the curve tool, Ctrl+Shift+J the smooth split tool,
-    // Ctrl+Shift+N the junction tool, Ctrl+Shift+B the road builder.
-    // OnUpdate runs on the main thread.
+    // Ctrl+Shift+C toggles the curve tool. OnUpdate runs on the main thread.
     public class HotkeyHandler : ThreadingExtensionBase
     {
         public override void OnUpdate(float realTimeDelta, float simulationTimeDelta)
         {
-            bool c = Input.GetKeyDown(KeyCode.C);
-            bool j = Input.GetKeyDown(KeyCode.J);
-            bool n = Input.GetKeyDown(KeyCode.N);
-            bool b = Input.GetKeyDown(KeyCode.B);
-            if (!c && !j && !n && !b) return;
+            if (!Input.GetKeyDown(KeyCode.C)) return;
             var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             var shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
             if (!ctrl || !shift || UIView.HasInputFocus()) return;
-            if (c) ToolActivator.ToggleCurveTool();
-            else if (j) ToolActivator.ToggleSplitTool();
-            else if (n) ToolActivator.ToggleJunctionTool();
-            else ToolActivator.ToggleRoadBuilder();
+            ToolActivator.ToggleCurveTool();
         }
     }
 }
