@@ -40,7 +40,11 @@ namespace RealisticRoads
     public class Plan
     {
         public List<Vector3> Points;          // y = planned height
-        public List<Vector3> Tangents;
+        public List<Vector3> Tangents;        // direction leaving each node
+        // Direction arriving at each node: the same as Tangents except at a
+        // sharp corner (two straight pieces meeting at an angle). May be null.
+        public List<Vector3> InTangents;
+        public Vector3 InTangent(int i) => InTangents != null && i < InTangents.Count ? InTangents[i] : Tangents[i];
         public NodeKind[] Kinds;
         public bool[] Middle;                 // suspension bridges: the node between two towers
         public List<Crossing> Crossings = new List<Crossing>();
@@ -91,12 +95,13 @@ namespace RealisticRoads
         public static Plan Make(NetInfo info, List<Vector3> points, List<Vector3> tangents,
             List<Crossing> crossings, List<int> crossingIndex, List<WaterRun> waterRuns, ushort startNode, ushort endNode,
             ushort startSegment = 0, float startT = 0f, ushort endSegment = 0, float endT = 0f,
-            List<KeyValuePair<Vector3, float>> lifts = null)
+            List<KeyValuePair<Vector3, float>> lifts = null, List<Vector3> inTangents = null)
         {
             var plan = new Plan
             {
                 Points = new List<Vector3>(points),
                 Tangents = new List<Vector3>(tangents),
+                InTangents = inTangents != null ? new List<Vector3>(inTangents) : null,
                 Crossings = crossings,
                 CrossingIndex = crossingIndex,
                 WaterRuns = waterRuns,
@@ -421,6 +426,7 @@ namespace RealisticRoads
         {
             plan.Points.RemoveAt(index);
             plan.Tangents.RemoveAt(index);
+            if (plan.InTangents != null && index < plan.InTangents.Count) plan.InTangents.RemoveAt(index);
             plan.Kinds = Without(plan.Kinds, index);
             if (plan.Steep != null)
             {
@@ -1017,7 +1023,7 @@ namespace RealisticRoads
             }
         }
 
-        private static IEnumerable<ushort> NearbySegments(Vector3 p, float radius)
+        internal static IEnumerable<ushort> NearbySegments(Vector3 p, float radius)
         {
             var net = NetManager.instance;
             int x0 = Cell(p.x - radius), x1 = Cell(p.x + radius), z0 = Cell(p.z - radius), z1 = Cell(p.z + radius);

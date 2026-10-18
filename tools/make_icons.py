@@ -146,8 +146,33 @@ for name, fill, edge in (("button", (35, 45, 60, 235), (100, 120, 145, 255)),
     d.rounded_rectangle([S, S, 45 * S, 45 * S], radius=9 * S, fill=fill, outline=edge, width=2 * S)
     im.resize((46, 46), Image.LANCZOS).save(f"{out}/{name}.png")
 
+# drawing modes: a curved piece, straight pieces with a rounded corner, and
+# snapping (a fixed angle between two rays, with its arc)
+im, d = canvas()
+P = [(5, 34), (22, 34), (18, 6), (35, 6)]
+pts = []
+for i in range(33):
+    t = i / 32.0
+    w = ((1 - t) ** 3, 3 * t * (1 - t) ** 2, 3 * t * t * (1 - t), t ** 3)
+    pts.append((sum(c * P[j][0] for j, c in enumerate(w)) * S, sum(c * P[j][1] for j, c in enumerate(w)) * S))
+d.line(pts, fill=OURS, width=int(6 * S), joint="curve")
+save(im, "curve")
+
+im, d = canvas()
+d.line(p(6, 34, 6, 18), fill=OURS, width=int(6 * S))
+d.arc(p(6, 6, 30, 30), 180, 270, fill=OURS, width=int(6 * S))
+d.line(p(18, 6, 34, 6), fill=OURS, width=int(6 * S))
+save(im, "straight")
+
+im, d = canvas()
+d.line(p(7, 33, 35, 33), fill=DASH, width=int(3 * S))
+d.line(p(7, 33, 30, 10), fill=DASH, width=int(3 * S))
+d.arc(p(-7, 19, 21, 47), 315, 360, fill=OURS, width=int(3 * S))
+d.ellipse(p(4, 30, 10, 36), fill=OURS)
+save(im, "snap")
+
 # preview sheet for checking by eye
-names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo"]
+names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")

@@ -279,7 +279,7 @@ namespace RealisticRoads
                     float run = CurveMath.FlatDistance(points[i - 1], points[i]);
                     float slope = run > 0.01f ? (points[i].y - points[i - 1].y) / run : 0f;
                     Vector3 startDir = new Vector3(plan.Tangents[i - 1].x, slope, plan.Tangents[i - 1].z);
-                    Vector3 endDir = -new Vector3(plan.Tangents[i].x, slope, plan.Tangents[i].z);
+                    Vector3 endDir = -new Vector3(plan.InTangent(i).x, slope, plan.InTangent(i).z);
                     NetInfo segmentInfo = RoadPlanner.SegmentInfo(info, plan.Kinds[i - 1], plan.Kinds[i]) ?? info;
                     if (segmentInfo != info)
                     {

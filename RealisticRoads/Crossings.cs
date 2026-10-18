@@ -201,7 +201,7 @@ namespace RealisticRoads
             catch { return ItemClass.Layer.None; }
         }
 
-        private static bool IsPhysical(NetInfo info)
+        internal static bool IsPhysical(NetInfo info)
         {
             var layer = info.m_class.m_layer;
             if ((layer & (ItemClass.Layer.Default | ItemClass.Layer.MetroTunnels | ShipLayer)) == ItemClass.Layer.None) return false;

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -129,6 +130,191 @@ namespace RealisticRoads
             }
             return result;
         }
+
+        // The curve through 'controls' when some spans are straight: span i
+        // (controls i to i+1) is a straight line where straight[i], else a curve.
+        // A corner between two straight spans is rounded with 'radius' (less if
+        // the spans are too short for it), or left sharp with radius 0: the
+        // distances along the polyline of sharp corners are in 'sharpCorners'
+        // (each becomes a node there). A curve next to a straight span leaves
+        // it smoothly, along its line. 'controlSamples': the polyline index of
+        // each control (the middle of its rounding for a rounded corner).
+        // No straight span: the same curve as SampleShaped.
+        public static List<Vector3> SampleMixed(IList<Vector3> controls, IList<bool> straight, float radius, Vector3 startDir,
+            Vector3 endDir, out int[] controlSamples, out List<float> sharpCorners)
+        {
+            int n = controls.Count;
+            controlSamples = new int[n];
+            sharpCorners = new List<float>();
+            bool any = false;
+            if (straight != null)
+                for (int i = 0; i < n - 1 && i < straight.Count; i++) any |= straight[i];
+            if (n < 2 || !any)
+            {
+                var shaped = SampleShaped(controls, startDir, endDir);
+                for (int c = 0; c < n; c++) controlSamples[c] = Math.Min(ShapedSampleIndex(n, c, startDir, endDir), shaped.Count - 1);
+                return shaped;
+            }
+
+            Func<int, bool> isStraight = i => i >= 0 && i < n - 1 && i < straight.Count && straight[i];
+            var dir = new Vector3[n - 1];
+            var length = new float[n - 1];
+            for (int i = 0; i < n - 1; i++)
+            {
+                dir[i] = FlatNormal(controls[i + 1] - controls[i]);
+                length[i] = FlatDistance(controls[i], controls[i + 1]);
+            }
+
+            // Corners between two straight spans: how far the rounding reaches
+            // along each (0: sharp), and the turn there.
+            var reach = new float[n];
+            var turn = new float[n];
+            var sharp = new bool[n];
+            for (int i = 1; i < n - 1; i++)
+            {
+                if (!isStraight(i - 1) || !isStraight(i)) continue;
+                turn[i] = BendAngle(dir[i - 1], dir[i]);
+                if (turn[i] < 0.5f) continue;
+                if (radius < 0.5f) { sharp[i] = true; continue; }
+                float half = turn[i] * 0.5f / Rad2Deg;
+                reach[i] = Mathf.Min(radius * (float)Math.Tan(half), Mathf.Min(length[i - 1], length[i]) * 0.5f);
+            }
+
+            // Directions at the controls, for the curved spans.
+            var tangent = new Vector3[n];
+            for (int i = 1; i < n - 1; i++)
+            {
+                if (isStraight(i - 1)) tangent[i] = dir[i - 1];
+                else if (isStraight(i)) tangent[i] = dir[i];
+                else tangent[i] = FlatNormal(controls[i + 1] - controls[i - 1]);
+                if (tangent[i] == Vector3.zero) tangent[i] = dir[i];
+            }
+            Vector3 startN = FlatNormal(startDir), endN = FlatNormal(endDir);
+            tangent[0] = isStraight(0) ? dir[0] : startN != Vector3.zero ? startN
+                : n > 2 ? FlatNormal(2f * dir[0] - tangent[1]) : dir[0];
+            tangent[n - 1] = isStraight(n - 2) ? dir[n - 2] : endN != Vector3.zero ? endN
+                : n > 2 ? FlatNormal(2f * dir[n - 2] - tangent[n - 2]) : dir[n - 2];
+            for (int i = 0; i < n; i++) if (tangent[i] == Vector3.zero) tangent[i] = dir[Math.Min(i, n - 2)];
+
+            var result = new List<Vector3> { controls[0] };
+            for (int i = 0; i < n - 1; i++)
+            {
+                Vector3 a = controls[i], b = controls[i + 1];
+                if (isStraight(i))
+                {
+                    // The line up to where the corner's rounding starts (or the next control).
+                    Vector3 end = reach[i + 1] > 0f ? Vector3.Lerp(a, b, 1f - reach[i + 1] / Mathf.Max(length[i], 0.01f)) : b;
+                    Vector3 from = result[result.Count - 1];
+                    int steps = Math.Max(1, (int)Math.Ceiling(FlatDistance(from, end) / LineSampleSpacing));
+                    for (int k = 1; k <= steps; k++) result.Add(Vector3.Lerp(from, end, k / (float)steps));
+                    if (reach[i + 1] > 0f)
+                    {
+                        // Round the corner: a circular arc (as a cubic Bezier) from 'end'
+                        // to as far along the next span.
+                        int c = i + 1;
+                        Vector3 next = Vector3.Lerp(b, controls[c + 1], reach[c] / Mathf.Max(length[c], 0.01f));
+                        float angle = turn[c] / Rad2Deg;
+                        float r = reach[c] / (float)Math.Tan(angle * 0.5f);
+                        float handle = 4f / 3f * (float)Math.Tan(angle * 0.25f) * r;
+                        Vector3 h1 = end + dir[i] * handle, h2 = next - dir[c] * handle;
+                        h1.y = end.y; h2.y = next.y;
+                        int arcSteps = Math.Max(4, (int)Math.Ceiling(r * angle / ArcSampleSpacing));
+                        for (int k = 1; k <= arcSteps; k++)
+                        {
+                            result.Add(Bezier(end, h1, h2, next, k / (float)arcSteps));
+                            if (k == arcSteps / 2) controlSamples[c] = result.Count - 1;
+                        }
+                    }
+                    else controlSamples[i + 1] = result.Count - 1;
+                }
+                else
+                {
+                    // A curve leaving and reaching its controls along their directions.
+                    float third = length[i] / 3f;
+                    Vector3 h1 = a + tangent[i] * third, h2 = b - tangent[i + 1] * third;
+                    h1.y = a.y; h2.y = b.y;
+                    for (int k = 1; k <= SamplesPerSpan; k++)
+                        result.Add(k == SamplesPerSpan ? b : Bezier(a, h1, h2, b, k / (float)SamplesPerSpan));
+                    controlSamples[i + 1] = result.Count - 1;
+                }
+            }
+
+            float along = 0f;
+            int sample = 0;
+            for (int c = 1; c < n - 1; c++)
+            {
+                for (; sample < controlSamples[c]; sample++) along += FlatDistance(result[sample], result[sample + 1]);
+                if (sharp[c]) sharpCorners.Add(along);
+            }
+            return result;
+        }
+
+        // What a snapped direction lined up with.
+        public enum SnapKind { None, Grid, Parallel, Perpendicular }
+
+        // Signed angle from 'a' to 'b' seen from above, in degrees:
+        // positive turns anticlockwise (left), negative clockwise (right).
+        public static float SignedAngle(Vector3 a, Vector3 b)
+        {
+            a = FlatNormal(a);
+            b = FlatNormal(b);
+            return (float)Math.Atan2(a.x * b.z - a.z * b.x, a.x * b.x + a.z * b.z) * Rad2Deg;
+        }
+
+        // 'v' turned by 'degrees' (anticlockwise, seen from above), flat.
+        public static Vector3 Rotate(Vector3 v, float degrees)
+        {
+            v = FlatNormal(v);
+            double r = degrees / Rad2Deg;
+            float cos = (float)Math.Cos(r), sin = (float)Math.Sin(r);
+            return new Vector3(v.x * cos - v.z * sin, 0f, v.x * sin + v.z * cos);
+        }
+
+        // The direction to snap 'raw' to: parallel or perpendicular to one of
+        // 'roads' (directions of roads nearby) when within 'roadTolerance'
+        // degrees of it, else the nearest multiple of 'step' degrees turned
+        // from 'reference' (the previous piece, or north for the first).
+        public static Vector3 SnapDirection(Vector3 raw, Vector3 reference, IList<Vector3> roads, float step, float roadTolerance,
+            out SnapKind kind)
+        {
+            raw = FlatNormal(raw);
+            kind = SnapKind.None;
+            if (raw == Vector3.zero) return raw;
+            Vector3 best = Vector3.zero;
+            float bestAngle = roadTolerance;
+            if (roads != null)
+                foreach (var road in roads)
+                {
+                    Vector3 along = FlatNormal(road);
+                    if (along == Vector3.zero) continue;
+                    Vector3 across = Rotate(along, 90f);
+                    foreach (var candidate in new[] { along, -along, across, -across })
+                    {
+                        float angle = BendAngle(raw, candidate);
+                        if (angle > bestAngle) continue;
+                        bestAngle = angle;
+                        best = candidate;
+                        kind = candidate == along || candidate == -along ? SnapKind.Parallel : SnapKind.Perpendicular;
+                    }
+                }
+            if (kind != SnapKind.None) return best;
+            reference = FlatNormal(reference);
+            if (reference == Vector3.zero || step <= 0f) return raw;
+            kind = SnapKind.Grid;
+            float turn = SignedAngle(reference, raw);
+            return Rotate(reference, (float)Math.Round(turn / step) * step);
+        }
+
+        // 'length' to the nearest multiple of 'step' (at least one step).
+        public static float SnapLength(float length, float step)
+        {
+            if (step <= 0f) return length;
+            return Math.Max(step, (float)Math.Round(length / step) * step);
+        }
+
+        private const float LineSampleSpacing = 8f;   // metres between samples on a straight span
+        private const float ArcSampleSpacing = 4f;     // and on a rounded corner
+        private const float Rad2Deg = 57.29578f;
 
         // Index in SampleShaped's polyline of control point 'c' (of 'count'):
         // ShapeEnds adds a guide point after the first and before the last
