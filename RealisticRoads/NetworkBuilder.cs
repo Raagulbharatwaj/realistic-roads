@@ -77,11 +77,14 @@ namespace RealisticRoads
 
         // Only touched on the simulation thread.
         private static readonly List<Build> undoStack = new List<Build>();
+        // How many builds can be undone, for the panel's Undo button (any thread).
+        public static volatile int UndoCount;
 
         private static void Keep(Build build)
         {
             undoStack.Add(build);
             if (undoStack.Count > MaxUndo) undoStack.RemoveAt(0);
+            UndoCount = undoStack.Count;
         }
 
         // Builds 'plan' (see RoadPlanner) with 'info'.
@@ -97,7 +100,11 @@ namespace RealisticRoads
 
         public static void ClearUndo()
         {
-            SimulationManager.instance.AddAction(() => undoStack.Clear());
+            SimulationManager.instance.AddAction(() =>
+            {
+                undoStack.Clear();
+                UndoCount = 0;
+            });
         }
 
         private static bool BuildNow(NetInfo info, Plan plan)
@@ -740,6 +747,7 @@ namespace RealisticRoads
             }
             var build = undoStack[undoStack.Count - 1];
             undoStack.RemoveAt(undoStack.Count - 1);
+            UndoCount = undoStack.Count;
             Remove(build);
             Refund(build);
             Mod.Log("Undo: removed " + build.Segments.Count + " segment(s)" +

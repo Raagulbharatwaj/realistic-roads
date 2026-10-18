@@ -100,6 +100,37 @@ def logo(size, name):
 logo(40, "logo")
 logo(28, "logoSmall")
 
+# Build: a check mark; Undo: an arrow curling back. Each with a dimmed copy
+# for when it can't be used (nothing to build / nothing to undo).
+def action_icons():
+    for name, draw in (("build", lambda d: d.line(p(9, 21, 17, 29, 31, 11), fill=DASH, width=int(5 * S), joint="curve")),
+                       ("undo", None)):
+        im, d = canvas()
+        if name == "undo":
+            d.arc(p(9, 11, 31, 33), 200, 90, fill=DASH, width=int(4 * S))
+            d.polygon(p(4, 13, 15, 9, 13, 21), fill=DASH)
+        else:
+            draw(d)
+        save(im, name)
+        dim = Image.open(f"{out}/{name}.png").copy()
+        alpha = dim.getchannel("A").point(lambda a: a * 35 // 100)
+        dim.putalpha(alpha)
+        dim.save(f"{out}/{name}Off.png")
+
+action_icons()
+
+# the game's own road tool: a straight road with dashes, plain
+im, d = canvas()
+d.line(p(20, 4, 20, 36), fill=EXIST, width=int(12 * S))
+for y0 in (7, 17, 27):
+    d.line(p(20, y0, 20, y0 + 5), fill=DASH, width=int(1.6 * S))
+save(im, "gameTool")
+
+# a background for buttons that can't be used right now
+im, d = canvas()
+d.rounded_rectangle(p(1, 1, 39, 39), radius=8 * S, fill=(30, 34, 40, 150), outline=(70, 75, 85, 200), width=2 * S)
+save(im, "bgOff")
+
 # the RR button's backgrounds (46 px, like the game's menu buttons)
 for name, fill, edge in (("button", (35, 45, 60, 235), (100, 120, 145, 255)),
                          ("buttonHover", (55, 75, 100, 240), (160, 190, 225, 255)),

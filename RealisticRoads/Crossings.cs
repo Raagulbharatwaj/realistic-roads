@@ -31,9 +31,11 @@ namespace RealisticRoads
         public bool CanConnect;         // the two networks may join (road x road, rail x rail, road x rail)
         public int Occurrence;          // 0 for the first time our curve crosses this segment, 1 the second, ...
         public ushort SnapNode;         // an end node of the segment within NodeSnap of the crossing (else 0)
-        // A rail line on the ground (overhead wires): a bridge over it keeps its
-        // node above the track, lifted, with no pillar. Decided once, here.
+        // A rail line on the ground (overhead wires): a bridge over it is 2 m
+        // higher so the wires pass under the deck. Decided once, here.
         public bool OverRail;
+        // A ship or ferry route: only a bridge (high enough for ships) or a tunnel.
+        public bool ShipPath;
 
         // A junction this close to an existing node joins at that node instead of cutting the road.
         public const float NodeSnap = 6f;
@@ -54,12 +56,12 @@ namespace RealisticRoads
             {
                 case CrossingType.Overpass:
                 case CrossingType.Underpass:
-                    return ExistingAtGround;
+                    return ExistingAtGround && !ShipPath;
                 case CrossingType.Tunnel:
                     return ExistingElevation > -2f;
                 case CrossingType.Junction:
                     // On the ground only networks that may join can meet there.
-                    return !ExistingAtGround || CanConnect;
+                    return !ShipPath && (!ExistingAtGround || CanConnect);
                 default:
                     return true;
             }
@@ -145,7 +147,7 @@ namespace RealisticRoads
                         if (!seen.Add(current)) continue;
                         if ((segments[current].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
                         NetInfo existing = segments[current].Info;
-                        if (existing == null || existing.m_class == null) continue;
+                        if (existing == null || existing.m_class == null || !IsPhysical(existing)) continue;
 
                         SampleSegment(current, samples);
                         hits.Clear();
@@ -169,6 +171,8 @@ namespace RealisticRoads
                             crossing.ExistingHalfWidth = existing.m_halfWidth;
                             crossing.ExistingName = existing.name;
                             crossing.OverRail = RoadPlanner.IsRail(existing) && crossing.ExistingAtGround;
+                            crossing.ShipPath = (existing.m_class.m_layer & ShipLayer) != ItemClass.Layer.None;
+                            if (crossing.ShipPath) crossing.ExistingName = "ship route";
                             result.Add(crossing);
                         }
                     }
@@ -180,6 +184,26 @@ namespace RealisticRoads
         }
 
         // Points along an existing segment's curve (y = its real height).
+        // Something to cross: roads, tracks, paths, canals, and ship and ferry
+        // routes (a bridge must leave room for the ships). Not airplane or
+        // blimp routes or power lines, which the game also keeps as networks.
+        // The game's ship (and ferry) route layer, looked up by name.
+        private static readonly ItemClass.Layer ShipLayer = LayerNamed("ShipPaths");
+
+        private static ItemClass.Layer LayerNamed(string name)
+        {
+            try { return (ItemClass.Layer)Enum.Parse(typeof(ItemClass.Layer), name); }
+            catch { return ItemClass.Layer.None; }
+        }
+
+        private static bool IsPhysical(NetInfo info)
+        {
+            var layer = info.m_class.m_layer;
+            if ((layer & (ItemClass.Layer.Default | ItemClass.Layer.MetroTunnels | ShipLayer)) == ItemClass.Layer.None) return false;
+            string service = info.m_class.m_service.ToString();
+            return service != "Electricity";
+        }
+
         public static void SampleSegment(ushort segment, Vector3[] samples)
         {
             Vector3 a, b, c, d;

@@ -46,6 +46,7 @@ namespace RealisticRoads
         public const float BridgeSpacing = 100f;     // spans over water (elevated pieces, pillars at each node)
         public const float BridgeMinSpacing = 40f;
         private const float WaterJoin = 60f;          // wet patches closer than this are one water crossing
+        private const float MinWaterWidth = 4f;       // narrower wet patches are ignored
         private const float RaisedSpacing = 48f;      // node (pillar) spacing on raised stretches, like vanilla elevated roads
         private const float RailRaisedSpacing = 96f;  // rail: as few nodes as possible, long spans
         private const float HeightStep = 5f;
@@ -143,6 +144,7 @@ namespace RealisticRoads
             mouseRayValid = false;
             panel.Hide();
             HideButtons(0);
+            foreach (var label in mapLabels) label.isVisible = false;
             if (cursorLabel != null) cursorLabel.isVisible = false;
         }
 
@@ -817,9 +819,6 @@ namespace RealisticRoads
             {
                 var crossing = division.Crossings[c];
                 if (crossing.Type != CrossingType.Bridge && crossing.Type != CrossingType.Overpass) continue;
-                // Over a rail line the bridge keeps its node above the track (lifted,
-                // no pillar) so the wires pass under the deck.
-                if (crossing.Type == CrossingType.Bridge && crossing.OverRail) continue;
                 int k = division.CrossingIndex[c];
                 if (k <= 0 || k >= plan.Points.Count - 1) continue;
                 // Only with a raised node on each side to carry the deck, and only if
@@ -1026,22 +1025,32 @@ namespace RealisticRoads
         private List<WaterRun> FindWater(List<Vector3> polyline)
         {
             var runs = new List<WaterRun>();
-            float along = 0f;
+            float along = 0f, previous = 0f;
+            bool wasWet = false;
             WaterRun current = null;
             for (int i = 0; i < polyline.Count; i++)
             {
                 if (i > 0) along += CurveMath.FlatDistance(polyline[i - 1], polyline[i]);
                 bool wet = NetworkBuilder.IsOverWater(polyline[i]);
-                if (wet)
+                // Each wet stretch reaches halfway to the dry samples either side,
+                // so one wet sample is as wide as the sample spacing, not 0 m.
+                if (wet && !wasWet)
                 {
-                    if (current != null && along - current.To < WaterJoin) current.To = along;
+                    float from = i > 0 ? (previous + along) * 0.5f : along;
+                    if (current != null && from - current.To < WaterJoin) current.To = along;
                     else
                     {
-                        current = new WaterRun { From = along, To = along };
+                        current = new WaterRun { From = from, To = along };
                         runs.Add(current);
                     }
                 }
+                else if (wet) current.To = along;
+                else if (wasWet) current.To = (previous + along) * 0.5f;
+                wasWet = wet;
+                previous = along;
             }
+            // A wet sample or two at a shore or a puddle isn't a crossing.
+            runs.RemoveAll(run => run.To - run.From < MinWaterWidth);
             foreach (var run in runs)
             {
                 Vector3 middle, tangent;
@@ -1115,46 +1124,77 @@ namespace RealisticRoads
         // water crossing. Buttons are reused; each frame says what they do.
         private void PlaceButtons()
         {
-            int used = 0;
+            int used = 0, labelled = 0;
             var division = preview;
             var camera = Camera.main;
             var view = UIView.GetAView();
             if (division != null && division.Plan != null && camera != null && view != null)
             {
-                foreach (var crossing in division.Crossings)
+                // Same numbers and order as the panel's list along the road.
+                var items = Along(division);
+                for (int n = 0; n < items.Count; n++)
                 {
+                    var item = items[n];
                     Vector2 gui;
-                    if (!ToGui(camera, view, crossing.Point, out gui)) continue;
-                    var allowed = new List<CrossingType>();
-                    foreach (var type in AllTypes) if (crossing.Allows(type)) allowed.Add(type);
-                    float x = gui.x - allowed.Count * (IconSize + 2f) * 0.5f;
+                    if (!ToGui(camera, view, item.Where, out gui)) continue;
                     float y = gui.y - IconSize - 24f;
-                    var c = crossing;
-                    foreach (var type in allowed)
+                    if (item.Crossing != null)
                     {
-                        var t = type;
-                        UseButton(used++, RoadPanel.IconFor(t), RoadPanel.Letter(t), crossing.Describe(t), new Vector2(x, y), crossing.Type == t,
-                            () => SetType(c, t));
-                        x += IconSize + 2f;
+                        var c = item.Crossing;
+                        var allowed = new List<CrossingType>();
+                        foreach (var type in AllTypes) if (c.Allows(type)) allowed.Add(type);
+                        int count = allowed.Count + (c.Type == CrossingType.Bridge ? 2 : 0);
+                        float x = gui.x - count * (IconSize + 2f) * 0.5f;
+                        UseLabel(labelled++, (n + 1) + " · " + ItemHeight(division, item), new Vector2(x, y - 22f));
+                        foreach (var type in allowed)
+                        {
+                            var t = type;
+                            UseButton(used++, RoadPanel.IconFor(t), RoadPanel.Letter(t), c.Describe(t), new Vector2(x, y), c.Type == t,
+                                () => SetType(c, t));
+                            x += IconSize + 2f;
+                        }
+                        if (c.Type == CrossingType.Bridge)
+                        {
+                            UseButton(used++, Icons.Plus, "+", "Higher (+" + HeightStep + " m)", new Vector2(x, y), false, () => AddExtra(c, HeightStep));
+                            UseButton(used++, Icons.Minus, "-", "Lower (-" + HeightStep + " m)", new Vector2(x + IconSize + 2f, y), false, () => AddExtra(c, -HeightStep));
+                        }
                     }
-                    if (crossing.Type == CrossingType.Bridge)
+                    else
                     {
-                        UseButton(used++, Icons.Plus, "+", "Higher (+" + HeightStep + " m)", new Vector2(x + 4f, y), false, () => AddExtra(c, HeightStep));
-                        UseButton(used++, Icons.Minus, "-", "Lower (-" + HeightStep + " m)", new Vector2(x + 4f + IconSize + 2f, y), false, () => AddExtra(c, -HeightStep));
+                        var r = item.Water;
+                        UseLabel(labelled++, (n + 1) + " · " + ItemHeight(division, item), new Vector2(gui.x - IconSize - 1f, y - 22f));
+                        UseButton(used++, Icons.Plus, "+", "Bridge higher over the water (+" + HeightStep + " m)",
+                            new Vector2(gui.x - IconSize - 1f, y), false, () => AddWaterExtra(r, HeightStep));
+                        UseButton(used++, Icons.Minus, "-", "Bridge lower over the water (-" + HeightStep + " m)",
+                            new Vector2(gui.x + 1f, y), false, () => AddWaterExtra(r, -HeightStep));
                     }
-                }
-                foreach (var run in division.WaterRuns)
-                {
-                    Vector2 gui;
-                    if (!ToGui(camera, view, run.Middle, out gui)) continue;
-                    var r = run;
-                    UseButton(used++, Icons.Plus, "+", "Bridge higher over the water (+" + HeightStep + " m)",
-                        new Vector2(gui.x - IconSize - 1f, gui.y - IconSize - 24f), false, () => AddWaterExtra(r, HeightStep));
-                    UseButton(used++, Icons.Minus, "-", "Bridge lower over the water (-" + HeightStep + " m)",
-                        new Vector2(gui.x + 1f, gui.y - IconSize - 24f), false, () => AddWaterExtra(r, -HeightStep));
                 }
             }
             HideButtons(used);
+            for (int i = labelled; i < mapLabels.Count; i++) mapLabels[i].isVisible = false;
+        }
+
+        // Number and height of each item along the road, shown on the map.
+        private readonly List<UILabel> mapLabels = new List<UILabel>();
+
+        private void UseLabel(int index, string text, Vector2 position)
+        {
+            while (mapLabels.Count <= index)
+            {
+                var created = (UILabel)UIView.GetAView().AddUIComponent(typeof(UILabel));
+                created.backgroundSprite = "GenericPanel";
+                created.color = new Color32(20, 26, 34, 220);
+                created.textColor = new Color32(255, 255, 255, 255);
+                created.padding = new RectOffset(5, 5, 3, 2);
+                created.textScale = 0.8f;
+                created.autoSize = true;
+                created.isInteractive = false;
+                mapLabels.Add(created);
+            }
+            var label = mapLabels[index];
+            if (label.text != text) label.text = text;
+            label.relativePosition = new Vector3(position.x, position.y);
+            label.isVisible = true;
         }
 
         private static bool ToGui(Camera camera, UIView view, Vector3 world, out Vector2 gui)
@@ -1260,11 +1300,6 @@ namespace RealisticRoads
                 panel.Create();
                 panel.Build = BuildCurrent;
                 panel.Undo = NetworkBuilder.UndoLast;
-                panel.Clear = () =>
-                {
-                    ClearPoints();
-                    Mod.Log("Curve cleared");
-                };
                 panel.Close = () =>
                 {
                     ToolActivator.LeaveMode();
@@ -1279,6 +1314,8 @@ namespace RealisticRoads
         public void DestroyButtons()
         {
             panel.Destroy();
+            foreach (var label in mapLabels) if (label != null) Destroy(label.gameObject);
+            mapLabels.Clear();
             if (cursorLabel != null) Destroy(cursorLabel.gameObject);
             cursorLabel = null;
             foreach (var button in buttons) if (button != null) Destroy(button.gameObject);
@@ -1332,48 +1369,34 @@ namespace RealisticRoads
             model.ProfileText = profileText;
             if (!division.Ok) model.Problems.Add("A bend is too sharp (over " + MaxBend + " degrees per segment): spread the points out");
 
-            var terrain = TerrainManager.instance;
-            for (int c = 0; c < division.Crossings.Count; c++)
+            // Everything along the road, in order from the first point: crossings
+            // and water bridges in one numbered list (the same numbers are on the map).
+            var items = Along(division);
+            for (int n = 0; n < items.Count; n++)
             {
-                var crossing = division.Crossings[c];
-                int index = division.CrossingIndex[c];
-                float relative;
-                if (index >= 0)
+                var item = items[n];
+                var row = new PanelCrossing
                 {
-                    var at = plan.Points[index];
-                    relative = at.y - terrain.SampleRawHeightSmooth(at);
+                    Title = (n + 1) + "   at " + item.At.ToString("N0") + " m   " + ItemName(item),
+                    Detail = ItemDetail(division, item),
+                    Step = HeightStep,
+                };
+                if (item.Crossing != null)
+                {
+                    var crossing = item.Crossing;
+                    row.Selected = crossing.Type;
+                    row.HeightButtons = crossing.Type == CrossingType.Bridge;
+                    foreach (var type in AllTypes) if (crossing.Allows(type)) row.Allowed.Add(type);
+                    row.Pick = type => SetType(crossing, type);
+                    row.Raise = step => AddExtra(crossing, step);
                 }
                 else
                 {
-                    // Spanned by the deck: its height above the road or rail there.
-                    relative = HeightAt(plan, crossing.Distance) - terrain.SampleRawHeightSmooth(crossing.Point);
+                    var run = item.Water;
+                    row.HeightButtons = true;
+                    row.Raise = step => AddWaterExtra(run, step);
                 }
-                var row = new PanelCrossing
-                {
-                    Title = (c + 1) + "   " + crossing.ExistingName,
-                    Detail = crossing.Describe() +
-                             (relative >= 1f ? ", " + relative.ToString("F0") + " m up" : relative <= -1f ? ", " + (-relative).ToString("F0") + " m deep" : ""),
-                    Selected = crossing.Type,
-                    HeightButtons = crossing.Type == CrossingType.Bridge,
-                    Step = HeightStep,
-                };
-                foreach (var type in AllTypes) if (crossing.Allows(type)) row.Allowed.Add(type);
-                var c2 = crossing;
-                row.Pick = type => SetType(c2, type);
-                row.Raise = step => AddExtra(c2, step);
-                model.Crossings.Add(row);
-            }
-            for (int w = 0; w < division.WaterRuns.Count; w++)
-            {
-                var run = division.WaterRuns[w];
-                float deck = HeightAt(plan, (run.From + run.To) * 0.5f) - terrain.SampleRawHeightSmoothWithWater(run.Middle, false, 0f);
-                var r = run;
-                model.Water.Add(new PanelWater
-                {
-                    Title = "Water " + (w + 1) + ", " + (run.To - run.From).ToString("F0") + " m wide: deck " + deck.ToString("F0") + " m above it",
-                    Step = HeightStep,
-                    Raise = step => AddWaterExtra(r, step),
-                });
+                model.Items.Add(row);
             }
             model.Problems.AddRange(plan.Problems);
             model.Warnings.AddRange(plan.Warnings);
@@ -1391,6 +1414,66 @@ namespace RealisticRoads
             }
             catch { }
             return info.name;
+        }
+
+        // A crossing or a water bridge, at its distance along the curve.
+        private class AlongItem
+        {
+            public float At;
+            public Crossing Crossing;
+            public WaterRun Water;
+            public Vector3 Where;
+        }
+
+        // Crossings and water bridges in order along the curve.
+        private static List<AlongItem> Along(Division division)
+        {
+            var items = new List<AlongItem>();
+            foreach (var crossing in division.Crossings)
+                items.Add(new AlongItem { At = crossing.Distance, Crossing = crossing, Where = crossing.Point });
+            foreach (var run in division.WaterRuns)
+                items.Add(new AlongItem { At = run.From, Water = run, Where = run.Middle });
+            items.Sort((x, y) => x.At.CompareTo(y.At));
+            return items;
+        }
+
+        private static string ItemName(AlongItem item)
+        {
+            return item.Crossing != null ? item.Crossing.ExistingName
+                : "water, " + (item.Water.To - item.Water.From).ToString("N0") + " m wide";
+        }
+
+        // How it is crossed and how high: the deck above the water or the crossed
+        // road (its own surface, not the ground under it), or how deep below it.
+        private static string ItemDetail(Division division, AlongItem item)
+        {
+            var plan = division.Plan;
+            var terrain = TerrainManager.instance;
+            if (item.Water != null)
+            {
+                float middle = (item.Water.From + item.Water.To) * 0.5f;
+                float deck = HeightAt(plan, middle) - terrain.SampleRawHeightSmoothWithWater(item.Water.Middle, false, 0f);
+                return "bridge, deck " + deck.ToString("F0") + " m above the water";
+            }
+            var crossing = item.Crossing;
+            float ours = HeightAt(plan, crossing.Distance);
+            float under = crossing.ShipPath ? terrain.SampleRawHeightSmoothWithWater(crossing.Point, false, 0f) : crossing.Point.y;
+            float gap = ours - under;
+            string where = crossing.ShipPath ? " above the water" : gap >= 0f ? " above it" : " below it";
+            return crossing.Describe() + (Mathf.Abs(gap) >= 1f ? ", " + Mathf.Abs(gap).ToString("F0") + " m" + where : "");
+        }
+
+        // The short height shown on the map next to an item's number.
+        private static string ItemHeight(Division division, AlongItem item)
+        {
+            var plan = division.Plan;
+            var terrain = TerrainManager.instance;
+            float at = item.Water != null ? (item.Water.From + item.Water.To) * 0.5f : item.Crossing.Distance;
+            float under = item.Water != null || item.Crossing.ShipPath
+                ? terrain.SampleRawHeightSmoothWithWater(item.Where, false, 0f)
+                : item.Crossing.Point.y;
+            float gap = HeightAt(plan, at) - under;
+            return Mathf.Abs(gap) < 1f ? "level" : (gap > 0f ? "+" : "-") + Mathf.Abs(gap).ToString("F0") + " m";
         }
 
         // The planned road height 'at' metres along the curve.

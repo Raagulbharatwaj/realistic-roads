@@ -25,11 +25,18 @@ namespace RealisticRoads
         public const string ButtonBackground = "button";
         public const string ButtonBackgroundHover = "buttonHover";
         public const string ButtonBackgroundPressed = "buttonPressed";
+        public const string Build = "build";
+        public const string BuildOff = "buildOff";
+        public const string Undo = "undo";
+        public const string UndoOff = "undoOff";
+        public const string GameTool = "gameTool";
+        public const string BackgroundOff = "bgOff";
 
         private static readonly string[] Names =
         {
             Junction, Bridge, Overpass, Underpass, Tunnel, Plus, Minus, Background, BackgroundHover, BackgroundSelected,
             Logo, LogoSmall, ButtonBackground, ButtonBackgroundHover, ButtonBackgroundPressed,
+            Build, BuildOff, Undo, UndoOff, GameTool, BackgroundOff,
         };
 
         private static UITextureAtlas atlas;

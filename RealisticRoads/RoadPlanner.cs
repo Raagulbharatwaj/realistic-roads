@@ -68,8 +68,10 @@ namespace RealisticRoads
         [ThreadStatic] private static float maxGrade;
         public static float MaxGrade => maxGrade > 0f ? maxGrade : RoadGrade;
         private const float MaxDeckHeight = 60f;      // higher than this above the ground: warned
+        private const float EmbankmentHeight = 3f;    // up to this a ramp stays the ground version on an embankment
         public const float BridgeClearance = 10f;     // above water (before the player's +/-)
         public const float OverClearance = 9f;        // flyover deck above the road/rail below
+        public const float ShipClearance = 20f;       // deck above a ship or ferry route (on the water)
         public const float UnderClearance = 7f;       // headroom under an elevated road we pass beneath
         public const float TunnelDepth = 12f;         // tunnel under the existing road
         public const float CutDepth = 8f;             // open cutting under a short bridge
@@ -119,6 +121,7 @@ namespace RealisticRoads
             var maxH = new float[n];
             var isFixed = new bool[n];
             var cutting = new bool[n];      // lowered for an underpass: never a tunnel
+            var joins = new bool[n];        // a junction / level crossing at ground level: always the ground version
             var forceBridge = new bool[n];  // deck over a lowered road (overpass)
 
             maxGrade = GradeFor(info);
@@ -197,7 +200,11 @@ namespace RealisticRoads
                 switch (crossing.Type)
                 {
                     case CrossingType.Junction:
-                        if (crossing.ExistingAtGround) Fix(k, crossing.Point.y, minH, maxH, isFixed);
+                        if (crossing.ExistingAtGround)
+                        {
+                            Fix(k, crossing.Point.y, minH, maxH, isFixed);
+                            joins[k] = true;
+                        }
                         // Passing under an elevated road or over a sunken one at ground
                         // level: keep the headroom, so no embankment lifts us into the
                         // deck above (or a cutting digs us into the road below).
@@ -209,12 +216,12 @@ namespace RealisticRoads
                     case CrossingType.Bridge:
                         // Up to the deck's ends either side (the node on the crossing
                         // itself is dropped later, so the side nodes carry the height).
+                        // Over rail on the ground the whole deck is higher, so the
+                        // overhead wires pass under it.
+                        // Over a ship or ferry route the deck leaves room for the ships.
                         Limit(distance, k, DeckHalf(crossing, info, false) + 1f,
-                            crossing.Point.y + OverClearance + crossing.ExtraHeight, true, minH, false);
-                        // Over rail the node on the track stays (no pillar) and sits
-                        // higher, so the overhead wires pass under the deck.
-                        if (crossing.OverRail)
-                            minH[k] = Mathf.Max(minH[k], crossing.Point.y + OverClearance + crossing.ExtraHeight + RailDeckLift);
+                            crossing.Point.y + (crossing.ShipPath ? ShipClearance : OverClearance) + crossing.ExtraHeight +
+                            (crossing.OverRail ? RailDeckLift : 0f), true, minH, false);
                         break;
                     case CrossingType.Overpass:
                         // We stay at ground level on a bridge deck; the existing road goes down.
@@ -272,8 +279,7 @@ namespace RealisticRoads
                     solved = solvedAgain;
                 }
             }
-            if (!solved)
-                plan.Problems.Add("Not enough room to ramp up/down at " + MaxGrade * 100f + "% slope: spread the points out or move the crossing away from the ends");
+            if (!solved) plan.Problems.Add(RampProblem(crossings, crossingIndex, distance, ground, minH, maxH));
 
             // Plain ground: small embankments and cuttings keep the road within its
             // own slope limit; what is still steeper is built anyway and marked.
@@ -303,8 +309,13 @@ namespace RealisticRoads
 
                 float elevation = heights[i] - ground[i];
                 if (forceBridge[i] && elevation > -1f) plan.Kinds[i] = NodeKind.Bridge;
-                else if (embanked[i]) plan.Kinds[i] = NodeKind.Ground;    // on an embankment / in a cutting, normal road
-                else if (elevation >= 1f) plan.Kinds[i] = water[i] && hasBridge ? NodeKind.Bridge : NodeKind.Elevated;
+                else if (embanked[i] || joins[i]) plan.Kinds[i] = NodeKind.Ground;    // on an embankment / at a level crossing, normal road
+                // A little above the ground (a ramp, a track on its ballast) stays
+                // the ground version on an embankment; the elevated version only
+                // where it must be raised (a bridge, water) or is really high.
+                else if (elevation >= 1f && (water[i] || minH[i] > ground[i] + 0.5f || elevation >= EmbankmentHeight))
+                    plan.Kinds[i] = water[i] && hasBridge ? NodeKind.Bridge : NodeKind.Elevated;
+                else if (elevation >= 1f) plan.Kinds[i] = NodeKind.Ground;
                 else if (elevation <= -1f)
                     plan.Kinds[i] = !cutting[i] && elevation <= -TunnelMinDepth ? NodeKind.Tunnel : NodeKind.Cut;
                 else plan.Kinds[i] = NodeKind.Ground;
@@ -348,11 +359,36 @@ namespace RealisticRoads
         // overpass past the banks of the cutting it was lowered into.
         public const float PillarClearance = 4f;
 
+        // Why the heights don't fit, with numbers: the crossing whose ramp
+        // doesn't fit between it and an end of the curve, how much road it
+        // needs either side and how much there is.
+        private static string RampProblem(List<Crossing> crossings, List<int> crossingIndex, float[] distance, float[] ground,
+            float[] minH, float[] maxH)
+        {
+            int n = distance.Length;
+            string grade = (MaxGrade * 100f).ToString("0.#") + " %";
+            for (int c = 0; c < crossings.Count; c++)
+            {
+                int k = crossingIndex[c];
+                if (k < 0 || k >= n) continue;
+                float rise = minH[k] > ground[k] ? minH[k] - ground[k] : maxH[k] < ground[k] ? ground[k] - maxH[k] : 0f;
+                if (rise < 1f) continue;
+                float need = rise / MaxGrade;
+                float before = distance[k], after = distance[n - 1] - distance[k];
+                if (before >= need && after >= need) continue;
+                return "Not enough room for the " + crossings[c].Describe() + " (" + crossings[c].ExistingName + "): at " + grade +
+                       " it needs about " + need.ToString("N0") + " m of road before and after it to go " + rise.ToString("F0") +
+                       " m " + (minH[k] > ground[k] ? "up" : "down") + ", and has " + before.ToString("N0") + " m before and " +
+                       after.ToString("N0") + " m after. Start or end the curve further away, or pick another crossing type";
+            }
+            return "Not enough room to ramp up and down at " + grade + " between the crossings: spread the points out, or space the crossings further apart";
+        }
+
         // Rail we build gets long spans: its deck over a crossing is at least
         // this long either side, so no short pieces bunch up there.
-        public const float RailDeckHalf = 30f;
-        // Over a rail line our deck's node on the track is this much higher than
-        // the clearance, so the overhead wires pass under it.
+        public const float RailDeckHalf = 45f;
+        // Over a rail line on the ground our deck is this much higher than the
+        // clearance (11 m over the rails), so the overhead wires pass under it.
         public const float RailDeckLift = 2f;
 
         public static float DeckHalf(Crossing crossing, NetInfo ours, bool overpass)
