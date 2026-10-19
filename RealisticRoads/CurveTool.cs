@@ -1119,7 +1119,7 @@ namespace RealisticRoads
             var raisedPoints = new List<KeyValuePair<Vector3, float>>();
             for (int i = 0; i <= n; i++)
                 if (Mathf.Abs(lifts[i]) > 0.01f) raisedPoints.Add(new KeyValuePair<Vector3, float>(controls[i], lifts[i]));
-            FindDecks(division);
+            FindDecks(division, SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f);
             division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
                 division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
                 startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below);
@@ -1127,7 +1127,7 @@ namespace RealisticRoads
             // vanilla tool's elevated roads; plan again with them.
             if (AddRaisedNodes(division))
             {
-                FindDecks(division);
+                FindDecks(division, SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f);
                 division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
                     division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
                     startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below);
@@ -1453,7 +1453,7 @@ namespace RealisticRoads
         }
 
         // Which nodes are on a deck, and the road under each of them.
-        private static void FindDecks(Division division)
+        private static void FindDecks(Division division, float ourHalfWidth)
         {
             int n = division.Points.Count;
             division.OnDeck = new bool[n];
@@ -1485,7 +1485,7 @@ namespace RealisticRoads
                 sampleAlong = bestAlong;
                 if (!InDeck(division.DeckRanges, bestAlong)) continue;
                 division.OnDeck[i] = true;
-                division.Below[i] = Decks.Under(division.Points[i]);
+                division.Below[i] = Decks.Under(division.Points[i], ourHalfWidth);
             }
         }     // metres either side of a sharp corner its two directions are read
 

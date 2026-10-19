@@ -169,11 +169,13 @@ namespace RealisticRoads
             // Each node's floor is the highest of its own and its deck neighbours':
             // a node just off the middle of the deck below (or past its end) would
             // otherwise measure from the road under that, and the deck would dip and rise.
+            bool cableCar = Decks.IsCableCar(info);
             if (onDeck != null && decks != null)
             {
+                CheckDeckGround(plan, onDeck, decks, points, cableCar);
                 var floor = new float[n];
                 for (int i = 0; i < n && i < onDeck.Length && i < decks.Length; i++)
-                    if (onDeck[i]) floor[i] = Decks.Floor(points[i], decks[i]);
+                    if (onDeck[i]) floor[i] = Decks.Floor(points[i], decks[i], cableCar);
                 for (int i = 0; i < n && i < onDeck.Length; i++)
                 {
                     if (!onDeck[i]) continue;
@@ -380,9 +382,32 @@ namespace RealisticRoads
             return plan;
         }
 
+        // What a deck may stand over. Nothing goes over a cable car line; a
+        // cable car itself only runs along the middle of a road with a median
+        // at ground level (not over another deck), on its own poles there.
+        private static void CheckDeckGround(Plan plan, bool[] onDeck, DeckBelow[] decks, List<Vector3> points, bool cableCar)
+        {
+            bool overCableCar = false, offMedian = false;
+            for (int i = 0; i < onDeck.Length && i < decks.Length && i < points.Count; i++)
+            {
+                if (!onDeck[i] || decks[i].Segment == 0) continue;
+                if (decks[i].CableCar) overCableCar = true;
+                else if (cableCar && (Decks.SupportFor(points[i], decks[i]) != Decks.Support.Column || !decks[i].OnGround)) offMedian = true;
+            }
+            if (overCableCar)
+                plan.Problems.Add("Nothing can be built over a cable car line: draw the deck somewhere else");
+            if (offMedian)
+                plan.Problems.Add("A cable car runs only along the middle of a road with a median, on the ground (not over another deck): " +
+                                  "click on such a road with Deck on, at both ends");
+        }
+
+        // Cable cars climb steeply (their cabins hang from the cable).
+        public const float CableCarGrade = 0.3f;
+
         // The road's version for a node kind, or null if it has none.
         private static float GradeFor(NetInfo info)
         {
+            if (Decks.IsCableCar(info)) return CableCarGrade;
             return info != null && info.m_class != null && info.m_class.m_service == ItemClass.Service.PublicTransport
                 ? RailGrade : RoadGrade;
         }
