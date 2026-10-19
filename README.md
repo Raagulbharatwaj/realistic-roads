@@ -167,10 +167,6 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      - The deck also clears the street lights and trees of the road below wherever they stand under it (in the
        middle or at the sides): it is raised above their tops when they are taller than the 9 m clearance allows.
      - Columns are 2 m square; a median column is as wide as the median allows (2.4 to 3.6 m).
-     - **Cable cars:** pick the cable car line and draw it with Deck on, clicking a road with a median at both ends:
-       it runs along the median 15 m up (between a first and a second deck's height), on its own poles where the
-       game puts them, else on our median columns. Only over the median of a road on the ground: not over a road
-       without a median, nor over another deck; and nothing can be decked over a cable car line.
      - A third level is measured from the deck below it (the highest road under each point), and evened out
        between neighbouring nodes so it doesn't dip where a node is just off the deck below.
 6. **Drawing, then planning.** While drawing, the curve follows the mouse and each click adds a point; right-click
