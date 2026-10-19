@@ -19,6 +19,7 @@ namespace RealisticRoads
         public float HalfWidth;
         public bool Median;           // room in its middle for a pillar
         public bool Rail;
+        public float PropTop;         // how high the props and trees in its middle reach (lights, median trees)
     }
 
     // Decks over existing roads: double (and triple) deckers.
@@ -27,7 +28,9 @@ namespace RealisticRoads
         // The deck's clearance over the road below, like a flyover's; over rail
         // on the ground it is higher, so the wires pass under it.
         public const float Clearance = RoadPlanner.OverClearance;
-        private const float PillarHalf = 1.5f;        // a pillar needs this much free either side of a road's middle
+        private const float MedianHalf = 0.75f;       // a median: no lane within this of a road's middle
+        private const float PropMargin = 3f;          // the deck's surface this far above the props under it
+        private const float MaxClearance = 25f;
         private const float MedianOffset = 1f;        // the deck's node this close to the lower road's middle uses its median
         private const float Search = 40f;             // how far around a point roads are looked for
         private const float MaxPathLength = 20000f;   // how far a deck follows roads (metres)
@@ -35,11 +38,12 @@ namespace RealisticRoads
         private const float PathStep = 4f;            // metres between samples along a followed road
 
         // Main thread. The road under 'p' (its centre within its half width of
-        // p), the nearest if several; Segment 0 if none.
+        // p); of roads stacked there (a ground road and a deck over it) the
+        // highest, so a third level is measured from the second. Segment 0 if none.
         public static DeckBelow Under(Vector3 p)
         {
             var best = new DeckBelow();
-            float bestDistance = float.MaxValue;
+            float bestHeight = float.MinValue;
             var segments = NetManager.instance.m_segments.m_buffer;
             foreach (ushort segment in RoadPlanner.NearbySegments(p, Search))
             {
@@ -48,10 +52,10 @@ namespace RealisticRoads
                 Vector3 onRoad;
                 float t = CrossingFinder.ClosestT(segment, p, out onRoad);
                 float distance = CurveMath.FlatDistance(onRoad, p);
-                if (distance > info.m_halfWidth || distance >= bestDistance) continue;
+                if (distance > info.m_halfWidth || onRoad.y <= bestHeight) continue;
                 Vector3 a, b, c, d;
                 CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
-                bestDistance = distance;
+                bestHeight = onRoad.y;
                 best = new DeckBelow
                 {
                     Segment = segment,
@@ -60,6 +64,7 @@ namespace RealisticRoads
                     HalfWidth = info.m_halfWidth,
                     Median = HasMedian(info),
                     Rail = RoadPlanner.IsRail(info),
+                    PropTop = MiddlePropTop(info),
                 };
             }
             return best;
@@ -70,28 +75,67 @@ namespace RealisticRoads
         public static float Floor(Vector3 p, DeckBelow below)
         {
             if (below.Segment == 0) return TerrainManager.instance.SampleRawHeightSmoothWithWater(p, false, 0f) + Clearance;
-            return below.Center.y + Clearance + (below.Rail && Mathf.Abs(below.Center.y - TerrainManager.instance.SampleRawHeightSmooth(below.Center)) < 2f
+            // Above the lights and trees in its middle too (with the deck's own depth under it).
+            float clearance = Mathf.Max(Clearance, Mathf.Min(below.PropTop + PropMargin, MaxClearance));
+            return below.Center.y + clearance + (below.Rail && Mathf.Abs(below.Center.y - TerrainManager.instance.SampleRawHeightSmooth(below.Center)) < 2f
                 ? RoadPlanner.RailDeckLift : 0f);
         }
 
         // Room for a pillar in the road's middle: no lane (traffic, parking,
-        // sidewalk, track) within PillarHalf of its centre line.
+        // sidewalk, track) within MedianHalf of its centre line.
         public static bool HasMedian(NetInfo info)
         {
             if (info == null || info.m_lanes == null || info.m_lanes.Length == 0) return false;
             foreach (var lane in info.m_lanes)
             {
                 if (lane == null || lane.m_laneType == NetInfo.LaneType.None) continue;
-                if (Mathf.Abs(lane.m_position) - lane.m_width * 0.5f < PillarHalf) return false;
+                if (Mathf.Abs(lane.m_position) - lane.m_width * 0.5f < MedianHalf) return false;
             }
             return true;
         }
 
-        // Is this node's pillar fine where the game puts it (on the lower
-        // road's median, or with no road below)? Else it gets a frame.
-        public static bool PillarFits(Vector3 node, DeckBelow below)
+        // The top of the props and trees along a road's middle (street lights,
+        // median trees), above its surface; 0 if none. Main thread (mesh bounds).
+        private static readonly Dictionary<string, float> propTops = new Dictionary<string, float>();
+
+        public static float MiddlePropTop(NetInfo info)
         {
-            return below.Segment == 0 || (below.Median && CurveMath.FlatDistance(node, below.Center) < MedianOffset);
+            if (info == null || info.m_lanes == null) return 0f;
+            float top;
+            if (propTops.TryGetValue(info.name ?? "", out top)) return top;
+            top = 0f;
+            try
+            {
+                foreach (var lane in info.m_lanes)
+                {
+                    if (lane == null || lane.m_laneProps == null || lane.m_laneProps.m_props == null) continue;
+                    if (Mathf.Abs(lane.m_position) > info.m_halfWidth * 0.5f) continue;   // the sidewalks' lights stand beside the deck
+                    foreach (var prop in lane.m_laneProps.m_props)
+                    {
+                        if (prop == null) continue;
+                        var propInfo = prop.m_finalProp ?? prop.m_prop;
+                        var tree = prop.m_finalTree ?? prop.m_tree;
+                        Mesh mesh = propInfo != null ? propInfo.m_mesh : tree != null ? tree.m_mesh : null;
+                        if (mesh == null) continue;
+                        top = Mathf.Max(top, prop.m_position.y + mesh.bounds.max.y);
+                    }
+                }
+            }
+            catch { }
+            propTops[info.name ?? ""] = top;
+            return top;
+        }
+
+        // What carries a deck's node.
+        public enum Support { Pillar, Column, Portal }
+
+        // The game's own pillar over open ground (it won't put one on another
+        // road); over a road with a median and the node over its middle, our
+        // column on the median; over any other road, our frame across it.
+        public static Support SupportFor(Vector3 node, DeckBelow below)
+        {
+            if (below.Segment == 0) return Support.Pillar;
+            return below.Median && CurveMath.FlatDistance(node, below.Center) < MedianOffset ? Support.Column : Support.Portal;
         }
 
         // Main thread. The way along existing roads from (segA, tA) to (segB,
@@ -276,9 +320,11 @@ namespace RealisticRoads
     public static class DeckFrames
     {
         public const string DataId = "RealisticRoads.DeckFrames";
-        private const int Version = 1;
+        private const int Version = 2;
         private const float ColumnMargin = 1.5f;     // columns stand this far outside the lower road (and our deck)
-        private const float Column = 1.2f;           // column width
+        private const float Column = 1.2f;           // column width (a frame's two columns)
+        private const float MedianColumn = 1.8f;     // a single column on a median
+        private const float CapInset = 1f;           // a median column's cap stops this far inside our deck's edges
         private const float MinColumn = 0.5f;        // shortest column
         private const float BeamDepth = 1.4f;        // beam size along the road
         private const float BeamHeight = 1.4f;
@@ -289,7 +335,9 @@ namespace RealisticRoads
         {
             public ushort Node;
             public uint BuildIndex;
-            public Vector3 A, B;                 // the columns' feet (x, z)
+            public Vector3 A, B;                 // the beam's ends (x, z); a frame's columns stand under them
+            public bool Median;                  // one column on the lower road's median instead of two beside it
+            public Vector3 Foot;                 // a median column: where it stands (y = the road's surface)
             public string Pillar;                // the pillar building whose material the frame uses
             public Mesh Mesh;                    // main thread
             public float MeshHeight;             // the node's height the mesh was made for
@@ -314,37 +362,42 @@ namespace RealisticRoads
             }
         }
 
-        // Simulation thread, while building. A frame at 'node' across the road
-        // below; the node's own pillar is removed.
-        public static void Add(ushort node, DeckBelow below, float ourHalfWidth)
+        // Simulation thread, while building. Our support at 'node': a column
+        // on the median or a frame across the road below; the node's own
+        // pillar is removed (the game wouldn't put it on the road anyway).
+        public static void Add(ushort node, DeckBelow below, float ourHalfWidth, bool median)
         {
             var nodes = NetManager.instance.m_nodes.m_buffer;
             Vector3 a, b;
-            if (!Columns(below, ourHalfWidth, out a, out b)) return;
+            if (!Beam(below, ourHalfWidth, median, out a, out b)) return;
             var frame = new Frame
             {
                 Node = node,
                 BuildIndex = nodes[node].m_buildIndex,
                 A = a,
                 B = b,
+                Median = median,
+                Foot = below.Center,
                 Pillar = PillarName(nodes[node].Info),
             };
             lock (frames) frames[node] = frame;
             nodes[node].UpdateBuilding(node, null, 0f);
         }
 
-        // A new city: no frames, and materials looked up afresh.
-        // Where a frame's two columns stand: either side of the road below,
-        // outside it and outside our deck.
-        public static bool Columns(DeckBelow below, float ourHalfWidth, out Vector3 a, out Vector3 b)
+        // The beam's ends. A frame: either side of the road below, outside it
+        // and outside our deck (its columns stand there). A median column: a
+        // cap under our deck, a little narrower than it.
+        public static bool Beam(DeckBelow below, float ourHalfWidth, bool median, out Vector3 a, out Vector3 b)
         {
             Vector3 across = CurveMath.Rotate(below.Along, 90f);
-            float half = Mathf.Max(below.HalfWidth, ourHalfWidth) + ColumnMargin;
+            float half = median ? Mathf.Max(ourHalfWidth - CapInset, MedianColumn)
+                : Mathf.Max(below.HalfWidth, ourHalfWidth) + ColumnMargin;
             a = below.Center + across * half;
             b = below.Center - across * half;
             return across != Vector3.zero;
         }
 
+        // A new city: no frames, and materials looked up afresh.
         public static void Clear()
         {
             // Loading runs off the main thread: meshes go to Render to be destroyed.
@@ -510,16 +563,24 @@ namespace RealisticRoads
             var vertices = new List<Vector3>();
             var normals = new List<Vector3>();
             var triangles = new List<int>();
-            foreach (var foot in new[] { a, b })
+            if (frame.Median)
             {
-                // From just under the ground up to the beam; never upside down (the
-                // ground beside an elevated road below can be higher than the beam).
-                float ground = Mathf.Min(terrain.SampleRawHeightSmooth(foot) - 1f, beamBottom - MinColumn);
-                Box(vertices, normals, triangles, new Vector3(foot.x, (ground + beamBottom) * 0.5f, foot.z) - node,
-                    across, along, Column, beamBottom - ground, Column);
+                // One column from the median (just into the road's surface) up to the cap.
+                float bottom = Mathf.Min(frame.Foot.y - 0.5f, beamBottom - MinColumn);
+                Box(vertices, normals, triangles, new Vector3(frame.Foot.x, (bottom + beamBottom) * 0.5f, frame.Foot.z) - node,
+                    across, along, MedianColumn, beamBottom - bottom, MedianColumn);
             }
+            else
+                foreach (var foot in new[] { a, b })
+                {
+                    // From just under the ground up to the beam; never upside down (the
+                    // ground beside an elevated road below can be higher than the beam).
+                    float ground = Mathf.Min(terrain.SampleRawHeightSmooth(foot) - 1f, beamBottom - MinColumn);
+                    Box(vertices, normals, triangles, new Vector3(foot.x, (ground + beamBottom) * 0.5f, foot.z) - node,
+                        across, along, Column, beamBottom - ground, Column);
+                }
             Vector3 middle = (a + b) * 0.5f;
-            float span = CurveMath.FlatDistance(a, b) + Column;
+            float span = CurveMath.FlatDistance(a, b) + (frame.Median ? 0f : Column);
             Box(vertices, normals, triangles, new Vector3(middle.x, (beamBottom + top) * 0.5f, middle.z) - node,
                 across, along, span, BeamHeight, BeamDepth);
 
@@ -599,6 +660,8 @@ namespace RealisticRoads
                     writer.Write(frame.A.x); writer.Write(frame.A.z);
                     writer.Write(frame.B.x); writer.Write(frame.B.z);
                     writer.Write(frame.Pillar ?? "");
+                    writer.Write(frame.Median);
+                    writer.Write(frame.Foot.x); writer.Write(frame.Foot.y); writer.Write(frame.Foot.z);
                 }
                 writer.Flush();
                 return stream.ToArray();
@@ -612,7 +675,7 @@ namespace RealisticRoads
             using (var reader = new BinaryReader(new MemoryStream(data)))
             {
                 int version = reader.ReadInt32();
-                if (version != Version)
+                if (version != 1 && version != Version)
                 {
                     Mod.Log("Deck frames: saved with an unknown version " + version + ", not loaded");
                     return;
@@ -630,6 +693,12 @@ namespace RealisticRoads
                         frame.A = new Vector3(ax, 0f, az);
                         frame.B = new Vector3(bx, 0f, bz);
                         frame.Pillar = reader.ReadString();
+                        if (version >= 2)
+                        {
+                            frame.Median = reader.ReadBoolean();
+                            float fx = reader.ReadSingle(), fy = reader.ReadSingle(), fz = reader.ReadSingle();
+                            frame.Foot = new Vector3(fx, fy, fz);
+                        }
                         frames[frame.Node] = frame;
                     }
                 Mod.Log("Deck frames loaded: " + count);
