@@ -50,6 +50,7 @@ namespace RealisticRoads
         // not on a deck), for its pillar or frame. Null if no deck.
         public DeckBelow[] Decks;
         public bool[] OnDeck;
+        public bool[] UnderDeck;              // of those, the nodes of a deck under the road (a tunnel)
         public bool[] Middle;                 // suspension bridges: the node between two towers
         public List<Crossing> Crossings = new List<Crossing>();
         public List<int> CrossingIndex = new List<int>();   // node index of each crossing
@@ -100,7 +101,7 @@ namespace RealisticRoads
             List<Crossing> crossings, List<int> crossingIndex, List<WaterRun> waterRuns, ushort startNode, ushort endNode,
             ushort startSegment = 0, float startT = 0f, ushort endSegment = 0, float endT = 0f,
             List<KeyValuePair<Vector3, float>> lifts = null, List<Vector3> inTangents = null,
-            bool[] onDeck = null, DeckBelow[] decks = null)
+            bool[] onDeck = null, DeckBelow[] decks = null, bool[] underDeck = null)
         {
             var plan = new Plan
             {
@@ -108,6 +109,7 @@ namespace RealisticRoads
                 Tangents = new List<Vector3>(tangents),
                 InTangents = inTangents != null ? new List<Vector3>(inTangents) : null,
                 OnDeck = onDeck != null ? (bool[])onDeck.Clone() : null,
+                UnderDeck = underDeck != null ? (bool[])underDeck.Clone() : null,
                 Decks = decks != null ? (DeckBelow[])decks.Clone() : null,
                 Crossings = crossings,
                 CrossingIndex = crossingIndex,
@@ -171,17 +173,32 @@ namespace RealisticRoads
             // otherwise measure from the road under that, and the deck would dip and rise.
             if (onDeck != null && decks != null)
             {
+                Func<int, bool> isUnder = i => underDeck != null && i < underDeck.Length && underDeck[i];
+                Func<int, bool> isAbove = i => i >= 0 && i < n && i < onDeck.Length && onDeck[i] && !isUnder(i);
                 var floor = new float[n];
                 for (int i = 0; i < n && i < onDeck.Length && i < decks.Length; i++)
-                    if (onDeck[i]) floor[i] = Decks.Floor(points[i], decks[i]);
-                for (int i = 0; i < n && i < onDeck.Length; i++)
+                    if (isAbove(i)) floor[i] = Decks.Floor(points[i], decks[i]);
+                bool tooDeep = false;
+                for (int i = 0; i < n && i < onDeck.Length && i < decks.Length; i++)
                 {
-                    if (!onDeck[i]) continue;
+                    if (isUnder(i))
+                    {
+                        // Under the road: held one level (a tunnel's depth) below it.
+                        float ceiling = Decks.Ceiling(points[i], decks[i]);
+                        maxH[i] = Mathf.Min(maxH[i], ceiling);
+                        minH[i] = Mathf.Max(minH[i], ceiling - Decks.UnderSlack);
+                        if (decks[i].Segment != 0 && !decks[i].OnGround) tooDeep = true;
+                        continue;
+                    }
+                    if (!isAbove(i)) continue;
                     float level = floor[i];
-                    if (i > 0 && onDeck[i - 1]) level = Mathf.Max(level, floor[i - 1]);
-                    if (i + 1 < n && i + 1 < onDeck.Length && onDeck[i + 1]) level = Mathf.Max(level, floor[i + 1]);
+                    if (isAbove(i - 1)) level = Mathf.Max(level, floor[i - 1]);
+                    if (isAbove(i + 1)) level = Mathf.Max(level, floor[i + 1]);
                     minH[i] = Mathf.Max(minH[i], level);
                 }
+                if (tooDeep)
+                    plan.Problems.Add("Under a road there is one level only: this road is already underground (or a deck goes under it). " +
+                                      "Draw the tunnel under a road on the ground");
             }
 
             if (NetworkBuilder.NodeExists(startNode)) Fix(0, nodes[startNode].m_position.y, minH, maxH, isFixed);
@@ -455,6 +472,7 @@ namespace RealisticRoads
             if (plan.InTangents != null && index < plan.InTangents.Count) plan.InTangents.RemoveAt(index);
             if (plan.Decks != null && index < plan.Decks.Length) plan.Decks = Without(plan.Decks, index);
             if (plan.OnDeck != null && index < plan.OnDeck.Length) plan.OnDeck = Without(plan.OnDeck, index);
+            if (plan.UnderDeck != null && index < plan.UnderDeck.Length) plan.UnderDeck = Without(plan.UnderDeck, index);
             plan.Kinds = Without(plan.Kinds, index);
             if (plan.Steep != null)
             {

@@ -44,10 +44,14 @@ namespace RealisticRoads
         // p); of roads stacked there (a ground road and a deck over it) the
         // highest, so a third level is measured from the second. Segment 0 if
         // none. 'ourHalfWidth': our deck's, for the props under it.
-        public static DeckBelow Under(Vector3 p, float ourHalfWidth)
+        // 'underground': for a deck under the road, the road at ground level
+        // there (not one above it); one underground already is still returned,
+        // so the planner can refuse a second level.
+        public static DeckBelow Under(Vector3 p, float ourHalfWidth, bool underground = false)
         {
             var best = new DeckBelow();
             float bestHeight = float.MinValue;
+            var terrain = TerrainManager.instance;
             var segments = NetManager.instance.m_segments.m_buffer;
             foreach (ushort segment in RoadPlanner.NearbySegments(p, Search))
             {
@@ -57,6 +61,7 @@ namespace RealisticRoads
                 float t = CrossingFinder.ClosestT(segment, p, out onRoad);
                 float distance = CurveMath.FlatDistance(onRoad, p);
                 if (distance > info.m_halfWidth || onRoad.y <= bestHeight) continue;
+                if (underground && onRoad.y > terrain.SampleRawHeightSmooth(onRoad) + 2f) continue;   // above the ground: not this one
                 Vector3 a, b, c, d;
                 CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
                 bestHeight = onRoad.y;
@@ -88,6 +93,18 @@ namespace RealisticRoads
             // Above the lights and trees under it too (with the deck's own depth under it).
             clearance = Mathf.Max(clearance, Mathf.Min(below.PropTop + PropMargin, MaxClearance));
             return below.Center.y + clearance + (below.Rail && below.OnGround ? RoadPlanner.RailDeckLift : 0f);
+        }
+
+        // A deck under the road: one level (a tunnel's depth) below the road
+        // there, or below the ground where there is none; it may sit up to
+        // UnderSlack deeper where the grade needs it.
+        public const float UnderDepth = RoadPlanner.TunnelDepth;
+        public const float UnderSlack = 3f;
+
+        public static float Ceiling(Vector3 p, DeckBelow below)
+        {
+            float top = below.Segment != 0 ? below.Center.y : TerrainManager.instance.SampleRawHeightSmooth(p);
+            return top - UnderDepth;
         }
 
         // How far a road's middle is free of lanes (traffic, parking, sidewalk,

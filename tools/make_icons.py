@@ -180,8 +180,16 @@ for x in (6, 34):
 line(d, (6, 18, 34, 18), OURS, 3)
 save(im, "deck")
 
+# under: an existing road on the ground, ours in a tunnel one level below
+im, d = canvas()
+d.rectangle(p(2, 16, 38, 38), fill=GROUND)
+line(d, (2, 14, 38, 14), EXIST, 6)
+d.rounded_rectangle(p(6, 24, 34, 36), radius=5 * S, fill=(40, 40, 45, 255))
+line(d, (8, 31, 32, 31), OURS, 5)
+save(im, "under")
+
 # preview sheet for checking by eye
-names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck"]
+names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")

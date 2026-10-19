@@ -337,6 +337,7 @@ namespace RealisticRoads
                         var below = plan.Decks[i];
                         bool raised = plan.Kinds[i] == NodeKind.Elevated || plan.Kinds[i] == NodeKind.Bridge;
                         if (!plan.OnDeck[i] || !raised || below.Segment == 0 || !build.Nodes.Contains(nodeIds[i])) continue;
+                        if (plan.UnderDeck != null && i < plan.UnderDeck.Length && plan.UnderDeck[i]) continue;
                         var support = Decks.SupportFor(points[i], below);
                         if (support == Decks.Support.Pillar) continue;
                         DeckFrames.Add(nodeIds[i], below, info.m_halfWidth, support == Decks.Support.Column);
