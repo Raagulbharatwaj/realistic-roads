@@ -591,4 +591,33 @@ public class CurveMathTests
         for (int i = 1; i < line.Count; i++) Assert.True(CurveMath.FlatDistance(line[i - 1], line[i]) > 0.01f, "repeated point at " + i);
         Assert.Equal(V(400, 40), line.Last());
     }
+
+    [Fact]
+    public void Places_RoundTripAlongTheCurve()
+    {
+        var controlAt = new[] { 0f, 100f, 100f, 250f };
+        float along;
+        Assert.True(CurveMath.PlaceAlong(controlAt, 0.5f, out along));
+        Assert.Equal(50f, along, 3);
+        Assert.True(CurveMath.PlaceAlong(controlAt, 2.5f, out along));
+        Assert.Equal(175f, along, 3);
+        Assert.True(CurveMath.PlaceAlong(controlAt, 3f, out along));
+        Assert.Equal(250f, along, 3);
+        Assert.False(CurveMath.PlaceAlong(controlAt, 3.5f, out along));
+        Assert.Equal(2.5f, CurveMath.PlaceOf(controlAt, 175f), 3);
+        Assert.Equal(0.25f, CurveMath.PlaceOf(controlAt, 25f), 3);
+        Assert.Equal(3f, CurveMath.PlaceOf(controlAt, 300f), 3);
+    }
+
+    [Fact]
+    public void Remap_IsStraightBetweenMarks()
+    {
+        var chord = new[] { 0f, 90f, 180f };
+        var curve = new[] { 0f, 100f, 200f };
+        Assert.Equal(50f, CurveMath.Remap(chord, curve, 45f), 3);
+        Assert.Equal(150f, CurveMath.Remap(chord, curve, 135f), 3);
+        Assert.Equal(200f, CurveMath.Remap(chord, curve, 180f), 3);
+        Assert.Equal(90f, CurveMath.Remap(curve, chord, 100f), 3);
+        Assert.Equal(-5f, CurveMath.Remap(chord, curve, -5f), 3);
+    }
 }

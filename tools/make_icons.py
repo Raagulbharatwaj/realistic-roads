@@ -188,8 +188,30 @@ d.rounded_rectangle(p(6, 24, 34, 36), radius=5 * S, fill=(40, 40, 45, 255))
 line(d, (8, 31, 32, 31), OURS, 5)
 save(im, "under")
 
+# side view stretches: elevated (ours on tall pillars over the ground), auto
+# (ours following the ground over a hill), reset (a cross)
+im, d = canvas()
+d.rectangle(p(2, 32, 38, 38), fill=GROUND)
+line(d, (2, 12, 38, 12), OURS, 6)
+for x in (9, 20, 31):
+    line(d, (x, 15, x, 32), OURS, 3)
+save(im, "elevated")
+
+im, d = canvas()
+d.pieslice(p(4, 16, 36, 48), 180, 360, fill=GROUND)
+d.rectangle(p(2, 32, 38, 38), fill=GROUND)
+d.arc(p(4, 12, 36, 44), 180, 360, fill=OURS, width=int(5 * S))
+line(d, (2, 28, 5, 28), OURS, 5); line(d, (35, 28, 38, 28), OURS, 5)
+save(im, "auto")
+
+im, d = canvas()
+line(d, (12, 12, 28, 28), DASH, 4.5)
+line(d, (28, 12, 12, 28), DASH, 4.5)
+save(im, "reset")
+
 # preview sheet for checking by eye
-names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under"]
+names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under",
+         "elevated", "auto", "reset"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")

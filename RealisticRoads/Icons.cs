@@ -38,12 +38,16 @@ namespace RealisticRoads
         public const string Snap = "snap";
         public const string Deck = "deck";
         public const string Under = "under";
+        public const string Elevated = "elevated";
+        public const string Auto = "auto";
+        public const string Reset = "reset";
 
         private static readonly string[] Names =
         {
             Junction, Bridge, Overpass, Underpass, Tunnel, Plus, Minus, Background, BackgroundHover, BackgroundSelected,
             Logo, LogoSmall, ButtonBackground, ButtonBackgroundHover, ButtonBackgroundPressed,
             Build, BuildOff, Undo, UndoOff, GameTool, BackgroundOff, PageBack, PageNext, Curve, Straight, Snap, Deck, Under,
+            Elevated, Auto, Reset,
         };
 
         private static UITextureAtlas atlas;

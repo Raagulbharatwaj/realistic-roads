@@ -26,6 +26,7 @@ namespace RealisticRoads
         public bool Under;                        // the next piece runs one level under the roads
         public PanelProfile Profile;              // the curve seen from the side (null: nothing to show)
         public string ProfileText = "";           // highest / deepest / steepest
+        public bool Shaped;                       // heights dragged or stretches marked in the side view
     }
 
     // How a stretch of the curve is built: the colours of the preview and the profile.
@@ -41,6 +42,17 @@ namespace RealisticRoads
         public Vector3[] Positions;               // where each sample is on the map
         public readonly List<float> Pillars = new List<float>();     // metres along the curve
         public readonly List<KeyValuePair<float, float>> Crossings = new List<KeyValuePair<float, float>>();   // metres along, crossed road's height
+        public float[] NodeAlong, NodeHeight;     // the nodes: metres along, height
+        public bool[] NodePinned;                 // its height was dragged
+        public bool[] NodeHeld;                   // its height is set by an end or a crossing (not draggable)
+        public readonly List<PanelStretch> Stretches = new List<PanelStretch>();
+    }
+
+    // A stretch marked Elevated or Tunnel in the side view (metres along).
+    public class PanelStretch
+    {
+        public float From, To;
+        public Forced Kind;
     }
 
     // One thing along the road: a crossing (its options as icons) or a water
@@ -88,12 +100,32 @@ namespace RealisticRoads
         private UITextureSprite profileSprite;
         private Texture2D profileTexture;
         private PanelProfile drawnProfile;
-        private Color32[] profilePixels;          // the drawn profile, with the cursor line at drawnCursorX
-        private int drawnCursorX = -1;            // column of the cursor line in profilePixels (-1: none)
-        private readonly Color32[] cursorBackup = new Color32[ProfileHeight];   // that column without the line
+        private Color32[] profilePixels;          // what the texture shows: profileBase with the selection and cursor
         private UILabel profileReadout;
         private float cursorAlong = -1f;          // metres along the curve under the mouse on the side view (-1: none)
         private bool cursorPinned;                // clicked: stays when the mouse leaves
+        // Dragging a node's height: the scale stays as it was when it was grabbed.
+        public Func<int, bool> GrabNode;
+        public Action<float> DragHeight;
+        public Action ReleaseNode;
+        public Action<int> FreeNode;
+        public Action<float, float, Forced> MarkStretch;
+        public Action ResetShape;
+        private int draggedNode = -1;
+        private float drawLow, drawHigh;          // the heights at the bottom and top of the drawn side view
+        private float dragLow, dragHigh;          // those when the node was grabbed
+        private bool pressed;                     // left button down on the side view, not on a node
+        private float pressX;
+        private bool selecting;                   // that press moved: a stretch is being selected
+        private float selectFrom = -1f, selectTo = -1f;   // the selected stretch, metres along (-1: none)
+        private Color32[] profileBase;            // the drawn side view without the selection and cursor
+        private UIButton elevatedButton, tunnelButton, autoButton, resetButton;
+        private const float NodeGrab = 6f;        // pixels from a node's dot that grab it
+        private const float MinStretch = 10f;     // metres: a shorter selection is a click
+        private const float ShapeButtonSize = 26f;
+        private static readonly Color32 NodeDot = new Color32(210, 215, 225, 255);
+        private static readonly Color32 PinnedDot = new Color32(255, 255, 255, 255);
+        private static readonly Color32 PinnedCore = new Color32(30, 30, 30, 255);
         private readonly List<UIComponent> dynamic = new List<UIComponent>();
         private readonly List<KeyValuePair<UILabel, Func<PanelModel, string>>> texts = new List<KeyValuePair<UILabel, Func<PanelModel, string>>>();
         private string structure;
@@ -337,10 +369,14 @@ namespace RealisticRoads
             profileTexture = null;
             drawnProfile = null;
             profilePixels = null;
-            drawnCursorX = -1;
+            profileBase = null;
             profileReadout = null;
             cursorAlong = -1f;
             cursorPinned = false;
+            draggedNode = -1;
+            pressed = selecting = false;
+            selectFrom = selectTo = -1f;
+            elevatedButton = tunnelButton = autoButton = resetButton = null;
             dynamic.Clear();
             texts.Clear();
             structure = null;
@@ -376,6 +412,7 @@ namespace RealisticRoads
                 }
             }
             DrawProfile(model.Profile);
+            UpdateShapeButtons();
         }
 
         private string Shape(PanelModel model)
@@ -420,21 +457,22 @@ namespace RealisticRoads
             profileReadout = null;
             drawnProfile = null;
             profilePixels = null;
-            drawnCursorX = -1;
+            profileBase = null;
+            elevatedButton = tunnelButton = autoButton = resetButton = null;
             if (model.Profile != null)
             {
                 y = Header("SIDE VIEW", y);
                 profileSprite = (UITextureSprite)panel.AddUIComponent(typeof(UITextureSprite));
                 profileSprite.size = new Vector2(ProfileWidth, ProfileHeight);
                 profileSprite.relativePosition = new Vector3(Pad, y);
-                profileSprite.tooltip = "Move the mouse along it to see the height there (marked on the map); click to keep the mark";
-                profileSprite.eventMouseMove += (component, param) => SetCursor(MouseAlong(), false);
-                profileSprite.eventMouseLeave += (component, param) => { if (!cursorPinned) SetCursor(-1f, false); };
-                profileSprite.eventClick += (component, param) =>
+                profileSprite.tooltip = "Drag a dot up or down to set the road's height there (right-click it to let go). " +
+                                        "Drag along the view to select a stretch for the buttons below. Click to keep the mark on the map";
+                profileSprite.eventMouseMove += (component, param) =>
                 {
-                    cursorPinned = !cursorPinned;
-                    SetCursor(cursorPinned ? MouseAlong() : -1f, true);
+                    if (draggedNode < 0 && !selecting) SetCursor(MouseAlong(), false);
                 };
+                profileSprite.eventMouseLeave += (component, param) => { if (!cursorPinned && draggedNode < 0) SetCursor(-1f, false); };
+                profileSprite.eventMouseDown += (component, param) => PressProfile(param.buttons);
                 dynamic.Add(profileSprite);
                 y += ProfileHeight + 3f;
                 float x = Pad;
@@ -442,6 +480,18 @@ namespace RealisticRoads
                     x = Legend(StyleName(style), StyleColor(style), x, y);
                 Legend("pillar", PillarLine, x, y);
                 y += 16f;
+                // The selected stretch: up on pillars, down in a tunnel, or left
+                // to the planner; and everything set here cleared.
+                elevatedButton = ShapeButton(Icons.Elevated, "E", "Elevated: the selected stretch on pillars, " +
+                    RoadPlanner.ForcedHeight.ToString("F0") + " m up (the road ramps up to it before)", Pad, y, () => Mark(Forced.Elevated));
+                tunnelButton = ShapeButton(Icons.Tunnel, "T", "Tunnel: the selected stretch underground, " +
+                    RoadPlanner.ForcedDepth.ToString("F0") + " m down (the road ramps down to it before)", Pad + ShapeButtonSize + 4f, y,
+                    () => Mark(Forced.Tunnel));
+                autoButton = ShapeButton(Icons.Auto, "A", "Auto: the planner decides the selected stretch again (and the heights held in it)",
+                    Pad + 2f * (ShapeButtonSize + 4f), y, () => Mark(Forced.None));
+                resetButton = ShapeButton(Icons.Reset, "R", "Clear every height and stretch set in the side view",
+                    Width - Pad - ShapeButtonSize, y, () => { if (ResetShape != null) ResetShape(); });
+                y += ShapeButtonSize + 4f;
                 y = Text(m => m.ProfileText, DimColor, 0.75f, y);
                 profileReadout = (UILabel)panel.AddUIComponent(typeof(UILabel));
                 profileReadout.autoSize = false;
@@ -698,6 +748,7 @@ namespace RealisticRoads
                 profileTexture = new Texture2D(w, h, TextureFormat.ARGB32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
 
             // Vertical scale: everything shown, at least MinProfileRange metres.
+            // While a height is dragged it stays as it was, so the dot stays under the mouse.
             float low = float.MaxValue, high = float.MinValue;
             for (int i = 0; i < profile.Road.Length; i++)
             {
@@ -718,6 +769,13 @@ namespace RealisticRoads
             float margin = (high - low) * 0.08f;
             low -= margin;
             high += margin;
+            if (draggedNode >= 0)
+            {
+                low = dragLow;
+                high = dragHigh;
+            }
+            drawLow = low;
+            drawHigh = high;
 
             var pixels = new Color32[w * h];
             for (int i = 0; i < pixels.Length; i++) pixels[i] = ProfileBack;
@@ -737,9 +795,16 @@ namespace RealisticRoads
                 if (water > ground + 0.3f)
                     for (int y = groundRows[x] + 1; y <= Row(water, low, high, h); y++) pixels[y * w + x] = WaterColor;
             }
+            // Stretches marked Elevated or Tunnel: a band along the top in their colour.
+            foreach (var stretch in profile.Stretches)
+            {
+                var color = StyleColor(stretch.Kind == Forced.Elevated ? ProfileStyle.Raised : ProfileStyle.Lowered);
+                for (int x = Column(profile, stretch.From); x <= Column(profile, stretch.To); x++)
+                    for (int y = h - 4; y < h; y++) pixels[y * w + x] = color;
+            }
             foreach (float at in profile.Pillars)
             {
-                int x = Mathf.Clamp(Mathf.RoundToInt(at / Mathf.Max(profile.Length, 1f) * (w - 1)), 0, w - 1);
+                int x = Column(profile, at);
                 for (int y = groundRows[x]; y < roadRows[x]; y++) pixels[y * w + x] = PillarLine;
             }
             for (int x = 0; x < w; x++)
@@ -752,31 +817,226 @@ namespace RealisticRoads
             }
             foreach (var crossing in profile.Crossings)
             {
-                int cx = Mathf.Clamp(Mathf.RoundToInt(crossing.Key / Mathf.Max(profile.Length, 1f) * (w - 1)), 0, w - 1);
+                int cx = Column(profile, crossing.Key);
                 int cy = Row(crossing.Value, low, high, h);
                 for (int x = Mathf.Max(cx - 3, 0); x <= Mathf.Min(cx + 3, w - 1); x++)
                     for (int y = Mathf.Max(cy - 1, 0); y <= Mathf.Min(cy + 1, h - 1); y++) pixels[y * w + x] = CrossingMark;
             }
+            // The nodes that can be dragged: a dot; a dragged (held) one: a bigger white square.
+            if (profile.NodeAlong != null)
+                for (int i = 0; i < profile.NodeAlong.Length; i++)
+                {
+                    if (profile.NodeHeld[i]) continue;
+                    int cx = Column(profile, profile.NodeAlong[i]), cy = Row(profile.NodeHeight[i], low, high, h);
+                    int size = profile.NodePinned[i] || i == draggedNode ? 2 : 1;
+                    for (int x = Mathf.Max(cx - size, 0); x <= Mathf.Min(cx + size, w - 1); x++)
+                        for (int y = Mathf.Max(cy - size, 0); y <= Mathf.Min(cy + size, h - 1); y++)
+                            pixels[y * w + x] = size > 1 && x == cx && y == cy ? PinnedCore : size > 1 ? PinnedDot : NodeDot;
+                }
 
-            profilePixels = pixels;
-            drawnCursorX = -1;
+            profileBase = pixels;
+            profilePixels = new Color32[pixels.Length];
             if (cursorAlong > profile.Length) cursorAlong = profile.Length;
+            if (selectFrom > profile.Length || selectTo > profile.Length) ClearSelection();
             ShowCursor();
             profileSprite.texture = profileTexture;
         }
 
-        // --- the side view's cursor ------------------------------------------------
+        private static int Column(PanelProfile profile, float along)
+        {
+            return Mathf.Clamp(Mathf.RoundToInt(along / Mathf.Max(profile.Length, 1f) * (ProfileWidth - 1)), 0, ProfileWidth - 1);
+        }
+
+        // --- the side view's cursor, dragged heights and selected stretch -----------
 
         // Metres along the curve under the mouse on the side view (-1 if it isn't over it).
         private float MouseAlong()
         {
+            float x, row;
+            if (!MouseOnProfile(out x, out row) || x < 0f || x > ProfileWidth) return -1f;
+            return AlongAt(x);
+        }
+
+        private float AlongAt(float x)
+        {
             var profile = drawnProfile;
-            if (profileSprite == null || profile == null) return -1f;
+            return profile == null ? -1f : Mathf.Clamp01(x / (ProfileWidth - 1)) * profile.Length;
+        }
+
+        // The mouse in the side view's pixels: x from the left, row from the
+        // bottom (either may be outside it).
+        private bool MouseOnProfile(out float x, out float row)
+        {
+            x = row = 0f;
+            if (profileSprite == null || drawnProfile == null) return false;
             var view = UIView.GetAView();
             Vector2 gui = view.ScreenPointToGUI(Input.mousePosition / view.inputScale);
-            float x = gui.x - profileSprite.absolutePosition.x;
-            if (x < 0f || x > ProfileWidth) return -1f;
-            return Mathf.Clamp01(x / (ProfileWidth - 1)) * profile.Length;
+            x = gui.x - profileSprite.absolutePosition.x;
+            row = ProfileHeight - 1 - (gui.y - profileSprite.absolutePosition.y);
+            return true;
+        }
+
+        // The draggable node whose dot is under the mouse (-1: none).
+        private int NodeUnderMouse(float x, float row)
+        {
+            var profile = drawnProfile;
+            if (profile == null || profile.NodeAlong == null) return -1;
+            int best = -1;
+            float bestDistance = NodeGrab * NodeGrab;
+            for (int i = 0; i < profile.NodeAlong.Length; i++)
+            {
+                if (profile.NodeHeld[i]) continue;
+                float dx = Column(profile, profile.NodeAlong[i]) - x, dy = Row(profile.NodeHeight[i], drawLow, drawHigh, ProfileHeight) - row;
+                if (dx * dx + dy * dy < bestDistance)
+                {
+                    bestDistance = dx * dx + dy * dy;
+                    best = i;
+                }
+            }
+            return best;
+        }
+
+        // A press on the side view: on a dot, drag its height (right-click: let
+        // it go); anywhere else, select a stretch (or, without moving, a click
+        // that keeps the mark on the map).
+        private void PressProfile(UIMouseButton buttons)
+        {
+            float x, row;
+            if (!MouseOnProfile(out x, out row)) return;
+            int node = NodeUnderMouse(x, row);
+            if ((buttons & UIMouseButton.Right) != 0)
+            {
+                if (node >= 0 && drawnProfile.NodePinned[node] && FreeNode != null) FreeNode(node);
+                else ClearSelection();
+                return;
+            }
+            if ((buttons & UIMouseButton.Left) == 0) return;
+            if (node >= 0 && GrabNode != null && GrabNode(node))
+            {
+                draggedNode = node;
+                dragLow = drawLow;
+                dragHigh = drawHigh;
+                cursorPinned = false;
+                SetCursor(drawnProfile.NodeAlong[node], true);
+                return;
+            }
+            pressed = true;
+            selecting = false;
+            pressX = x;
+        }
+
+        // Every frame (from the tool): follows the mouse while a height is
+        // dragged or a stretch selected, and ends either when the button is let
+        // go (also outside the side view).
+        public void Poll()
+        {
+            if (profileSprite == null)
+            {
+                draggedNode = -1;
+                pressed = selecting = false;
+                return;
+            }
+            float x, row;
+            bool mouse = MouseOnProfile(out x, out row);
+            bool held = Input.GetMouseButton(0);
+            if (draggedNode >= 0)
+            {
+                if (!held)
+                {
+                    draggedNode = -1;
+                    if (ReleaseNode != null) ReleaseNode();
+                    // The scale fits the side view again.
+                    var profile = drawnProfile;
+                    drawnProfile = null;
+                    DrawProfile(profile);
+                    return;
+                }
+                if (mouse && DragHeight != null) DragHeight(dragLow + row / (ProfileHeight - 1) * (dragHigh - dragLow));
+                return;
+            }
+            if (!pressed) return;
+            if (mouse && !selecting && Mathf.Abs(x - pressX) > 4f)
+            {
+                selecting = true;
+                selectFrom = AlongAt(pressX);
+            }
+            if (mouse && selecting)
+            {
+                selectTo = AlongAt(x);
+                ShowCursor();
+                UpdateShapeButtons();
+            }
+            if (held) return;
+            pressed = false;
+            if (selecting)
+            {
+                selecting = false;
+                if (Mathf.Abs(selectTo - selectFrom) < MinStretch) ClearSelection();
+                UpdateShapeButtons();
+                return;
+            }
+            // A click: the mark on the map stays (or goes).
+            cursorPinned = !cursorPinned;
+            SetCursor(cursorPinned ? MouseAlong() : -1f, true);
+        }
+
+        private bool HasSelection => selectFrom >= 0f && selectTo >= 0f && Mathf.Abs(selectTo - selectFrom) >= MinStretch;
+
+        private void ClearSelection()
+        {
+            selectFrom = selectTo = -1f;
+            selecting = false;
+            ShowCursor();
+            UpdateShapeButtons();
+        }
+
+        private void Mark(Forced kind)
+        {
+            if (!HasSelection || MarkStretch == null) return;
+            float from = Mathf.Min(selectFrom, selectTo), to = Mathf.Max(selectFrom, selectTo);
+            ClearSelection();
+            MarkStretch(from, to, kind);
+        }
+
+        private void UpdateShapeButtons()
+        {
+            bool selected = HasSelection;
+            SetEnabled(elevatedButton, selected);
+            SetEnabled(tunnelButton, selected);
+            SetEnabled(autoButton, selected);
+            SetEnabled(resetButton, current != null && current.Shaped);
+        }
+
+        private UIButton ShapeButton(string icon, string letter, string tooltip, float x, float y, Action onClick)
+        {
+            var button = (UIButton)panel.AddUIComponent(typeof(UIButton));
+            button.size = new Vector2(ShapeButtonSize, ShapeButtonSize);
+            button.relativePosition = new Vector3(x, y);
+            button.tooltip = tooltip;
+            if (Icons.Has(icon, Icons.Background, Icons.BackgroundHover, Icons.BackgroundSelected, Icons.BackgroundOff))
+            {
+                button.atlas = Icons.Atlas;
+                button.normalFgSprite = button.hoveredFgSprite = button.pressedFgSprite = button.focusedFgSprite = button.disabledFgSprite = icon;
+                button.normalBgSprite = button.focusedBgSprite = Icons.Background;
+                button.hoveredBgSprite = Icons.BackgroundHover;
+                button.pressedBgSprite = Icons.BackgroundSelected;
+                button.disabledBgSprite = Icons.BackgroundOff;
+            }
+            else
+            {
+                button.text = letter;
+                button.textScale = 0.7f;
+                button.normalBgSprite = button.focusedBgSprite = "ButtonMenu";
+                button.hoveredBgSprite = "ButtonMenuHovered";
+                button.pressedBgSprite = "ButtonMenuPressed";
+                button.disabledBgSprite = "ButtonMenuDisabled";
+            }
+            button.eventClick += (component, param) =>
+            {
+                if ((param.buttons & UIMouseButton.Left) != 0 && button.isEnabled) onClick();
+            };
+            dynamic.Add(button);
+            return button;
         }
 
         private void SetCursor(float along, bool force)
@@ -803,27 +1063,29 @@ namespace RealisticRoads
             return Mathf.Clamp(Mathf.RoundToInt(along / Mathf.Max(profile.Length, 1f) * last), 0, last);
         }
 
-        // The profile with a white line where the cursor is, and its readout under it.
+        // The side view with the selected stretch lightened and a white line
+        // where the cursor is, and the readout under it.
         private void ShowCursor()
         {
             var profile = drawnProfile;
-            if (profileTexture == null || profilePixels == null || profile == null) return;
+            if (profileTexture == null || profileBase == null || profilePixels == null || profile == null) return;
             const int w = ProfileWidth, h = ProfileHeight;
             var pixels = profilePixels;
-            // Put back the column under the old line, then draw the new one,
-            // keeping what was under it (no copy of the whole picture per move).
-            if (drawnCursorX >= 0)
-                for (int y = 0; y < h; y++) pixels[y * w + drawnCursorX] = cursorBackup[y];
-            drawnCursorX = -1;
+            Array.Copy(profileBase, pixels, pixels.Length);
+            if (selectFrom >= 0f && selectTo >= 0f)
+            {
+                int from = Column(profile, Mathf.Min(selectFrom, selectTo)), to = Column(profile, Mathf.Max(selectFrom, selectTo));
+                for (int x = from; x <= to; x++)
+                    for (int y = 0; y < h; y++)
+                    {
+                        var c = pixels[y * w + x];
+                        pixels[y * w + x] = new Color32((byte)((c.r + 255) / 2), (byte)((c.g + 255) / 2), (byte)((c.b + 255) / 2), 255);
+                    }
+            }
             if (cursorAlong >= 0f)
             {
-                int x = Mathf.Clamp(Mathf.RoundToInt(cursorAlong / Mathf.Max(profile.Length, 1f) * (w - 1)), 0, w - 1);
-                for (int y = 0; y < h; y++)
-                {
-                    cursorBackup[y] = pixels[y * w + x];
-                    pixels[y * w + x] = CrossingMark;
-                }
-                drawnCursorX = x;
+                int x = Column(profile, cursorAlong);
+                for (int y = 0; y < h; y++) pixels[y * w + x] = CrossingMark;
             }
             profileTexture.SetPixels32(pixels);
             profileTexture.Apply();
@@ -833,12 +1095,18 @@ namespace RealisticRoads
 
         private string Readout(PanelProfile profile, float along)
         {
-            if (along < 0f) return "Point at the side view to see the height there";
+            if (selectFrom >= 0f && selectTo >= 0f)
+            {
+                float from = Mathf.Min(selectFrom, selectTo), to = Mathf.Max(selectFrom, selectTo);
+                return "Selected " + from.ToString("N0") + " to " + to.ToString("N0") + " m: Elevated, Tunnel or Auto below";
+            }
+            if (along < 0f) return "Point at the side view to see the height there; drag a dot to set it";
             int i = Sample(profile, along);
             float above = profile.Road[i] - Mathf.Max(profile.Ground[i], profile.Water[i]);
             string height = above >= 1f ? above.ToString("F0") + " m above the " + (profile.Water[i] > profile.Ground[i] + 0.3f ? "water" : "ground")
                 : above <= -1f ? (-above).ToString("F0") + " m below the ground" : "on the ground";
-            return along.ToString("F0") + " m along: " + height + ", " + StyleName(profile.Style[i]) + (cursorPinned ? "  (pinned)" : "");
+            return along.ToString("F0") + " m along: " + height + ", " + StyleName(profile.Style[i]) +
+                   (draggedNode >= 0 ? "  (dragging)" : cursorPinned ? "  (pinned)" : "");
         }
 
         private static int Row(float height, float low, float high, int rows)

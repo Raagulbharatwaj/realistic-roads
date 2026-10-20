@@ -16,6 +16,10 @@ namespace RealisticRoads
         Tunnel,     // deep underground: tunnel version
     }
 
+    // A stretch the player marked in the side view: kept up on pillars or down
+    // in a tunnel, whatever the ground does (None: the planner decides).
+    public enum Forced : byte { None, Elevated, Tunnel }
+
     // A stretch of water the curve crosses, with the player's extra height.
     public class WaterRun
     {
@@ -53,6 +57,7 @@ namespace RealisticRoads
         public bool[] OnDeck;
         public bool[] UnderDeck;              // of those, the nodes of a deck under the road (a tunnel)
         public bool[] Middle;                 // suspension bridges: the node between two towers
+        public bool[] Held;                   // height set by an end or a crossing (not draggable in the side view)
         public List<Crossing> Crossings = new List<Crossing>();
         public List<int> CrossingIndex = new List<int>();   // node index of each crossing
         public Dictionary<int, Lowering> Lowerings = new Dictionary<int, Lowering>();  // by crossing number
@@ -90,6 +95,8 @@ namespace RealisticRoads
         // version in an open cutting; deeper it is a tunnel. The one segment
         // between the two is the slope version, which has the portal.
         public const float TunnelMinDepth = 8f;
+        public const float ForcedHeight = OverClearance;   // an Elevated stretch: this high above the ground (or water)
+        public const float ForcedDepth = TunnelDepth;      // a Tunnel stretch: this deep under it
         private const float Unlimited = 100000f;
         private const float RunTolerance = 3f;        // node distances are chords, water runs follow the curve
         private const float DefaultMaxSlope = 0.25f;  // roads without their own limit
@@ -103,7 +110,8 @@ namespace RealisticRoads
             List<Crossing> crossings, List<int> crossingIndex, List<WaterRun> waterRuns, ushort startNode, ushort endNode,
             ushort startSegment = 0, float startT = 0f, ushort endSegment = 0, float endT = 0f,
             List<KeyValuePair<Vector3, float>> lifts = null, List<Vector3> inTangents = null,
-            bool[] onDeck = null, DeckBelow[] decks = null, bool[] underDeck = null)
+            bool[] onDeck = null, DeckBelow[] decks = null, bool[] underDeck = null,
+            List<KeyValuePair<Vector3, float>> dragged = null, Forced[] forced = null)
         {
             var plan = new Plan
             {
@@ -210,11 +218,40 @@ namespace RealisticRoads
                                       "Draw the tunnel under a road on the ground");
             }
 
+            // Stretches marked Elevated or Tunnel in the side view: held up at a
+            // flyover's clearance (the bridge's over water) or down at a tunnel's
+            // depth (under the bed in water). The road ramps to them outside the
+            // stretch; deck nodes keep their own levels.
+            bool shaped = dragged != null && dragged.Count > 0;
+            if (forced != null)
+                for (int i = 0; i < n && i < forced.Length; i++)
+                {
+                    if (forced[i] == Forced.None || (onDeck != null && i < onDeck.Length && onDeck[i])) continue;
+                    shaped = true;
+                    if (forced[i] == Forced.Elevated)
+                    {
+                        float level = Mathf.Max(ground[i], terrain.SampleRawHeightSmoothWithWater(points[i], false, 0f));
+                        minH[i] = Mathf.Max(minH[i], level + ForcedHeight);
+                    }
+                    else maxH[i] = Mathf.Min(maxH[i], ground[i] - (water[i] ? UnderwaterCover : ForcedDepth));
+                }
+
             if (NetworkBuilder.NodeExists(startNode)) Fix(0, nodes[startNode].m_position.y, minH, maxH, isFixed);
             if (NetworkBuilder.NodeExists(endNode)) Fix(n - 1, nodes[endNode].m_position.y, minH, maxH, isFixed);
             // Ends on the middle of a road join it at its height.
             if (startSegment != 0) Fix(0, points[0].y, minH, maxH, isFixed);
             if (endSegment != 0) Fix(n - 1, points[n - 1].y, minH, maxH, isFixed);
+            // The ends (and below, junctions and overpasses) are held where they
+            // are: the side view shows them as not draggable.
+            plan.Held = (bool[])isFixed.Clone();
+            // Heights dragged in the side view: the node there is held exactly
+            // at that height (before the points' own heights, so a drag wins).
+            if (dragged != null)
+                foreach (var height in dragged)
+                {
+                    int best = NodeNear(points, height.Key, isFixed);
+                    if (best >= 0) Fix(best, height.Value, minH, maxH, isFixed);
+                }
             // Heights the player gave points (Page Up / Page Down): the node there
             // is held that far above the ground (or the water); the road ramps
             // to it and away from it at the grade. Crossings below may still
@@ -222,18 +259,7 @@ namespace RealisticRoads
             if (lifts != null)
                 foreach (var lift in lifts)
                 {
-                    int best = -1;
-                    float bestDistance = LiftSnap;
-                    for (int i = 0; i < n; i++)
-                    {
-                        if (isFixed[i]) continue;
-                        float d = CurveMath.FlatDistance(points[i], lift.Key);
-                        if (d < bestDistance)
-                        {
-                            best = i;
-                            bestDistance = d;
-                        }
-                    }
+                    int best = NodeNear(points, lift.Key, isFixed);
                     if (best < 0) continue;
                     float level = water[best] ? terrain.SampleRawHeightSmoothWithWater(points[best], false, 0f) : ground[best];
                     Fix(best, level + lift.Value, minH, maxH, isFixed);
@@ -261,6 +287,7 @@ namespace RealisticRoads
                         {
                             Fix(k, crossing.Point.y, minH, maxH, isFixed);
                             joins[k] = true;
+                            plan.Held[k] = true;
                         }
                         // Passing under an elevated road or over a sunken one at ground
                         // level: keep the headroom, so no embankment lifts us into the
@@ -285,6 +312,7 @@ namespace RealisticRoads
                     case CrossingType.Overpass:
                         // We stay at ground level on a bridge deck; the existing road goes down.
                         Fix(k, crossing.Point.y, minH, maxH, isFixed);
+                        plan.Held[k] = true;
                         // The deck spans the lowered road and its cutting's banks.
                         float deckHalf = DeckHalf(crossing, info, true) + 1f;
                         Mark(distance, k, deckHalf, forceBridge, false);
@@ -338,7 +366,9 @@ namespace RealisticRoads
                     solved = solvedAgain;
                 }
             }
-            if (!solved) plan.Problems.Add(RampProblem(crossings, crossingIndex, distance, ground, minH, maxH));
+            if (!solved)
+                plan.Problems.Add(RampProblem(crossings, crossingIndex, distance, ground, minH, maxH) +
+                                  (shaped ? ". Or ease what you set in the side view (right-click a held height to free it; Auto clears a stretch)" : ""));
 
             // Plain ground: small embankments and cuttings keep the road within its
             // own slope limit; what is still steeper is built anyway and marked.
@@ -496,6 +526,7 @@ namespace RealisticRoads
                 plan.Steep = steep;
             }
             if (plan.Middle != null) plan.Middle = Without(plan.Middle, index);
+            if (plan.Held != null && index < plan.Held.Length) plan.Held = Without(plan.Held, index);
         }
 
         private static T[] Without<T>(T[] array, int index)
@@ -880,6 +911,24 @@ namespace RealisticRoads
             Vector3 theirs = CurveMath.FlatNormal(CurveMath.BezierDerivative(a, b, c, d, crossing.ExistingT));
             Vector3 ours = CurveMath.FlatNormal(ourDirection);
             return Mathf.Max(Mathf.Abs(ours.x * theirs.z - ours.z * theirs.x), 0.35f);
+        }
+
+        // The free node within LiftSnap of 'at' (-1: none).
+        private static int NodeNear(List<Vector3> points, Vector3 at, bool[] isFixed)
+        {
+            int best = -1;
+            float bestDistance = LiftSnap;
+            for (int i = 0; i < points.Count; i++)
+            {
+                if (isFixed[i]) continue;
+                float d = CurveMath.FlatDistance(points[i], at);
+                if (d < bestDistance)
+                {
+                    best = i;
+                    bestDistance = d;
+                }
+            }
+            return best;
         }
 
         private static void Fix(int i, float height, float[] minH, float[] maxH, bool[] isFixed)
