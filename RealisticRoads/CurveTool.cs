@@ -65,6 +65,7 @@ namespace RealisticRoads
         private readonly Dictionary<int, CrossingType> crossingTypes = new Dictionary<int, CrossingType>();
         private readonly Dictionary<int, float> crossingExtra = new Dictionary<int, float>();
         private readonly Dictionary<int, float> waterExtra = new Dictionary<int, float>();
+        private readonly Dictionary<int, bool> waterTunnel = new Dictionary<int, bool>();   // water crossings chosen as tunnels
 
         // On-screen buttons, reused every frame: button i runs buttonActions[i].
         private readonly List<UIButton> buttons = new List<UIButton>();
@@ -1340,6 +1341,10 @@ namespace RealisticRoads
                 var fallback = crossing.UnderDeck ? CrossingType.Tunnel
                     : crossing.Allows(CrossingType.Junction) ? CrossingType.Junction : CrossingType.Bridge;
                 crossing.Type = crossingTypes.TryGetValue(crossing.Key, out type) && crossing.Allows(type) ? type : fallback;
+                // A ship route on a water crossing goes the way the whole crossing does:
+                // over it on the bridge, or under it in the tunnel.
+                var shipRun = crossing.ShipPath ? RunAt(division.WaterRuns, crossing.Distance) : null;
+                if (shipRun != null) crossing.Type = shipRun.Tunnel ? CrossingType.Tunnel : CrossingType.Bridge;
                 float extra;
                 crossing.ExtraHeight = crossingExtra.TryGetValue(crossing.Key, out extra) ? extra : 0f;
                 cuts.Add(new KeyValuePair<float, Crossing>(crossing.Distance, crossing));
@@ -1581,6 +1586,8 @@ namespace RealisticRoads
                 run.Key = Mathf.RoundToInt(middle.x / 64f) * 100003 + Mathf.RoundToInt(middle.z / 64f);
                 float extra;
                 run.Extra = waterExtra.TryGetValue(run.Key, out extra) ? extra : 0f;
+                bool tunnel;
+                run.Tunnel = waterTunnel.TryGetValue(run.Key, out tunnel) && tunnel;
             }
             return runs;
         }
@@ -1671,12 +1678,22 @@ namespace RealisticRoads
                     else
                     {
                         var r = item.Water;
-                        y = FreeRow(placed, gui.x - IconSize - 1f, y, 2f * IconSize + 2f);
-                        UseLabel(labelled++, (n + 1) + " · " + ItemHeight(division, item), new Vector2(gui.x - IconSize - 1f, y - 22f));
-                        UseButton(used++, Icons.Plus, "+", "Bridge higher over the water (+" + HeightStep + " m)",
-                            new Vector2(gui.x - IconSize - 1f, y), false, () => AddWaterExtra(r, HeightStep));
-                        UseButton(used++, Icons.Minus, "-", "Bridge lower over the water (-" + HeightStep + " m)",
-                            new Vector2(gui.x + 1f, y), false, () => AddWaterExtra(r, -HeightStep));
+                        // Bridge or tunnel, and for a bridge its height.
+                        float rowWidth = (r.Tunnel ? 2f : 4f) * (IconSize + 2f);
+                        float left = gui.x - rowWidth * 0.5f;
+                        y = FreeRow(placed, left, y, rowWidth);
+                        UseLabel(labelled++, (n + 1) + " · " + ItemHeight(division, item), new Vector2(left, y - 22f));
+                        UseButton(used++, RoadPanel.IconFor(CrossingType.Bridge), "B", "Bridge over the water", new Vector2(left, y),
+                            !r.Tunnel, () => SetWaterTunnel(r, false));
+                        UseButton(used++, RoadPanel.IconFor(CrossingType.Tunnel), "T", "Tunnel under the water (under its bed; the entrances on the shores)",
+                            new Vector2(left + IconSize + 2f, y), r.Tunnel, () => SetWaterTunnel(r, true));
+                        if (!r.Tunnel)
+                        {
+                            UseButton(used++, Icons.Plus, "+", "Bridge higher over the water (+" + HeightStep + " m)",
+                                new Vector2(left + 2f * (IconSize + 2f), y), false, () => AddWaterExtra(r, HeightStep));
+                            UseButton(used++, Icons.Minus, "-", "Bridge lower over the water (-" + HeightStep + " m)",
+                                new Vector2(left + 3f * (IconSize + 2f), y), false, () => AddWaterExtra(r, -HeightStep));
+                        }
                     }
                 }
             }
@@ -1803,6 +1820,9 @@ namespace RealisticRoads
         private void SetType(Crossing crossing, CrossingType type)
         {
             crossingTypes[crossing.Key] = type;
+            // A ship route: the whole water crossing it is on goes over or under.
+            var run = crossing.ShipPath && preview != null ? RunAt(preview.WaterRuns, crossing.Distance) : null;
+            if (run != null) waterTunnel[run.Key] = type == CrossingType.Tunnel;
             choicesVersion++;
             Mod.Log("Crossing with " + crossing.ExistingName + " (#" + crossing.Segment + "): " + crossing.Describe(type));
         }
@@ -1813,6 +1833,20 @@ namespace RealisticRoads
             crossingExtra.TryGetValue(crossing.Key, out extra);
             crossingExtra[crossing.Key] = Mathf.Clamp(extra + step, 0f, MaxExtraHeight);
             choicesVersion++;
+        }
+
+        private void SetWaterTunnel(WaterRun run, bool tunnel)
+        {
+            waterTunnel[run.Key] = tunnel;
+            choicesVersion++;
+            Mod.Log("Water crossing at " + Format(run.Middle) + ": " + (tunnel ? "tunnel under it" : "bridge over it"));
+        }
+
+        private static WaterRun RunAt(List<WaterRun> runs, float at)
+        {
+            if (runs == null) return null;
+            foreach (var run in runs) if (at >= run.From - 2f && at <= run.To + 2f) return run;
+            return null;
         }
 
         private void AddWaterExtra(WaterRun run, float step)
@@ -1965,7 +1999,11 @@ namespace RealisticRoads
                 else
                 {
                     var run = item.Water;
-                    row.HeightButtons = true;
+                    row.Allowed.Add(CrossingType.Bridge);
+                    row.Allowed.Add(CrossingType.Tunnel);
+                    row.Selected = run.Tunnel ? CrossingType.Tunnel : CrossingType.Bridge;
+                    row.Pick = type => SetWaterTunnel(run, type == CrossingType.Tunnel);
+                    row.HeightButtons = !run.Tunnel;
                     row.Raise = step => AddWaterExtra(run, step);
                 }
                 model.Items.Add(row);
@@ -2024,6 +2062,11 @@ namespace RealisticRoads
             if (item.Water != null)
             {
                 float middle = (item.Water.From + item.Water.To) * 0.5f;
+                if (item.Water.Tunnel)
+                {
+                    float cover = terrain.SampleRawHeightSmooth(item.Water.Middle) - HeightAt(plan, middle);
+                    return "tunnel, " + cover.ToString("F0") + " m under the bed";
+                }
                 float deck = HeightAt(plan, middle) - terrain.SampleRawHeightSmoothWithWater(item.Water.Middle, false, 0f);
                 return "bridge, deck " + deck.ToString("F0") + " m above the water";
             }
@@ -2155,6 +2198,7 @@ namespace RealisticRoads
             crossingTypes.Clear();
             crossingExtra.Clear();
             waterExtra.Clear();
+            waterTunnel.Clear();
             preview = null;
             choicesVersion++;
         }

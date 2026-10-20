@@ -21,6 +21,7 @@ namespace RealisticRoads
     {
         public float From, To;      // metres along the curve
         public float Extra;         // +/- from the player
+        public bool Tunnel;         // crossed in a tunnel under the bed, not on a bridge
         public int Key;             // stable id for remembering Extra while the curve changes
         public Vector3 Middle;
     }
@@ -83,6 +84,7 @@ namespace RealisticRoads
         public const float ShipClearance = 20f;       // deck above a ship or ferry route (on the water)
         public const float UnderClearance = 7f;       // headroom under an elevated road we pass beneath
         public const float TunnelDepth = 12f;         // tunnel under the existing road
+        public const float UnderwaterCover = 10f;     // a tunnel under water: at least this far under the bed
         public const float CutDepth = 8f;             // open cutting under a short bridge
         // Like the vanilla tool: shallower than this the road stays the normal
         // version in an open cutting; deeper it is a tunnel. The one segment
@@ -137,6 +139,7 @@ namespace RealisticRoads
             var cutting = new bool[n];      // lowered for an underpass: never a tunnel
             var joins = new bool[n];        // a junction / level crossing at ground level: always the ground version
             var forceBridge = new bool[n];  // deck over a lowered road (overpass)
+            var underWater = new bool[n];   // in a water crossing chosen as a tunnel
 
             maxGrade = GradeFor(info);
             // Raised parts use the elevated version, else the bridge one (InfoFor).
@@ -153,16 +156,19 @@ namespace RealisticRoads
                 // A deck under the road never bridges water: it stays a tunnel (and
                 // the underground check says if there is water in the way).
                 bool tunnelDeck = underDeck != null && i < underDeck.Length && underDeck[i];
-                minH[i] = water[i] && hasBridge && !tunnelDeck ? surface + BridgeClearance + WaterExtra(waterRuns, distance[i]) : -Unlimited;
-                maxH[i] = Unlimited;
-
                 // The nodes either side of a river narrower than the node spacing
                 // stand on the banks, dry: the traced water run says they span water.
                 var run = RunAt(waterRuns, distance[i], RunTolerance);
+                // Under the water in a tunnel: at least UnderwaterCover under the
+                // bed (the ground under the water), never a bridge's height.
+                underWater[i] = run != null && run.Tunnel;
+                minH[i] = water[i] && hasBridge && !tunnelDeck && !underWater[i]
+                    ? surface + BridgeClearance + WaterExtra(waterRuns, distance[i]) : -Unlimited;
+                maxH[i] = underWater[i] ? ground[i] - UnderwaterCover : Unlimited;
                 if (run != null && !water[i])
                 {
                     water[i] = true;
-                    if (hasBridge && !tunnelDeck)
+                    if (hasBridge && !tunnelDeck && !underWater[i])
                     {
                         float runSurface = terrain.SampleRawHeightSmoothWithWater(run.Middle, false, 0f);
                         minH[i] = Mathf.Max(minH[i], runSurface + BridgeClearance + run.Extra);
@@ -395,7 +401,7 @@ namespace RealisticRoads
                 plan.Warnings.Add("Up to " + highest.ToString("F0") + " m above the ground: very tall pillars");
 
             CheckVariants(info, plan, hasElevated);
-            CheckUnderground(info, plan, water, ground);
+            CheckUnderground(info, plan, water, ground, underWater);
             CheckCrossings(plan);
             return plan;
         }
@@ -988,7 +994,7 @@ namespace RealisticRoads
         }
 
         // Going down: no water, and nothing else underground in the way.
-        private static void CheckUnderground(NetInfo info, Plan plan, bool[] water, float[] ground)
+        private static void CheckUnderground(NetInfo info, Plan plan, bool[] water, float[] ground, bool[] underWater)
         {
             var samples = new Vector3[9];
             var segments = NetManager.instance.m_segments.m_buffer;
@@ -1000,9 +1006,14 @@ namespace RealisticRoads
             for (int i = 0; i < plan.Points.Count; i++)
             {
                 if (!IsBelow(plan.Kinds[i])) continue;
+                // A tunnel under a water crossing is fine; an open cutting or its
+                // portal in the water is not.
+                if (water[i] && underWater[i] && plan.Kinds[i] == NodeKind.Tunnel) continue;
                 if (water[i])
                 {
-                    plan.Problems.Add("Can't go under here: there is water");
+                    plan.Problems.Add(underWater[i]
+                        ? "The tunnel under the water starts too late: its entrance would be in the water. Start the curve further from the shore"
+                        : "Can't go under here: there is water");
                     return;
                 }
             }

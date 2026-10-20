@@ -112,6 +112,11 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    or tunnel (that piece is cut where the curve joins it); the panel says so.
    If an overpass can't lower the other road, the log lists that road's nodes and heights (`Overpass: lowering ...
    failed`); please send it.
+   **Tunnel under water:** each water crossing (river, lake, sea) has **bridge** and **tunnel** icons, in the panel
+   and at the middle of the water on the map. A tunnel runs at least 10 m under the bed (the ground under the
+   water) all the way across, with its entrances on the shores: the road ramps down on land before the water.
+   Picking tunnel on a ship route sets its whole water crossing to a tunnel (and bridge to a bridge). If an
+   entrance would be in the water, the panel says to start the curve further from the shore.
    Over water the preview shows **+/-** at the middle of the river: the bridge deck is 10 m above the water by
    default, 5 m per click (up to +60 m) so ships fit. Bridges over water use ~100 m spans.
    Bridges and flyovers span level between their banks: over a gorge or a river with high banks the deck stays at
