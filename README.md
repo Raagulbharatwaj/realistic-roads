@@ -112,6 +112,11 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    or tunnel (that piece is cut where the curve joins it); the panel says so.
    If an overpass can't lower the other road, the log lists that road's nodes and heights (`Overpass: lowering ...
    failed`); please send it.
+   **Tunnel under water:** each water crossing (river, lake, sea) has **bridge** and **tunnel** icons, in the panel
+   and at the middle of the water on the map. A tunnel runs at least 10 m under the bed (the ground under the
+   water) all the way across, with its entrances on the shores: the road ramps down on land before the water.
+   Picking tunnel on a ship route sets its whole water crossing to a tunnel (and bridge to a bridge). If an
+   entrance would be in the water, the panel says to start the curve further from the shore.
    Over water the preview shows **+/-** at the middle of the river: the bridge deck is 10 m above the water by
    default, 5 m per click (up to +60 m) so ships fit. Bridges over water use ~100 m spans.
    Bridges and flyovers span level between their banks: over a gorge or a river with high banks the deck stays at
@@ -169,7 +174,7 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      - Columns are 2 m square; a median column is as wide as the median allows (2.4 to 3.6 m).
      - **Under** (next to Deck): the same, one level **under** the roads, as a tunnel, e.g. a metro line under a
        street. Click on a road with Under on to put a point under its middle; between two such points the tunnel
-       follows the road. It runs 12 m below the road (up to 3 m deeper where the grade needs it), or 12 m below the
+       follows the road. It runs at least 12 m below the road (deeper only where its grade needs it, under a steep street), or 12 m below the
        ground where there is no road. Roads it meets on the way are passed under. One level only: not under a road
        that is itself underground. Draw the pieces before and after with Under off for the portals.
      - A third level is measured from the deck below it (the highest road under each point), and evened out
