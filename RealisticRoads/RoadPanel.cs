@@ -120,6 +120,7 @@ namespace RealisticRoads
         private float selectFrom = -1f, selectTo = -1f;   // the selected stretch, metres along (-1: none)
         private Color32[] profileBase;            // the drawn side view without the selection and cursor
         private UIButton elevatedButton, tunnelButton, autoButton, resetButton;
+        private UILabel shapeHint;                // what the buttons act on
         private const float NodeGrab = 6f;        // pixels from a node's dot that grab it
         private const float MinStretch = 10f;     // metres: a shorter selection is a click
         private const float ShapeButtonSize = 26f;
@@ -377,6 +378,7 @@ namespace RealisticRoads
             pressed = selecting = false;
             selectFrom = selectTo = -1f;
             elevatedButton = tunnelButton = autoButton = resetButton = null;
+            shapeHint = null;
             dynamic.Clear();
             texts.Clear();
             structure = null;
@@ -459,6 +461,7 @@ namespace RealisticRoads
             profilePixels = null;
             profileBase = null;
             elevatedButton = tunnelButton = autoButton = resetButton = null;
+            shapeHint = null;
             if (model.Profile != null)
             {
                 y = Header("SIDE VIEW", y);
@@ -482,15 +485,25 @@ namespace RealisticRoads
                 y += 16f;
                 // The selected stretch: up on pillars, down in a tunnel, or left
                 // to the planner; and everything set here cleared.
-                elevatedButton = ShapeButton(Icons.Elevated, "E", "Elevated: the selected stretch on pillars, " +
-                    RoadPlanner.ForcedHeight.ToString("F0") + " m up (the road ramps up to it before)", Pad, y, () => Mark(Forced.Elevated));
-                tunnelButton = ShapeButton(Icons.Tunnel, "T", "Tunnel: the selected stretch underground, " +
-                    RoadPlanner.ForcedDepth.ToString("F0") + " m down (the road ramps down to it before)", Pad + ShapeButtonSize + 4f, y,
+                elevatedButton = ShapeButton(Icons.Elevated, "E", "Elevated: on pillars, " + RoadPlanner.ForcedHeight.ToString("F0") +
+                    " m up (ramping up to it). The selected stretch, or the whole road if none is selected", Pad, y, () => Mark(Forced.Elevated));
+                tunnelButton = ShapeButton(Icons.Tunnel, "T", "Tunnel: underground, " + RoadPlanner.ForcedDepth.ToString("F0") +
+                    " m down (ramping down to it). The selected stretch, or the whole road if none is selected", Pad + ShapeButtonSize + 4f, y,
                     () => Mark(Forced.Tunnel));
-                autoButton = ShapeButton(Icons.Auto, "A", "Auto: the planner decides the selected stretch again (and the heights held in it)",
-                    Pad + 2f * (ShapeButtonSize + 4f), y, () => Mark(Forced.None));
+                autoButton = ShapeButton(Icons.Auto, "A", "Auto: the planner decides the heights again (and lets go of the ones held). " +
+                    "The selected stretch, or the whole road if none is selected", Pad + 2f * (ShapeButtonSize + 4f), y, () => Mark(Forced.None));
                 resetButton = ShapeButton(Icons.Reset, "R", "Clear every height and stretch set in the side view",
                     Width - Pad - ShapeButtonSize, y, () => { if (ResetShape != null) ResetShape(); });
+                shapeHint = (UILabel)panel.AddUIComponent(typeof(UILabel));
+                shapeHint.autoSize = false;
+                shapeHint.size = new Vector2(Width - 2f * Pad - 4f * (ShapeButtonSize + 4f) - 4f, ShapeButtonSize);
+                shapeHint.relativePosition = new Vector3(Pad + 3f * (ShapeButtonSize + 4f) + 2f, y);
+                shapeHint.textScale = 0.7f;
+                shapeHint.wordWrap = true;
+                shapeHint.verticalAlignment = UIVerticalAlignment.Middle;
+                shapeHint.textColor = DimColor;
+                shapeHint.isInteractive = false;
+                dynamic.Add(shapeHint);
                 y += ShapeButtonSize + 4f;
                 y = Text(m => m.ProfileText, DimColor, 0.75f, y);
                 profileReadout = (UILabel)panel.AddUIComponent(typeof(UILabel));
@@ -972,6 +985,8 @@ namespace RealisticRoads
             {
                 selecting = false;
                 if (Mathf.Abs(selectTo - selectFrom) < MinStretch) ClearSelection();
+                else Mod.Log("Side view: selected " + Mathf.Min(selectFrom, selectTo).ToString("N0") + " to " +
+                             Mathf.Max(selectFrom, selectTo).ToString("N0") + " m");
                 UpdateShapeButtons();
                 return;
             }
@@ -990,21 +1005,34 @@ namespace RealisticRoads
             UpdateShapeButtons();
         }
 
+        // The buttons act on the selected stretch, or on the whole road.
         private void Mark(Forced kind)
         {
-            if (!HasSelection || MarkStretch == null) return;
-            float from = Mathf.Min(selectFrom, selectTo), to = Mathf.Max(selectFrom, selectTo);
+            if (MarkStretch == null || drawnProfile == null) return;
+            float from = 0f, to = drawnProfile.Length;
+            if (HasSelection)
+            {
+                from = Mathf.Min(selectFrom, selectTo);
+                to = Mathf.Max(selectFrom, selectTo);
+            }
             ClearSelection();
             MarkStretch(from, to, kind);
         }
 
         private void UpdateShapeButtons()
         {
-            bool selected = HasSelection;
-            SetEnabled(elevatedButton, selected);
-            SetEnabled(tunnelButton, selected);
-            SetEnabled(autoButton, selected);
+            bool profile = drawnProfile != null;
+            SetEnabled(elevatedButton, profile);
+            SetEnabled(tunnelButton, profile);
+            SetEnabled(autoButton, profile);
             SetEnabled(resetButton, current != null && current.Shaped);
+            if (shapeHint != null)
+            {
+                string hint = HasSelection
+                    ? "Selected " + Mathf.Min(selectFrom, selectTo).ToString("N0") + "-" + Mathf.Max(selectFrom, selectTo).ToString("N0") + " m"
+                    : "Whole road (drag along the view to pick a stretch)";
+                if (shapeHint.text != hint) shapeHint.text = hint;
+            }
         }
 
         private UIButton ShapeButton(string icon, string letter, string tooltip, float x, float y, Action onClick)

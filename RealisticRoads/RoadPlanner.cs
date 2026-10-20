@@ -218,24 +218,7 @@ namespace RealisticRoads
                                       "Draw the tunnel under a road on the ground");
             }
 
-            // Stretches marked Elevated or Tunnel in the side view: held up at a
-            // flyover's clearance (the bridge's over water) or down at a tunnel's
-            // depth (under the bed in water). The road ramps to them outside the
-            // stretch; deck nodes keep their own levels.
             bool shaped = dragged != null && dragged.Count > 0;
-            if (forced != null)
-                for (int i = 0; i < n && i < forced.Length; i++)
-                {
-                    if (forced[i] == Forced.None || (onDeck != null && i < onDeck.Length && onDeck[i])) continue;
-                    shaped = true;
-                    if (forced[i] == Forced.Elevated)
-                    {
-                        float level = Mathf.Max(ground[i], terrain.SampleRawHeightSmoothWithWater(points[i], false, 0f));
-                        minH[i] = Mathf.Max(minH[i], level + ForcedHeight);
-                    }
-                    else maxH[i] = Mathf.Min(maxH[i], ground[i] - (water[i] ? UnderwaterCover : ForcedDepth));
-                }
-
             if (NetworkBuilder.NodeExists(startNode)) Fix(0, nodes[startNode].m_position.y, minH, maxH, isFixed);
             if (NetworkBuilder.NodeExists(endNode)) Fix(n - 1, nodes[endNode].m_position.y, minH, maxH, isFixed);
             // Ends on the middle of a road join it at its height.
@@ -335,6 +318,33 @@ namespace RealisticRoads
                         break;
                 }
             }
+
+            // Stretches marked Elevated or Tunnel in the side view: held up at a
+            // flyover's clearance (the bridge's over water) or down at a tunnel's
+            // depth (under the bed in water). Near a node whose height is held
+            // (an end on a road, a junction, a dragged height) the stretch ramps
+            // to it at the grade, so a whole road marked Elevated still starts and
+            // ends where it joins. Deck nodes keep their own levels.
+            if (forced != null)
+                for (int i = 0; i < n && i < forced.Length; i++)
+                {
+                    if (forced[i] == Forced.None || isFixed[i] || (onDeck != null && i < onDeck.Length && onDeck[i])) continue;
+                    shaped = true;
+                    float reachUp = Unlimited, reachDown = -Unlimited;
+                    for (int j = 0; j < n; j++)
+                    {
+                        if (!isFixed[j]) continue;
+                        float d = Mathf.Abs(distance[i] - distance[j]) * MaxGrade;
+                        reachUp = Mathf.Min(reachUp, minH[j] + d);
+                        reachDown = Mathf.Max(reachDown, maxH[j] - d);
+                    }
+                    if (forced[i] == Forced.Elevated)
+                    {
+                        float level = Mathf.Max(ground[i], terrain.SampleRawHeightSmoothWithWater(points[i], false, 0f));
+                        minH[i] = Mathf.Max(minH[i], Mathf.Min(level + ForcedHeight, reachUp));
+                    }
+                    else maxH[i] = Mathf.Min(maxH[i], Mathf.Max(ground[i] - (water[i] ? UnderwaterCover : ForcedDepth), reachDown));
+                }
 
             PlanLowerings(plan, info, overpasses);
             CheckLoweringsApart(plan);
