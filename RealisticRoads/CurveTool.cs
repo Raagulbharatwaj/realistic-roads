@@ -92,6 +92,10 @@ namespace RealisticRoads
         private readonly List<ushort> pointRoad = new List<ushort>();
         private readonly List<float> pointRoadT = new List<float>();
         private bool deckMode;
+        // A deck below instead (one level under the road: a tunnel, e.g. metro
+        // under a street), per point like pointDeck.
+        private readonly List<bool> pointUnder = new List<bool>();
+        private bool underMode;
         private ushort aimRoad;
         private float aimRoadT;
         private float lift;
@@ -178,6 +182,8 @@ namespace RealisticRoads
             public List<KeyValuePair<float, float>> DeckRanges = new List<KeyValuePair<float, float>>();
             public List<Vector3> Polyline;     // the sampled curve the points are on (ranges are along it)
             public bool[] OnDeck;
+            public List<KeyValuePair<float, float>> UnderRanges = new List<KeyValuePair<float, float>>();   // the deck stretches under the road
+            public bool[] UnderDeck;
             public DeckBelow[] Below;
             public int Cost;             // construction cost (game money units, /100 to show)
         }
@@ -234,7 +240,7 @@ namespace RealisticRoads
             string key = choicesVersion + "|" + points.Count + "|" + withHover + "|" +
                          Mathf.RoundToInt(hover.x * 4f) + "," + Mathf.RoundToInt(hover.y * 4f) + "," + Mathf.RoundToInt(hover.z * 4f) + "|" +
                          aimNode + "|" + aimSegment + "|" + (SelectedNetwork != null ? SelectedNetwork.name : "") + "|" +
-                         straightMode + cornerRadius + deckMode + aimRoad;
+                         straightMode + cornerRadius + deckMode + underMode + aimRoad;
             if (key == previewKey && ++framesSincePreview < PreviewRefreshFrames)
             {
                 // Nothing changed: the panel already shows this preview.
@@ -252,6 +258,7 @@ namespace RealisticRoads
             var liveLifts = new List<float>(pointLifts);
             var liveStraight = new List<bool>(pointStraight);
             var liveDeck = new List<bool>(pointDeck);
+            var liveUnder = new List<bool>(pointUnder);
             var liveRoad = new List<ushort>(pointRoad);
             var liveRoadT = new List<float>(pointRoadT);
             if (withHover)
@@ -263,10 +270,11 @@ namespace RealisticRoads
                 liveLifts.Add(lift);
                 liveStraight.Add(straightMode);
                 liveDeck.Add(deckMode);
+                liveUnder.Add(deckMode && underMode);
                 liveRoad.Add(deckMode ? aimRoad : (ushort)0);
                 liveRoadT.Add(aimRoadT);
             }
-            preview = Divide(live, liveNodes, liveSegments, liveTs, liveLifts, liveStraight, liveDeck, liveRoad, liveRoadT);
+            preview = Divide(live, liveNodes, liveSegments, liveTs, liveLifts, liveStraight, liveDeck, liveUnder, liveRoad, liveRoadT);
             cursorText = CursorText(withHover);
             ShowPanel();
             PlaceButtons();
@@ -415,19 +423,30 @@ namespace RealisticRoads
             pointLifts.Add(lift);
             pointStraight.Add(straightMode);
             pointDeck.Add(deckMode);
+            pointUnder.Add(deckMode && underMode);
             pointRoad.Add(deckMode ? aimRoad : (ushort)0);
             pointRoadT.Add(aimRoadT);
             choicesVersion++;
             Mod.Log("Point " + points.Count + " at " + Format(aimPosition) + (straightMode ? " (straight)" : "") +
-                    (deckMode ? " (deck" + (aimRoad != 0 ? " over #" + aimRoad : "") + ")" : "") +
+                    (deckMode ? (underMode ? " (under" : " (deck") + (aimRoad != 0 ? (underMode ? " #" : " over #") + aimRoad : "") + ")" : "") +
                     (aimNode != 0 ? " (on node #" + aimNode + ")" : ""));
             // A typed length or turn is for one point.
             ClearTyped();
         }
 
+        // Deck (above) and Under: each on or off; on, the other is off.
         private void ToggleDeck()
         {
-            deckMode = !deckMode;
+            deckMode = !(deckMode && !underMode);
+            underMode = false;
+            choicesVersion++;
+        }
+
+        private void ToggleUnder()
+        {
+            bool on = !(deckMode && underMode);
+            deckMode = on;
+            underMode = on;
             choicesVersion++;
         }
 
@@ -480,12 +499,13 @@ namespace RealisticRoads
         // The first line of the label by the mouse: the piece being drawn.
         private string PieceText()
         {
-            string mode = (deckMode ? "Deck, " : "") + (straightMode ? "straight" : "curve");
+            string mode = (deckMode ? (underMode ? "Under, " : "Deck, ") : "") + (straightMode ? "straight" : "curve");
             mode = char.ToUpper(mode[0]) + mode.Substring(1);
             if (deckMode && aimRoad != 0)
             {
                 var road = NetManager.instance.m_segments.m_buffer[aimRoad].Info;
-                return mode + "   ·   over the middle of the " + (road != null ? road.GetUncheckedLocalizedTitle() ?? road.name : "road");
+                return mode + "   ·   " + (underMode ? "under" : "over") + " the middle of the " +
+                       (road != null ? road.GetUncheckedLocalizedTitle() ?? road.name : "road");
             }
             if (!aimGuided) return mode + "   (Tab: " + (straightMode ? "curve" : "straight") + ")";
             string turn;
@@ -515,7 +535,7 @@ namespace RealisticRoads
             if (points.Count > 0 || deckMode) lines.Add(PieceText());
             if (aimNode != 0) lines.Add("Joins the road end here");
             else if (aimSegment != 0) lines.Add("Joins this road here (T-junction)");
-            else if (deckMode) lines.Add("A level above the roads below");
+            else if (deckMode) lines.Add(underMode ? "One level under the roads (a tunnel)" : "A level above the roads below");
             else lines.Add("Height " + FormatLift(lift) + "   (Page Up / Page Down)");
             var division = preview;
             if (division != null && division.Plan != null && division.Plan.Points.Count >= 2)
@@ -779,6 +799,7 @@ namespace RealisticRoads
                 pointLifts.RemoveAt(pointLifts.Count - 1);
                 pointStraight.RemoveAt(pointStraight.Count - 1);
                 pointDeck.RemoveAt(pointDeck.Count - 1);
+                pointUnder.RemoveAt(pointUnder.Count - 1);
                 pointRoad.RemoveAt(pointRoad.Count - 1);
                 pointRoadT.RemoveAt(pointRoadT.Count - 1);
                 choicesVersion++;
@@ -1048,7 +1069,7 @@ namespace RealisticRoads
                 return;
             }
 
-            var division = Divide(points, pointNodes, pointSegments, pointTs, pointLifts, pointStraight, pointDeck, pointRoad, pointRoadT);
+            var division = Divide(points, pointNodes, pointSegments, pointTs, pointLifts, pointStraight, pointDeck, pointUnder, pointRoad, pointRoadT);
             if (!division.Ok)
             {
                 Mod.Log("Not built: a bend is too sharp (over " + MaxBend + " degrees per segment). Spread the points out.");
@@ -1072,7 +1093,7 @@ namespace RealisticRoads
         // instead (like a normal junction). Crossings with existing roads get a
         // node exactly on them, and RoadPlanner works out the heights.
         private Division Divide(List<Vector3> controls, List<ushort> nodes, List<ushort> segments, List<float> ts, List<float> lifts,
-            List<bool> pointModes, List<bool> deckModes, List<ushort> roads, List<float> roadTs)
+            List<bool> pointModes, List<bool> deckModes, List<bool> underModes, List<ushort> roads, List<float> roadTs)
         {
             if (controls.Count < 2) return new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>(), InTangents = new List<Vector3>() };
 
@@ -1086,12 +1107,14 @@ namespace RealisticRoads
             for (int i = 1; i <= n; i++) straight.Add(i < pointModes.Count && pointModes[i]);
             // Deck pieces; one between two deck points on roads follows those roads.
             var deck = new List<bool>();
+            var below = new List<bool>();      // of those, the ones under the road
             var paths = new List<List<Vector3>>();
             var under = new HashSet<ushort>();
             for (int i = 1; i <= n; i++)
             {
                 bool onDeck = i < deckModes.Count && deckModes[i];
                 deck.Add(onDeck);
+                below.Add(onDeck && i < underModes.Count && underModes[i]);
                 paths.Add(onDeck && roads[i - 1] != 0 && roads[i] != 0
                     ? Decks.CachedRoadPath(roads[i - 1], roadTs[i - 1], roads[i], roadTs[i], under) : null);
             }
@@ -1099,12 +1122,12 @@ namespace RealisticRoads
             Vector3 startDir = straight[0] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[0], controls[1] - controls[0], true);
             Vector3 endDir = straight[n - 1] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[n], controls[n] - controls[n - 1], false);
 
-            var division = DivideShaped(controls, startDir, endDir, nodes[0], nodes[n], lifts, straight, deck, paths, under);
+            var division = DivideShaped(controls, startDir, endDir, nodes[0], nodes[n], lifts, straight, deck, below, paths, under);
             division.Continues = startDir != Vector3.zero || endDir != Vector3.zero;
             if (!division.Ok && division.Continues)
             {
                 // Continuing the road bends too much: meet it at an angle instead.
-                var plain = DivideShaped(controls, Vector3.zero, Vector3.zero, nodes[0], nodes[n], lifts, straight, deck, paths, under);
+                var plain = DivideShaped(controls, Vector3.zero, Vector3.zero, nodes[0], nodes[n], lifts, straight, deck, below, paths, under);
                 if (plain.Ok)
                 {
                     division = plain;
@@ -1122,7 +1145,7 @@ namespace RealisticRoads
             FindDecks(division, SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f);
             division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
                 division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
-                startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below);
+                startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck);
             // Raised stretches get a node (and pillar) every RaisedSpacing, like the
             // vanilla tool's elevated roads; plan again with them.
             if (AddRaisedNodes(division))
@@ -1130,7 +1153,7 @@ namespace RealisticRoads
                 FindDecks(division, SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f);
                 division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
                     division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
-                    startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below);
+                    startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck);
             }
             DropNodesOverCrossings(division);
             division.Cost = NetworkBuilder.Cost(SelectedNetwork, division.Plan);
@@ -1264,7 +1287,7 @@ namespace RealisticRoads
         }
 
         private Division DivideShaped(List<Vector3> controls, Vector3 startDir, Vector3 endDir, ushort startNode, ushort endNode,
-            List<float> lifts, List<bool> straight, List<bool> deck, List<List<Vector3>> paths, HashSet<ushort> under)
+            List<float> lifts, List<bool> straight, List<bool> deck, List<bool> below, List<List<Vector3>> paths, HashSet<ushort> under)
         {
             var division = new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>(), InTangents = new List<Vector3>() };
             int[] controlSamples;
@@ -1280,7 +1303,10 @@ namespace RealisticRoads
             // A point with a height of its own gets a node, so the height is held exactly there.
             var controlAt = ControlDistances(polyline, controlSamples);
             for (int i = 0; i < deck.Count; i++)
+            {
                 if (deck[i]) division.DeckRanges.Add(new KeyValuePair<float, float>(controlAt[i], controlAt[i + 1]));
+                if (below[i]) division.UnderRanges.Add(new KeyValuePair<float, float>(controlAt[i], controlAt[i + 1]));
+            }
             // A sharp corner (two straight pieces meeting at an angle) is a node.
             foreach (float corner in corners) cuts.Add(new KeyValuePair<float, Crossing>(corner, null));
             for (int i = 1; i < controls.Count - 1; i++)
@@ -1299,9 +1325,10 @@ namespace RealisticRoads
                 if (InDeck(division.DeckRanges, crossing.Distance))
                 {
                     // On a deck: the road it runs along isn't crossed; any other is
-                    // passed over (the deck is up anyway).
+                    // passed over (or under, below the road).
                     if (under.Contains(crossing.Segment) || RunsAlong(polyline, crossing)) continue;
-                    crossing.OnDeck = true;
+                    if (InDeck(division.UnderRanges, crossing.Distance)) crossing.UnderDeck = true;
+                    else crossing.OnDeck = true;
                 }
                 int times;
                 timesCrossed.TryGetValue(crossing.Segment, out times);
@@ -1457,6 +1484,7 @@ namespace RealisticRoads
         {
             int n = division.Points.Count;
             division.OnDeck = new bool[n];
+            division.UnderDeck = new bool[n];
             division.Below = new DeckBelow[n];
             if (division.DeckRanges.Count == 0 || division.Polyline == null) return;
             // Each node's distance along the sampled curve (the ranges are measured
@@ -1485,7 +1513,8 @@ namespace RealisticRoads
                 sampleAlong = bestAlong;
                 if (!InDeck(division.DeckRanges, bestAlong)) continue;
                 division.OnDeck[i] = true;
-                division.Below[i] = Decks.Under(division.Points[i], ourHalfWidth);
+                division.UnderDeck[i] = InDeck(division.UnderRanges, bestAlong);
+                division.Below[i] = Decks.Under(division.Points[i], ourHalfWidth, division.UnderDeck[i]);
             }
         }     // metres either side of a sharp corner its two directions are read
 
@@ -1811,6 +1840,7 @@ namespace RealisticRoads
                 panel.ChangeRadius = ChangeRadius;
                 panel.ToggleSnap = ToggleSnapping;
                 panel.ToggleDeck = ToggleDeck;
+                panel.ToggleUnder = ToggleUnder;
                 panel.Typed = SetTyped;
                 panel.TypedSubmit = () => { if (!planning && points.Count > 0 && aimValid) AddAimPoint(); };
             }
@@ -1851,7 +1881,8 @@ namespace RealisticRoads
                 Straight = straightMode,
                 Radius = cornerRadius,
                 Snapping = snapping,
-                Deck = deckMode,
+                Deck = deckMode && !underMode,
+                Under = deckMode && underMode,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
                 Mode = planning
                     ? "PLANNING: drag the points to adjust; pick each crossing here or on the map. Check mark / Enter: build. Esc: scrap. Right-click: keep drawing."
@@ -1888,7 +1919,14 @@ namespace RealisticRoads
                     if (support == Decks.Support.Column) medians++;
                     else if (support == Decks.Support.Portal) frames++;
                 }
-                foreach (bool on in plan.OnDeck) if (on) onDeck++;
+                int underRoad = 0;
+                for (int i = 0; i < plan.OnDeck.Length; i++)
+                {
+                    if (!plan.OnDeck[i]) continue;
+                    if (plan.UnderDeck != null && i < plan.UnderDeck.Length && plan.UnderDeck[i]) underRoad++;
+                    else onDeck++;
+                }
+                if (underRoad > 0) details.Add("under the roads, one level down");
                 if (onDeck > 0)
                     details.Add("deck over the roads below" + (medians > 0 ? ", " + medians + " column(s) on the median" : "") +
                                 (frames > 0 ? ", " + frames + " frame(s) across roads" : ""));
@@ -2107,6 +2145,7 @@ namespace RealisticRoads
             pointLifts.Clear();
             pointStraight.Clear();
             pointDeck.Clear();
+            pointUnder.Clear();
             pointRoad.Clear();
             pointRoadT.Clear();
             Decks.ForgetPaths();

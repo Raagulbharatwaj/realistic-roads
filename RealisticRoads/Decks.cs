@@ -21,20 +21,15 @@ namespace RealisticRoads
         public float MedianHalf;      // how far its middle is free of lanes either side
         public bool Rail;
         public bool OnGround;         // at ground level (not a deck or bridge itself)
-        public bool CableCar;         // a cable car line: nothing goes over it
         public float PropTop;         // how high the props and trees under our deck reach (lights, trees)
     }
 
-    // Decks over existing roads: double (and triple) deckers, and cable cars
-    // along a road's median.
+    // Decks over existing roads: double (and triple) deckers.
     public static class Decks
     {
         // The deck's clearance over the road below, like a flyover's; over rail
         // on the ground it is higher, so the wires pass under it.
         public const float Clearance = RoadPlanner.OverClearance;
-        // A cable car line over a median: well above a first deck's height,
-        // below a second's, so its cabins hang clear of the traffic.
-        public const float CableCarClearance = 15f;
         private const float MinMedianHalf = 0.75f;    // a median: no lane within this of a road's middle
         private const float PropMargin = 3f;          // the deck's surface this far above the props under it
         private const float PropReach = 1f;           // props this far beyond our deck's edge still count (lamp arms)
@@ -49,10 +44,14 @@ namespace RealisticRoads
         // p); of roads stacked there (a ground road and a deck over it) the
         // highest, so a third level is measured from the second. Segment 0 if
         // none. 'ourHalfWidth': our deck's, for the props under it.
-        public static DeckBelow Under(Vector3 p, float ourHalfWidth)
+        // 'underground': for a deck under the road, the road at ground level
+        // there (not one above it); one underground already is still returned,
+        // so the planner can refuse a second level.
+        public static DeckBelow Under(Vector3 p, float ourHalfWidth, bool underground = false)
         {
             var best = new DeckBelow();
             float bestHeight = float.MinValue;
+            var terrain = TerrainManager.instance;
             var segments = NetManager.instance.m_segments.m_buffer;
             foreach (ushort segment in RoadPlanner.NearbySegments(p, Search))
             {
@@ -62,6 +61,7 @@ namespace RealisticRoads
                 float t = CrossingFinder.ClosestT(segment, p, out onRoad);
                 float distance = CurveMath.FlatDistance(onRoad, p);
                 if (distance > info.m_halfWidth || onRoad.y <= bestHeight) continue;
+                if (underground && onRoad.y > terrain.SampleRawHeightSmooth(onRoad) + 2f) continue;   // above the ground: not this one
                 Vector3 a, b, c, d;
                 CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
                 bestHeight = onRoad.y;
@@ -76,7 +76,6 @@ namespace RealisticRoads
                     MedianHalf = free,
                     Rail = RoadPlanner.IsRail(info),
                     OnGround = Mathf.Abs(onRoad.y - TerrainManager.instance.SampleRawHeightSmooth(onRoad)) < 2f,
-                    CableCar = IsCableCar(info),
                     // Props under our deck: as far out from the road's middle as our
                     // deck reaches from it (it may sit off the middle).
                     PropTop = PropTop(info, distance + ourHalfWidth + PropReach),
@@ -86,20 +85,26 @@ namespace RealisticRoads
         }
 
         // The lowest the deck may be at 'p': clear of the road below (or of
-        // the ground where there is none). A cable car rides higher.
-        public static float Floor(Vector3 p, DeckBelow below, bool cableCar)
+        // the ground where there is none).
+        public static float Floor(Vector3 p, DeckBelow below)
         {
-            float clearance = cableCar ? CableCarClearance : Clearance;
+            float clearance = Clearance;
             if (below.Segment == 0) return TerrainManager.instance.SampleRawHeightSmoothWithWater(p, false, 0f) + clearance;
             // Above the lights and trees under it too (with the deck's own depth under it).
             clearance = Mathf.Max(clearance, Mathf.Min(below.PropTop + PropMargin, MaxClearance));
             return below.Center.y + clearance + (below.Rail && below.OnGround ? RoadPlanner.RailDeckLift : 0f);
         }
 
-        // The cable car's own line (its path network), by the road AI's name.
-        public static bool IsCableCar(NetInfo info)
+        // A deck under the road: one level (a tunnel's depth) below the road
+        // there, or below the ground where there is none; it may sit up to
+        // UnderSlack deeper where the grade needs it.
+        public const float UnderDepth = RoadPlanner.TunnelDepth;
+        public const float UnderSlack = 3f;
+
+        public static float Ceiling(Vector3 p, DeckBelow below)
         {
-            return info != null && info.m_netAI != null && info.m_netAI.GetType().Name.IndexOf("CableCar", StringComparison.Ordinal) >= 0;
+            float top = below.Segment != 0 ? below.Center.y : TerrainManager.instance.SampleRawHeightSmooth(p);
+            return top - UnderDepth;
         }
 
         // How far a road's middle is free of lanes (traffic, parking, sidewalk,
@@ -463,7 +468,7 @@ namespace RealisticRoads
                 var pillar = f != null ? f.GetValue(info.m_netAI) as BuildingInfo : null;
                 if (pillar != null) return pillar.name;
             }
-            // No concrete pillar of its own (a cable car's poles are steel): the highway's.
+            // No concrete pillar of its own: the highway's.
             return FallbackPillar;
         }
 

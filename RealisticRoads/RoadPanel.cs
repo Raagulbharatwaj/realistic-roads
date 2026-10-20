@@ -23,6 +23,7 @@ namespace RealisticRoads
         public float Radius;                      // corners between straight pieces (0: sharp)
         public bool Snapping;                     // straight pieces snap their angle and length
         public bool Deck;                         // the next piece is a deck over the roads below
+        public bool Under;                        // the next piece runs one level under the roads
         public PanelProfile Profile;              // the curve seen from the side (null: nothing to show)
         public string ProfileText = "";           // highest / deepest / steepest
     }
@@ -104,10 +105,10 @@ namespace RealisticRoads
         public Action<bool> SetStraight;
         public Action<float> ChangeRadius;
         public Action ToggleSnap;
-        public Action ToggleDeck;
+        public Action ToggleDeck, ToggleUnder;
         public Action<string, string> Typed;
         public Action TypedSubmit;
-        private UIButton curveButton, straightButton, snapButton, deckButton;
+        private UIButton curveButton, straightButton, snapButton, deckButton, underButton;
         private UILabel radiusLabel;
         private UITextField lengthField, turnField;
         private const float BarTop = 46f;
@@ -198,13 +199,17 @@ namespace RealisticRoads
                 "decker)\nClick on a road to put a deck point over its middle; between two such points the deck follows the road.\n" +
                 "Pillars stand on the road's median if it has one, else a frame spans the road", Pad + 3f * (IconSize + 3f) + 8f, y,
                 () => { if (ToggleDeck != null) ToggleDeck(); });
-            float x = Pad + 4f * (IconSize + 3f) + 14f;
-            BarLabel("Corner", x, y + 8f, 44f);
-            BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner)", x + 44f, y,
+            underButton = BarButton(Icons.Under, "U", "Under: the next pieces run one level under the roads, as a tunnel (metro under a " +
+                "street)\nClick on a road to put a point under its middle; between two such points the tunnel follows the road.\n" +
+                "One level only: not under a road that is already underground", Pad + 4f * (IconSize + 3f) + 8f, y,
+                () => { if (ToggleUnder != null) ToggleUnder(); });
+            float x = Pad + 5f * (IconSize + 3f) + 11f;
+            BarLabel("Corner", x, y + 8f, 38f);
+            BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner)", x + 38f, y,
                 () => { if (ChangeRadius != null) ChangeRadius(-CurveTool.RadiusStep); });
-            radiusLabel = BarLabel("", x + 44f + IconSize, y + 8f, 46f);
+            radiusLabel = BarLabel("", x + 38f + IconSize, y + 8f, 38f);
             radiusLabel.textAlignment = UIHorizontalAlignment.Center;
-            BarButton(Icons.Plus, "+", "Wider corners between straight pieces", x + 90f + IconSize, y,
+            BarButton(Icons.Plus, "+", "Wider corners between straight pieces", x + 76f + IconSize, y,
                 () => { if (ChangeRadius != null) ChangeRadius(CurveTool.RadiusStep); });
 
             y += IconSize + 6f;
@@ -304,6 +309,7 @@ namespace RealisticRoads
             Select(straightButton, model.Straight);
             Select(snapButton, model.Snapping);
             Select(deckButton, model.Deck);
+            Select(underButton, model.Under);
             if (radiusLabel != null)
             {
                 string text = model.Radius < 0.5f ? "sharp" : model.Radius.ToString("0") + " m";
@@ -324,7 +330,7 @@ namespace RealisticRoads
             if (panel != null) UnityEngine.Object.Destroy(panel.gameObject);
             if (profileTexture != null) UnityEngine.Object.Destroy(profileTexture);
             panel = null;
-            curveButton = straightButton = snapButton = deckButton = null;
+            curveButton = straightButton = snapButton = deckButton = underButton = null;
             radiusLabel = null;
             lengthField = turnField = null;
             profileSprite = null;

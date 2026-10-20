@@ -330,32 +330,24 @@ namespace RealisticRoads
                 }
                 // A deck over a road: its pillar on the road's median if it has
                 // one, else a frame across the road (none on the road itself).
-                int frames = 0, columns = 0, poles = 0;
-                bool cableCar = Decks.IsCableCar(info);
+                int frames = 0, columns = 0;
                 if (plan.OnDeck != null && plan.Decks != null)
                     for (int i = 0; i <= last && i < plan.OnDeck.Length && i < plan.Decks.Length; i++)
                     {
                         var below = plan.Decks[i];
                         bool raised = plan.Kinds[i] == NodeKind.Elevated || plan.Kinds[i] == NodeKind.Bridge;
                         if (!plan.OnDeck[i] || !raised || below.Segment == 0 || !build.Nodes.Contains(nodeIds[i])) continue;
+                        if (plan.UnderDeck != null && i < plan.UnderDeck.Length && plan.UnderDeck[i]) continue;
                         var support = Decks.SupportFor(points[i], below);
                         if (support == Decks.Support.Pillar) continue;
-                        // A cable car keeps its own pole on the median if the game puts one
-                        // there; only if it won't (it refuses a building on a road) ours.
-                        if (cableCar && support == Decks.Support.Column)
-                        {
-                            UpdatePillar(nodeIds[i]);
-                            if (net.m_nodes.m_buffer[nodeIds[i]].m_building != 0) { poles++; continue; }
-                        }
                         DeckFrames.Add(nodeIds[i], below, info.m_halfWidth, support == Decks.Support.Column);
                         if (support == Decks.Support.Column) columns++;
                         else frames++;
                     }
                 foreach (ushort node in build.Nodes)
                     if (!overCrossing.Contains(node)) UpdatePillar(node);
-                if (frames + columns + poles > 0)
-                    Mod.Log("  Deck: " + (poles > 0 ? poles + " cable car pole(s), " : "") + columns + " column(s) on the median, " +
-                            frames + " frame(s) across the road below");
+                if (frames + columns > 0)
+                    Mod.Log("  Deck: " + columns + " column(s) on the median, " + frames + " frame(s) across the road below");
 
                 int middles = 0;
                 if (plan.Middle != null) foreach (bool m in plan.Middle) if (m) middles++;
