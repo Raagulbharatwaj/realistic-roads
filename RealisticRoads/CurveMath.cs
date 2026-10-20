@@ -368,6 +368,49 @@ namespace RealisticRoads
             return length;
         }
 
+        // A place on the drawn curve as piece + fraction (2.25: a quarter of the
+        // way from point 2 to point 3), so it stays on its piece while points
+        // move. 'controlAt' is each point's distance along the curve.
+        public static bool PlaceAlong(float[] controlAt, float place, out float along)
+        {
+            along = 0f;
+            int last = controlAt != null ? controlAt.Length - 1 : 0;
+            if (last < 1 || place < 0f || place > last + 0.0001f) return false;
+            int piece = Math.Min((int)place, last - 1);
+            along = controlAt[piece] + (controlAt[piece + 1] - controlAt[piece]) * Mathf.Clamp01(place - piece);
+            return true;
+        }
+
+        // The other way: the place (piece + fraction) at a distance along the curve.
+        public static float PlaceOf(float[] controlAt, float along)
+        {
+            int last = controlAt != null ? controlAt.Length - 1 : 0;
+            if (last < 1) return 0f;
+            int piece = 0;
+            while (piece < last - 1 && along > controlAt[piece + 1]) piece++;
+            float span = controlAt[piece + 1] - controlAt[piece];
+            return piece + (span > 0.01f ? Mathf.Clamp01((along - controlAt[piece]) / span) : 0f);
+        }
+
+        // Maps x from one rising scale to another with the same marks (the
+        // nodes' distances along the curve and along the straight pieces
+        // between them), straight between the marks.
+        public static float Remap(float[] from, float[] to, float x)
+        {
+            int n = Math.Min(from.Length, to.Length);
+            if (n == 0) return x;
+            if (n == 1 || x <= from[0]) return to[0] + (x - from[0]);
+            for (int i = 1; i < n; i++)
+            {
+                if (x > from[i] && i < n - 1) continue;
+                float span = from[i] - from[i - 1];
+                float t = span > 0.0001f ? (x - from[i - 1]) / span : 0f;
+                if (x > from[i]) return to[i] + (x - from[i]);
+                return to[i - 1] + (to[i] - to[i - 1]) * t;
+            }
+            return to[n - 1];
+        }
+
         // Splits a polyline into 'count' pieces of equal ground length.
         // Returns count + 1 points (first and last are the polyline's ends) and
         // the ground direction of the curve at each of them.

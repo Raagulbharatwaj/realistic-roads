@@ -187,7 +187,34 @@ namespace RealisticRoads
             public bool[] UnderDeck;
             public DeckBelow[] Below;
             public int Cost;             // construction cost (game money units, /100 to show)
+            public float[] ControlAt;    // each point's distance along Polyline
+            public float[] NodeAlong;    // each node's distance along Polyline
+            public Forced[] Forced;      // per node: marked Elevated or Tunnel in the side view
+            public List<ForcedStretch> ForcedRanges = new List<ForcedStretch>();   // those stretches, along Polyline
+            public List<KeyValuePair<Vector3, float>> Heights = new List<KeyValuePair<Vector3, float>>();   // dragged heights: where, how high
         }
+
+        // --- the side view: heights dragged there, stretches marked Elevated / Tunnel ---
+
+        // Places are piece + fraction (CurveMath.PlaceAlong), so they stay on
+        // their piece while points are dragged.
+        private class HeightPin
+        {
+            public float At;
+            public float Height;    // absolute
+        }
+
+        private class ForcedStretch
+        {
+            public float From, To;
+            public Forced Kind;
+        }
+
+        private readonly List<HeightPin> heightPins = new List<HeightPin>();
+        private readonly List<ForcedStretch> stretches = new List<ForcedStretch>();
+        private HeightPin draggedPin;            // the height being dragged in the side view
+        private float draggedGround;             // the ground under it (the drag stays within MinLift..MaxLift of it)
+        private const float MinPinHeight = -40f; // a dragged height at most this far under the ground
 
         protected override void OnEnable()
         {
@@ -228,6 +255,8 @@ namespace RealisticRoads
 
             // Planning: a point being dragged follows the mouse.
             if (dragIndex >= 0) UpdateDrag();
+            // A height dragged or a stretch selected in the side view.
+            panel.Poll();
 
             // Live preview: the clicked points plus the mouse position while
             // drawing (not while planning: then the plan stays as it is). Only
@@ -803,6 +832,7 @@ namespace RealisticRoads
                 pointUnder.RemoveAt(pointUnder.Count - 1);
                 pointRoad.RemoveAt(pointRoad.Count - 1);
                 pointRoadT.RemoveAt(pointRoadT.Count - 1);
+                ForgetShapeBeyond(points.Count - 1);
                 choicesVersion++;
                 Mod.Log("Removed last point, " + points.Count + " left");
             }
@@ -994,8 +1024,7 @@ namespace RealisticRoads
             var plan = division.Plan;
             int n = plan.Points.Count;
             if (n < 2) return null;
-            var along = new float[n];
-            for (int i = 1; i < n; i++) along[i] = along[i - 1] + CurveMath.FlatDistance(plan.Points[i - 1], plan.Points[i]);
+            var along = ChordAlong(plan);
             float length = along[n - 1];
             if (length < 1f) return null;
 
@@ -1030,6 +1059,26 @@ namespace RealisticRoads
                 deepest = Mathf.Max(deepest, profile.Ground[s] - p.y);
             }
             foreach (int i in PillarNodes(division)) profile.Pillars.Add(along[i]);
+            // The nodes (dragged up and down in the side view) and the marked stretches.
+            profile.NodeAlong = along;
+            profile.NodeHeight = new float[n];
+            profile.NodePinned = new bool[n];
+            profile.NodeHeld = new bool[n];
+            for (int i = 0; i < n; i++)
+            {
+                profile.NodeHeight[i] = plan.Points[i].y;
+                profile.NodeHeld[i] = plan.Held != null && i < plan.Held.Length && plan.Held[i];
+                foreach (var height in division.Heights)
+                    if (CurveMath.FlatDistance(height.Key, plan.Points[i]) < PinSnap) profile.NodePinned[i] = true;
+            }
+            if (division.NodeAlong != null && division.NodeAlong.Length == n)
+                foreach (var range in division.ForcedRanges)
+                    profile.Stretches.Add(new PanelStretch
+                    {
+                        From = Mathf.Clamp(CurveMath.Remap(division.NodeAlong, along, range.From), 0f, length),
+                        To = Mathf.Clamp(CurveMath.Remap(division.NodeAlong, along, range.To), 0f, length),
+                        Kind = range.Kind,
+                    });
             foreach (var crossing in division.Crossings)
                 profile.Crossings.Add(new KeyValuePair<float, float>(Mathf.Clamp(crossing.Distance, 0f, length), crossing.Point.y));
 
@@ -1045,6 +1094,138 @@ namespace RealisticRoads
             text = string.Join(", ", parts.ToArray());
             text = char.ToUpper(text[0]) + text.Substring(1);
             return profile;
+        }
+
+        // Each node's distance along the straight pieces between them: the side view's scale.
+        private static float[] ChordAlong(Plan plan)
+        {
+            int n = plan.Points.Count;
+            var along = new float[n];
+            for (int i = 1; i < n; i++) along[i] = along[i - 1] + CurveMath.FlatDistance(plan.Points[i - 1], plan.Points[i]);
+            return along;
+        }
+
+        private const float PinSnap = 6f;   // a dragged height belongs to the node this close to it (the planner's LiftSnap)
+
+        // Starts dragging node i's height in the side view (false: its height
+        // is set by an end or a crossing, or it is on the piece to the mouse).
+        private bool GrabNode(int i)
+        {
+            var division = preview;
+            if (division == null || division.Plan == null || division.ControlAt == null || division.NodeAlong == null) return false;
+            var plan = division.Plan;
+            if (i < 0 || i >= plan.Points.Count || i >= division.NodeAlong.Length) return false;
+            if (plan.Held != null && i < plan.Held.Length && plan.Held[i]) return false;
+            float place = CurveMath.PlaceOf(division.ControlAt, division.NodeAlong[i]);
+            if (place > points.Count - 1 + 0.0001f) return false;
+            draggedPin = PinNear(division, division.NodeAlong[i]);
+            if (draggedPin == null)
+            {
+                draggedPin = new HeightPin { At = place, Height = plan.Points[i].y };
+                heightPins.Add(draggedPin);
+            }
+            draggedGround = TerrainManager.instance.SampleRawHeightSmooth(plan.Points[i]);
+            return true;
+        }
+
+        // The dragged height follows the mouse, in half metres.
+        private void DragHeight(float height)
+        {
+            if (draggedPin == null) return;
+            height = Mathf.Round(Mathf.Clamp(height, draggedGround + MinPinHeight, draggedGround + MaxLift) * 2f) / 2f;
+            if (Mathf.Abs(height - draggedPin.Height) < 0.01f) return;
+            draggedPin.Height = height;
+            choicesVersion++;
+        }
+
+        private void ReleaseNode()
+        {
+            if (draggedPin == null) return;
+            Mod.Log("Side view: height held at " + draggedPin.Height.ToString("F1") + " m (" + FormatLift(draggedPin.Height - draggedGround) +
+                    " from the ground)");
+            draggedPin = null;
+        }
+
+        // Right-click on a held height: the planner decides it again.
+        private void FreeNode(int i)
+        {
+            var division = preview;
+            if (division == null || division.NodeAlong == null || i < 0 || i >= division.NodeAlong.Length) return;
+            var pin = PinNear(division, division.NodeAlong[i]);
+            if (pin == null) return;
+            heightPins.Remove(pin);
+            choicesVersion++;
+            Mod.Log("Side view: height freed");
+        }
+
+        private HeightPin PinNear(Division division, float along)
+        {
+            foreach (var pin in heightPins)
+            {
+                float at;
+                if (CurveMath.PlaceAlong(division.ControlAt, pin.At, out at) && Mathf.Abs(at - along) < PinSnap) return pin;
+            }
+            return null;
+        }
+
+        // A stretch selected in the side view (its metres) made Elevated, Tunnel
+        // or left to the planner (None). Heights held in it are let go, the
+        // crossings in it go back to the stretch's way of crossing, and water
+        // in it is bridged (Elevated) or tunnelled under (Tunnel).
+        private void MarkStretch(float from, float to, Forced kind)
+        {
+            var division = preview;
+            if (division == null || division.Plan == null || division.ControlAt == null || division.NodeAlong == null) return;
+            var chord = ChordAlong(division.Plan);
+            if (chord.Length != division.NodeAlong.Length) return;
+            float alongFrom = CurveMath.Remap(chord, division.NodeAlong, Mathf.Min(from, to));
+            float alongTo = CurveMath.Remap(chord, division.NodeAlong, Mathf.Max(from, to));
+            float last = points.Count - 1;
+            float placeFrom = Mathf.Min(CurveMath.PlaceOf(division.ControlAt, alongFrom), last);
+            float placeTo = Mathf.Min(CurveMath.PlaceOf(division.ControlAt, alongTo), last);
+            if (placeTo - placeFrom < 0.0001f) return;
+
+            var kept = new List<ForcedStretch>();
+            foreach (var stretch in stretches)
+            {
+                if (stretch.To <= placeFrom || stretch.From >= placeTo)
+                {
+                    kept.Add(stretch);
+                    continue;
+                }
+                if (stretch.From < placeFrom) kept.Add(new ForcedStretch { From = stretch.From, To = placeFrom, Kind = stretch.Kind });
+                if (stretch.To > placeTo) kept.Add(new ForcedStretch { From = placeTo, To = stretch.To, Kind = stretch.Kind });
+            }
+            if (kind != Forced.None) kept.Add(new ForcedStretch { From = placeFrom, To = placeTo, Kind = kind });
+            stretches.Clear();
+            stretches.AddRange(kept);
+            heightPins.RemoveAll(pin => pin.At >= placeFrom && pin.At <= placeTo);
+            foreach (var crossing in division.Crossings)
+                if (crossing.Distance >= alongFrom && crossing.Distance <= alongTo) crossingTypes.Remove(crossing.Key);
+            if (kind != Forced.None)
+                foreach (var run in division.WaterRuns)
+                    if (run.To >= alongFrom && run.From <= alongTo) waterTunnel[run.Key] = kind == Forced.Tunnel;
+            choicesVersion++;
+            Mod.Log("Side view: " + alongFrom.ToString("N0") + " to " + alongTo.ToString("N0") + " m " +
+                    (kind == Forced.Elevated ? "elevated" : kind == Forced.Tunnel ? "in a tunnel" : "left to the planner"));
+        }
+
+        private void ResetShape()
+        {
+            heightPins.Clear();
+            stretches.Clear();
+            draggedPin = null;
+            choicesVersion++;
+            Mod.Log("Side view: heights and stretches cleared");
+        }
+
+        // Points removed from the end: what was set on the pieces past 'last' goes.
+        private void ForgetShapeBeyond(float last)
+        {
+            heightPins.RemoveAll(pin => pin.At > last);
+            stretches.RemoveAll(stretch => stretch.From >= last);
+            foreach (var stretch in stretches) stretch.To = Mathf.Min(stretch.To, last);
+            if (draggedPin != null && !heightPins.Contains(draggedPin)) draggedPin = null;
         }
 
         private static bool IsRaised(NodeKind kind)
@@ -1146,7 +1327,8 @@ namespace RealisticRoads
             FindDecks(division, SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f);
             division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
                 division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
-                startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck);
+                startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
+                division.Heights, division.Forced);
             // Raised stretches get a node (and pillar) every RaisedSpacing, like the
             // vanilla tool's elevated roads; plan again with them.
             if (AddRaisedNodes(division))
@@ -1154,9 +1336,11 @@ namespace RealisticRoads
                 FindDecks(division, SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f);
                 division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
                     division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
-                    startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck);
+                    startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
+                    division.Heights, division.Forced);
             }
             DropNodesOverCrossings(division);
+            division.NodeAlong = NodeDistances(division);
             division.Cost = NetworkBuilder.Cost(SelectedNetwork, division.Plan);
             int blocked = BuildingsInTheWay(division);
             if (blocked > 0)
@@ -1303,6 +1487,26 @@ namespace RealisticRoads
             var cuts = new List<KeyValuePair<float, Crossing>>();
             // A point with a height of its own gets a node, so the height is held exactly there.
             var controlAt = ControlDistances(polyline, controlSamples);
+            division.ControlAt = controlAt;
+            // A height dragged in the side view holds the node there (it was a
+            // node already: the drag picked it). Stretches marked in it are
+            // measured along the curve, like the decks.
+            foreach (var pin in heightPins)
+            {
+                float at;
+                if (!CurveMath.PlaceAlong(controlAt, pin.At, out at)) continue;
+                cuts.Add(new KeyValuePair<float, Crossing>(at, null));
+                Vector3 point, ignore;
+                CurveMath.PointAt(polyline, at, out point, out ignore);
+                division.Heights.Add(new KeyValuePair<Vector3, float>(point, pin.Height));
+            }
+            foreach (var stretch in stretches)
+            {
+                float from, to;
+                if (!CurveMath.PlaceAlong(controlAt, stretch.From, out from)) continue;
+                CurveMath.PlaceAlong(controlAt, Mathf.Min(stretch.To, controlAt.Length - 1), out to);
+                if (to > from) division.ForcedRanges.Add(new ForcedStretch { From = from, To = to, Kind = stretch.Kind });
+            }
             for (int i = 0; i < deck.Count; i++)
             {
                 if (deck[i]) division.DeckRanges.Add(new KeyValuePair<float, float>(controlAt[i], controlAt[i + 1]));
@@ -1338,7 +1542,11 @@ namespace RealisticRoads
                 CrossingType type;
                 // Default: a junction where the two may join, else a bridge over the other.
                 // (Under a deck under the road: a tunnel, the only one allowed there.)
+                // In a stretch marked Elevated or Tunnel: over it, or under it.
+                var forcedHere = ForcedAt(division.ForcedRanges, crossing.Distance);
                 var fallback = crossing.UnderDeck ? CrossingType.Tunnel
+                    : forcedHere == Forced.Tunnel && crossing.Allows(CrossingType.Tunnel) ? CrossingType.Tunnel
+                    : forcedHere == Forced.Elevated && crossing.Allows(CrossingType.Bridge) ? CrossingType.Bridge
                     : crossing.Allows(CrossingType.Junction) ? CrossingType.Junction : CrossingType.Bridge;
                 crossing.Type = crossingTypes.TryGetValue(crossing.Key, out type) && crossing.Allows(type) ? type : fallback;
                 // A ship route on a water crossing goes the way the whole crossing does:
@@ -1487,16 +1695,38 @@ namespace RealisticRoads
         }
 
         // Which nodes are on a deck, and the road under each of them.
+        // Per node: on a deck (and what is below it), or in a stretch marked in
+        // the side view.
         private static void FindDecks(Division division, float ourHalfWidth)
         {
             int n = division.Points.Count;
             division.OnDeck = new bool[n];
             division.UnderDeck = new bool[n];
             division.Below = new DeckBelow[n];
-            if (division.DeckRanges.Count == 0 || division.Polyline == null) return;
-            // Each node's distance along the sampled curve (the ranges are measured
-            // along it; adding up the straight pieces between nodes falls short on bends).
+            division.NodeAlong = NodeDistances(division);
+            division.Forced = new Forced[n];
+            for (int i = 0; i < n; i++) division.Forced[i] = ForcedAt(division.ForcedRanges, division.NodeAlong[i]);
+            for (int i = 0; i < n; i++)
+            {
+                if (!InDeck(division.DeckRanges, division.NodeAlong[i])) continue;
+                division.OnDeck[i] = true;
+                division.UnderDeck[i] = InDeck(division.UnderRanges, division.NodeAlong[i]);
+                division.Below[i] = Decks.Under(division.Points[i], ourHalfWidth, division.UnderDeck[i]);
+            }
+        }
+
+        // Each node's distance along the sampled curve (the ranges are measured
+        // along it; adding up the straight pieces between nodes falls short on bends).
+        private static float[] NodeDistances(Division division)
+        {
+            int n = division.Points.Count;
+            var result = new float[n];
             var line = division.Polyline;
+            if (line == null || line.Count == 0)
+            {
+                for (int i = 1; i < n; i++) result[i] = result[i - 1] + CurveMath.FlatDistance(division.Points[i - 1], division.Points[i]);
+                return result;
+            }
             int sample = 0;
             float sampleAlong = 0f;
             for (int i = 0; i < n; i++)
@@ -1518,11 +1748,15 @@ namespace RealisticRoads
                 }
                 sample = best;
                 sampleAlong = bestAlong;
-                if (!InDeck(division.DeckRanges, bestAlong)) continue;
-                division.OnDeck[i] = true;
-                division.UnderDeck[i] = InDeck(division.UnderRanges, bestAlong);
-                division.Below[i] = Decks.Under(division.Points[i], ourHalfWidth, division.UnderDeck[i]);
+                result[i] = bestAlong;
             }
+            return result;
+        }
+
+        private static Forced ForcedAt(List<ForcedStretch> ranges, float at)
+        {
+            foreach (var range in ranges) if (at >= range.From && at <= range.To) return range.Kind;
+            return Forced.None;
         }     // metres either side of a sharp corner its two directions are read
 
         private static bool IsCornerAt(List<float> corners, float at)
@@ -1879,6 +2113,12 @@ namespace RealisticRoads
                 panel.ToggleUnder = ToggleUnder;
                 panel.Typed = SetTyped;
                 panel.TypedSubmit = () => { if (!planning && points.Count > 0 && aimValid) AddAimPoint(); };
+                panel.GrabNode = GrabNode;
+                panel.DragHeight = DragHeight;
+                panel.ReleaseNode = ReleaseNode;
+                panel.FreeNode = FreeNode;
+                panel.MarkStretch = MarkStretch;
+                panel.ResetShape = ResetShape;
             }
             panel.Show(Model());
         }
@@ -1919,6 +2159,7 @@ namespace RealisticRoads
                 Snapping = snapping,
                 Deck = deckMode && !underMode,
                 Under = deckMode && underMode,
+                Shaped = heightPins.Count > 0 || stretches.Count > 0,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
                 Mode = planning
                     ? "PLANNING: drag the points to adjust; pick each crossing here or on the map. Check mark / Enter: build. Esc: scrap. Right-click: keep drawing."
@@ -2199,6 +2440,9 @@ namespace RealisticRoads
             crossingExtra.Clear();
             waterExtra.Clear();
             waterTunnel.Clear();
+            heightPins.Clear();
+            stretches.Clear();
+            draggedPin = null;
             preview = null;
             choicesVersion++;
         }

@@ -59,7 +59,16 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    - **Side view**: the curve seen from the side: the road's height against the ground (and water) along it, in the
      preview's colours, with thin lines for the pillars and a white mark at the height of each road or track it
      crosses. Under it: how high and how deep it goes, the steepest grade and the number of pillars. Move the mouse
-     along it to read the height at any spot (a white ring marks that spot on the map); click to keep the mark;
+     along it to read the height at any spot (a white ring marks that spot on the map); click to keep the mark.
+     **Shape it there**: each node the planner may move is a dot; drag one up or down to hold the road at that height
+     (half-metre steps, it becomes a white square; right-click it to let it go). The road ramps to it at its grade, and
+     no node is added: only nodes that are already there can be dragged (the ends, junctions and overpasses keep the
+     height they need and have no dot). Drag along the view to select a stretch, then **Elevated** (on pillars, 9 m up,
+     a bridge over water), **Tunnel** (12 m down, 10 m under a river or sea bed) or **Auto** (the planner decides again,
+     and the heights held in it go). The road ramps up or down to the stretch before it; crossings in it go over (or
+     under) it and water in it is bridged (or tunnelled). Marked stretches show as a band along the top of the view; the
+     cross clears everything set in the side view. Heights and stretches stay on their piece of the curve when points
+     are dragged;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,
