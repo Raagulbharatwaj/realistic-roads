@@ -207,6 +207,35 @@ Bridges work; flyovers, tunnels, cuttings and level crossings are new: check the
 Ctrl+Z undoes a curve including any junctions/bridges it put into existing roads (those segments are rebuilt, so
 TM:PE settings or custom names on them are lost). Long curves are cut into ~120 m segments (shorter only in tight bends, ~100 m over water).
 
-## 6. What's next
+## 6. Releasing (Steam Workshop beta)
+The Workshop title, description, tags and change note are in [docs/WORKSHOP.md](docs/WORKSHOP.md).
+
+1. **Build a release.** Close the game, then in the `RealisticRoads` folder run `dotnet build -c Release`.
+2. **Check the mod folder** (`%LOCALAPPDATA%\Colossal Order\Cities_Skylines\Addons\Mods\RealisticRoads`). It should
+   hold exactly `RealisticRoads.dll`, `CitiesHarmony.API.dll` and `PreviewImage.png`. Everything in the folder gets
+   uploaded, so delete anything else.
+3. **Test the release build once.** Start the game, open a copy of a city and draw a road with a crossing.
+4. **Share it.** Go to Content Manager > Mods, find **Realistic Roads (beta)** and press **Share**. Fill in the title
+   and the change note from docs/WORKSHOP.md, then publish. The game uploads the folder, with PreviewImage.png as the
+   picture.
+5. **Finish the Workshop page.** In Steam, go to Workshop > Your Files and open the item.
+   - Accept the Workshop legal agreement if Steam asks.
+   - **Edit title & description:** paste the description from docs/WORKSHOP.md.
+   - **Add/Remove Required Items:** add Harmony.
+   - **Visibility:** for a closed beta, pick **Unlisted** (only people with the link) or **Friends only**; pick
+     **Public** when you're ready.
+6. **Avoid two copies.** Steam subscribes you to your own item, so the game would load both it and the local folder.
+   That gives two RR buttons and patches applied twice. While you develop, untick the Workshop copy in Content Manager
+   and keep the local one, or the other way round.
+7. **Updating later.** Bump the change note, build, then press **Update** on the local mod in Content Manager (where
+   Share was). Don't press Share again: that makes a second Workshop item.
+8. **Optional GitHub release.** Tag the commit (`git tag v0.1.0-beta`, then `git push origin v0.1.0-beta`). On GitHub,
+   go to Releases > Draft a new release, pick the tag, tick **Set as a pre-release**, and attach a zip of the mod
+   folder.
+
+## 7. License
+[MIT](LICENSE) © 2026 Raagulbharatwaj: anyone may use, change and share the code, keeping the copyright notice.
+
+## 8. What's next
 See [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md) for the plan and
 [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) for the original brief.

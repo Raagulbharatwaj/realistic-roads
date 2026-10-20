@@ -13,7 +13,7 @@ namespace RealisticRoads
     // Its Name/Description show up in Content Manager > Mods.
     public class Mod : IUserMod
     {
-        public string Name => "Realistic Roads";
+        public string Name => "Realistic Roads (beta)";
         public string Description => "CS2-style road drawing: long curves, bridges, tunnels, overpasses and underpasses at each crossing.";
 
         // Settings (Options > Mod Settings), kept between games.

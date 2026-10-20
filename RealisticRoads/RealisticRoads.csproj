@@ -55,6 +55,8 @@
     <MakeDir Directories="$(ModDir)" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutDir)CitiesHarmony.API.dll" DestinationFolder="$(ModDir)" />
+    <!-- The Steam Workshop preview (drawn by tools/make_preview.py); Share in the game uploads it -->
+    <Copy SourceFiles="PreviewImage.png" DestinationFolder="$(ModDir)" />
     <Message Importance="high" Text="Mod copied to $(ModDir)" />
   </Target>
 
