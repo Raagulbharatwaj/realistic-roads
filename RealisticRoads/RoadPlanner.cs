@@ -150,7 +150,10 @@ namespace RealisticRoads
                 ground[i] = terrain.SampleRawHeightSmooth(points[i]);
                 float surface = terrain.SampleRawHeightSmoothWithWater(points[i], false, 0f);
                 water[i] = surface - ground[i] > 0.5f;
-                minH[i] = water[i] && hasBridge ? surface + BridgeClearance + WaterExtra(waterRuns, distance[i]) : -Unlimited;
+                // A deck under the road never bridges water: it stays a tunnel (and
+                // the underground check says if there is water in the way).
+                bool tunnelDeck = underDeck != null && i < underDeck.Length && underDeck[i];
+                minH[i] = water[i] && hasBridge && !tunnelDeck ? surface + BridgeClearance + WaterExtra(waterRuns, distance[i]) : -Unlimited;
                 maxH[i] = Unlimited;
 
                 // The nodes either side of a river narrower than the node spacing
@@ -159,7 +162,7 @@ namespace RealisticRoads
                 if (run != null && !water[i])
                 {
                     water[i] = true;
-                    if (hasBridge)
+                    if (hasBridge && !tunnelDeck)
                     {
                         float runSurface = terrain.SampleRawHeightSmoothWithWater(run.Middle, false, 0f);
                         minH[i] = Mathf.Max(minH[i], runSurface + BridgeClearance + run.Extra);
@@ -183,10 +186,10 @@ namespace RealisticRoads
                 {
                     if (isUnder(i))
                     {
-                        // Under the road: held one level (a tunnel's depth) below it.
+                        // Under the road: at least one level (a tunnel's depth) below it;
+                        // the heights stay as shallow as that and the grade allow.
                         float ceiling = Decks.Ceiling(points[i], decks[i]);
                         maxH[i] = Mathf.Min(maxH[i], ceiling);
-                        minH[i] = Mathf.Max(minH[i], ceiling - Decks.UnderSlack);
                         if (decks[i].Segment != 0 && !decks[i].OnGround) tooDeep = true;
                         continue;
                     }
@@ -991,6 +994,8 @@ namespace RealisticRoads
             var segments = NetManager.instance.m_segments.m_buffer;
             var checkedSegments = new HashSet<ushort>();
             foreach (var crossing in plan.Crossings) checkedSegments.Add(crossing.Segment);
+            // The roads a deck runs along (over or under) are no obstacle to it.
+            if (plan.Decks != null) foreach (var below in plan.Decks) if (below.Segment != 0) checkedSegments.Add(below.Segment);
 
             for (int i = 0; i < plan.Points.Count; i++)
             {

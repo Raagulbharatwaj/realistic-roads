@@ -1336,7 +1336,9 @@ namespace RealisticRoads
                 crossing.Occurrence = times;
                 CrossingType type;
                 // Default: a junction where the two may join, else a bridge over the other.
-                var fallback = crossing.Allows(CrossingType.Junction) ? CrossingType.Junction : CrossingType.Bridge;
+                // (Under a deck under the road: a tunnel, the only one allowed there.)
+                var fallback = crossing.UnderDeck ? CrossingType.Tunnel
+                    : crossing.Allows(CrossingType.Junction) ? CrossingType.Junction : CrossingType.Bridge;
                 crossing.Type = crossingTypes.TryGetValue(crossing.Key, out type) && crossing.Allows(type) ? type : fallback;
                 float extra;
                 crossing.ExtraHeight = crossingExtra.TryGetValue(crossing.Key, out extra) ? extra : 0f;

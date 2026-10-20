@@ -39,6 +39,7 @@ namespace RealisticRoads
         private const float MaxPathLength = 20000f;   // how far a deck follows roads (metres)
         private const int MaxPathNodes = 4000;        // nodes looked at, at most
         private const float PathStep = 4f;            // metres between samples along a followed road
+        private const float OnTheNode = 0.01f;        // a point this close (in t) to a road's end is at its node
 
         // Main thread. The road under 'p' (its centre within its half width of
         // p); of roads stacked there (a ground road and a deck over it) the
@@ -95,11 +96,10 @@ namespace RealisticRoads
             return below.Center.y + clearance + (below.Rail && below.OnGround ? RoadPlanner.RailDeckLift : 0f);
         }
 
-        // A deck under the road: one level (a tunnel's depth) below the road
-        // there, or below the ground where there is none; it may sit up to
-        // UnderSlack deeper where the grade needs it.
+        // A deck under the road: at least one level (a tunnel's depth) below
+        // the road there, or below the ground where there is none. Deeper only
+        // where its grade needs it (under a street climbing more steeply).
         public const float UnderDepth = RoadPlanner.TunnelDepth;
-        public const float UnderSlack = 3f;
 
         public static float Ceiling(Vector3 p, DeckBelow below)
         {
@@ -256,21 +256,22 @@ namespace RealisticRoads
                 at = step.Key;
             }
             chain.Reverse();
-            // 'at' is now the first node: off segA towards it.
-            AddPart(path, segA, tA, at == aStart ? 0f : 1f);
+            // 'at' is now the first node: off segA towards it. A road is only
+            // "used" (run along) if the path really goes along it: a point
+            // clicked on a junction comes with any one of its roads, maybe a
+            // cross street the deck never follows.
+            float exitA = at == aStart ? 0f : 1f, entryB = bestNode == bStart ? 0f : 1f;
+            AddPart(path, segA, tA, exitA);
+            if (used != null && Mathf.Abs(tA - exitA) > OnTheNode) used.Add(segA);
             foreach (var link in chain)
             {
                 ushort road = link.Key;
                 float entry = segments[road].m_startNode == link.Value ? 0f : 1f;
                 AddPart(path, road, entry, 1f - entry);
+                if (used != null) used.Add(road);
             }
-            AddPart(path, segB, bestNode == bStart ? 0f : 1f, tB);
-            if (used != null)
-            {
-                used.Add(segA);
-                used.Add(segB);
-                foreach (var link in chain) used.Add(link.Key);
-            }
+            AddPart(path, segB, entryB, tB);
+            if (used != null && Mathf.Abs(tB - entryB) > OnTheNode) used.Add(segB);
             return path.Count >= 2 ? path : null;
         }
 

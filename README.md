@@ -169,7 +169,7 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      - Columns are 2 m square; a median column is as wide as the median allows (2.4 to 3.6 m).
      - **Under** (next to Deck): the same, one level **under** the roads, as a tunnel, e.g. a metro line under a
        street. Click on a road with Under on to put a point under its middle; between two such points the tunnel
-       follows the road. It runs 12 m below the road (up to 3 m deeper where the grade needs it), or 12 m below the
+       follows the road. It runs at least 12 m below the road (deeper only where its grade needs it, under a steep street), or 12 m below the
        ground where there is no road. Roads it meets on the way are passed under. One level only: not under a road
        that is itself underground. Draw the pieces before and after with Under off for the portals.
      - A third level is measured from the deck below it (the highest road under each point), and evened out
