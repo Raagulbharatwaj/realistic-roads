@@ -184,7 +184,8 @@ namespace RealisticRoads
         // tB): the shortest in metres, through any junction, at most MaxPathLength.
         // A point at a node (t 0 or 1) is that node, whichever of its roads it
         // was given with. Null if there is none; 'used' gets its segments.
-        public static List<Vector3> RoadPath(ushort segA, float tA, ushort segB, float tB, HashSet<ushort> used)
+        // With 'kindOf', only along roads of its kind (SameKind).
+        public static List<Vector3> RoadPath(ushort segA, float tA, ushort segB, float tB, HashSet<ushort> used, NetInfo kindOf = null)
         {
             if (segA == 0 || segB == 0) return null;
             var net = NetManager.instance;
@@ -228,6 +229,7 @@ namespace RealisticRoads
                     if (road == 0) continue;
                     var info = segments[road].Info;
                     if (info == null || info.m_class == null || !CrossingFinder.IsPhysical(info)) continue;
+                    if (kindOf != null && !RoadPlanner.SameKind(info, kindOf)) continue;   // only along roads of this kind
                     ushort other = segments[road].m_startNode == node ? segments[road].m_endNode : segments[road].m_startNode;
                     float through = nodeDistance + Mathf.Max(segments[road].m_averageLength, 1f);
                     float known;
@@ -460,7 +462,7 @@ namespace RealisticRoads
         }
 
         // The pillar building of a road's elevated version (by name), for its material.
-        private static string PillarName(NetInfo info)
+        internal static string PillarName(NetInfo info)
         {
             if (info == null || info.m_netAI == null) return FallbackPillar;
             foreach (var field in new[] { "m_bridgePillarInfo", "m_middlePillarInfo" })
@@ -511,14 +513,7 @@ namespace RealisticRoads
                         frame.Mesh = MakeMesh(frame, n.m_position, material.Value);
                         frame.MeshHeight = n.m_position.y;
                     }
-                    if (block == null) block = new MaterialPropertyBlock();
-                    block.Clear();
-                    block.SetVector(Shader.PropertyToID("_BuildingState"), new Vector4(0f, 1000f, 0f, 256f));
-                    block.SetVector(Shader.PropertyToID("_ObjectIndex"), RenderManager.DefaultColorLocation);
-                    block.SetColor(Shader.PropertyToID("_Color"), new Color(1f, 1f, 1f, 1f));
-                    var pillar = PrefabCollection<BuildingInfo>.FindLoaded(frame.Pillar);
-                    int layer = pillar != null ? pillar.m_prefabDataLayer : 0;
-                    Graphics.DrawMesh(frame.Mesh, n.m_position, Quaternion.identity, material.Key, layer, null, 0, block);
+                    Draw(frame.Mesh, n.m_position, frame.Pillar, material.Key);
                 }
                 catch (Exception e)
                 {
@@ -528,6 +523,42 @@ namespace RealisticRoads
                 }
             }
             if (stale.Count > 0) Forget(stale);
+        }
+
+        // A mesh of ours in the pillar's material, lit like a building. Main thread.
+        internal static void Draw(Mesh mesh, Vector3 position, string pillarName, Material material)
+        {
+            if (block == null) block = new MaterialPropertyBlock();
+            block.Clear();
+            block.SetVector(Shader.PropertyToID("_BuildingState"), new Vector4(0f, 1000f, 0f, 256f));
+            block.SetVector(Shader.PropertyToID("_ObjectIndex"), RenderManager.DefaultColorLocation);
+            block.SetColor(Shader.PropertyToID("_Color"), new Color(1f, 1f, 1f, 1f));
+            var pillar = PrefabCollection<BuildingInfo>.FindLoaded(pillarName);
+            int layer = pillar != null ? pillar.m_prefabDataLayer : 0;
+            Graphics.DrawMesh(mesh, position, Quaternion.identity, material, layer, null, 0, block);
+        }
+
+        // A mesh from faces, every vertex on the material's concrete ('uv').
+        internal static Mesh MakeMesh(List<Vector3> vertices, List<Vector3> normals, List<int> triangles, Vector2 uv)
+        {
+            var mesh = new Mesh();
+            mesh.vertices = vertices.ToArray();
+            mesh.normals = normals.ToArray();
+            var uvs = new Vector2[vertices.Count];
+            var colors = new Color[vertices.Count];
+            var tangents = new Vector4[vertices.Count];
+            for (int i = 0; i < uvs.Length; i++)
+            {
+                uvs[i] = uv;
+                colors[i] = new Color(1f, 1f, 1f, 1f);
+                tangents[i] = new Vector4(1f, 0f, 0f, -1f);
+            }
+            mesh.uv = uvs;
+            mesh.colors = colors;
+            mesh.tangents = tangents;
+            mesh.triangles = triangles.ToArray();
+            mesh.RecalculateBounds();
+            return mesh;
         }
 
         // Frames whose nodes are gone (Ctrl+Z, bulldozed). Any thread.
@@ -574,7 +605,7 @@ namespace RealisticRoads
 
         // The pillar's material, and a spot on its texture (where one of its
         // own vertices maps: its concrete) to colour the whole frame with.
-        private static bool MaterialFor(string pillarName, out KeyValuePair<Material, Vector2> material)
+        internal static bool MaterialFor(string pillarName, out KeyValuePair<Material, Vector2> material)
         {
             if (materials.TryGetValue(pillarName ?? "", out material)) return true;
             if (missing.Contains(pillarName ?? "")) return false;
@@ -631,25 +662,7 @@ namespace RealisticRoads
             float span = CurveMath.FlatDistance(a, b) + (frame.Median ? 0f : frame.Width);
             Box(vertices, normals, triangles, new Vector3(middle.x, (beamBottom + top) * 0.5f, middle.z) - node,
                 across, along, span, BeamHeight, BeamDepth);
-
-            var mesh = new Mesh();
-            mesh.vertices = vertices.ToArray();
-            mesh.normals = normals.ToArray();
-            var uvs = new Vector2[vertices.Count];
-            var colors = new Color[vertices.Count];
-            var tangents = new Vector4[vertices.Count];
-            for (int i = 0; i < uvs.Length; i++)
-            {
-                uvs[i] = uv;
-                colors[i] = new Color(1f, 1f, 1f, 1f);
-                tangents[i] = new Vector4(1f, 0f, 0f, -1f);
-            }
-            mesh.uv = uvs;
-            mesh.colors = colors;
-            mesh.tangents = tangents;
-            mesh.triangles = triangles.ToArray();
-            mesh.RecalculateBounds();
-            return mesh;
+            return MakeMesh(vertices, normals, triangles, uv);
         }
 
         // A box at 'center': 'width' across, 'height' up, 'depth' along.
@@ -666,7 +679,7 @@ namespace RealisticRoads
         }
 
         // One face: centred at 'c', spanning ±u and ±v, facing 'normal'.
-        private static void Face(List<Vector3> vertices, List<Vector3> normals, List<int> triangles, Vector3 c,
+        internal static void Face(List<Vector3> vertices, List<Vector3> normals, List<int> triangles, Vector3 c,
             Vector3 u, Vector3 v, Vector3 normal)
         {
             int first = vertices.Count;
@@ -810,13 +823,14 @@ namespace RealisticRoads
         }
     }
 
-    // Draws the deck frames with the rest of the roads.
+    // Draws the deck frames and retaining walls with the rest of the roads.
     [HarmonyPatch(typeof(NetManager), "EndRenderingImpl")]
     public static class DeckRenderPatch
     {
         public static void Postfix(RenderManager.CameraInfo __0)
         {
             DeckFrames.Render(__0);
+            RetainingWalls.Render(__0);
         }
     }
 }

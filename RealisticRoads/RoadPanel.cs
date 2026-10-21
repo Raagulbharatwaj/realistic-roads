@@ -32,6 +32,8 @@ namespace RealisticRoads
         public bool ParallelLeft;                 // it is on the left of the curve as drawn
         public string Beside = "";                // what it is
         public bool BesideOther;                  // another road or track (not the same road the other way)
+        public bool Upgrade;                      // changing an existing road instead of drawing one
+        public bool Walls;                        // retaining walls along cuttings and lowered roads
     }
 
     // How a stretch of the curve is built: the colours of the preview and the profile.
@@ -149,13 +151,17 @@ namespace RealisticRoads
         public Action<float> ChangeGap;
         private UIButton parallelButton, sideButton, besideButton;
         private UILabel gapLabel, besideLabel;
+        // Upgrade an existing road along a stretch; retaining walls on or off.
+        public Action ToggleUpgrade, ToggleWalls;
+        private UIButton upgradeButton, wallsButton;
+        private UILabel toolsLabel;
         public Action<string, string> Typed;
         public Action TypedSubmit;
         private UIButton curveButton, straightButton, snapButton, deckButton, underButton;
         private UILabel radiusLabel;
         private UITextField lengthField, turnField;
         private const float BarTop = 46f;
-        private const float ContentTop = BarTop + 100f;  // the rows below the DRAW bar
+        private const float ContentTop = BarTop + 134f;  // the rows below the DRAW bar
         private UIButton buildButton, undoButton;
         private const int PageSize = 5;             // items along the road shown at a time
         private int page;                           // which PageSize items are shown
@@ -289,6 +295,17 @@ namespace RealisticRoads
             besideLabel.wordWrap = true;
             besideLabel.size = new Vector2(besideLabel.size.x, 28f);
             besideLabel.textScale = 0.65f;
+
+            // Upgrade an existing road instead of drawing one; retaining walls.
+            y += IconSize + 4f;
+            upgradeButton = BarButton(Icons.Upgrade, "Up", "Upgrade along a curve: click a road where it starts, then where it ends;\n" +
+                "every road between becomes the road picked in the game's menu, on the same nodes (shape and junctions kept),\n" +
+                "each in its own version (elevated, tunnel...). One Ctrl+Z puts the old road back", Pad, y,
+                () => { if (ToggleUpgrade != null) ToggleUpgrade(); });
+            wallsButton = BarButton(Icons.Walls, "W", "Retaining walls along cuttings, tunnel ramps and the roads lowered for an " +
+                "overpass, up to the ground beside them (on: green)", Pad + IconSize + 3f, y,
+                () => { if (ToggleWalls != null) ToggleWalls(); });
+            toolsLabel = BarLabel("", Pad + 2f * IconSize + 10f, y + 8f, Width - 2f * Pad - 2f * IconSize - 10f);
         }
 
         private UIButton BarButton(string icon, string letter, string tooltip, float x, float y, Action onClick)
@@ -382,6 +399,13 @@ namespace RealisticRoads
             Select(parallelButton, model.Parallel);
             Select(sideButton, model.Parallel && !model.ParallelLeft);
             Select(besideButton, model.Parallel && model.BesideOther);
+            Select(upgradeButton, model.Upgrade);
+            Select(wallsButton, model.Walls);
+            if (toolsLabel != null)
+            {
+                string tools = (model.Upgrade ? "Upgrading a road" : "Drawing") + " · walls " + (model.Walls ? "on" : "off");
+                if (toolsLabel.text != tools) toolsLabel.text = tools;
+            }
             if (gapLabel != null)
             {
                 string gap = model.Gap.ToString("0") + " m";
@@ -415,6 +439,8 @@ namespace RealisticRoads
             curveButton = straightButton = snapButton = deckButton = underButton = null;
             parallelButton = sideButton = besideButton = null;
             gapLabel = besideLabel = null;
+            upgradeButton = wallsButton = null;
+            toolsLabel = null;
             radiusLabel = null;
             lengthField = turnField = null;
             profileSprite = null;

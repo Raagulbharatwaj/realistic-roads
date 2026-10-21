@@ -236,9 +236,27 @@ for y0 in (7, 13, 19, 25, 31):
     line(d, (25, y0, 35, y0), EXIST, 2)
 save(im, "beside")
 
+# upgrade: a road turning into a wider one along a curve (an arrow up);
+# walls: a road in a cutting between two retaining walls
+im, d = canvas()
+line(d, (6, 36, 6, 22), EXIST, 5)
+d.arc(p(6, 8, 34, 36), 180, 270, fill=OURS, width=int(9 * S))
+line(d, (20, 8, 36, 8), OURS, 9)
+d.polygon(p(28, 30, 38, 30, 33, 21), fill=DASH)
+line(d, (33, 29, 33, 37), DASH, 3)
+save(im, "upgrade")
+
+im, d = canvas()
+d.rectangle(p(2, 8, 10, 36), fill=GROUND)
+d.rectangle(p(30, 8, 38, 36), fill=GROUND)
+d.rectangle(p(9, 10, 13, 34), fill=(200, 200, 205, 255))
+d.rectangle(p(27, 10, 31, 34), fill=(200, 200, 205, 255))
+line(d, (13, 32, 27, 32), OURS, 4)
+save(im, "walls")
+
 # preview sheet for checking by eye
 names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under",
-         "elevated", "auto", "reset", "parallel", "side", "beside"]
+         "elevated", "auto", "reset", "parallel", "side", "beside", "upgrade", "walls"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")

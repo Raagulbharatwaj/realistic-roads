@@ -162,6 +162,7 @@ namespace RealisticRoads
             Mod.Log("City loaded, mode = " + mode);
             Mod.ShowPendingWarning();
             ToolActivator.Create(mode);
+            RoadUpgrade.Forget();   // this city's roads (their versions are looked up afresh)
             // Nodes carrying a deck frame keep no pillar of their own, whatever was saved.
             SimulationManager.instance.AddAction(DeckFrames.RemovePillars);
         }

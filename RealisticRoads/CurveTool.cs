@@ -293,6 +293,7 @@ namespace RealisticRoads
             public Division Main;
             public ParallelSpec Spec;
             public int Group;
+            public bool Walls;
             public volatile int State;   // 0: building the curve, 1: built, 2: not built
         }
 
@@ -372,6 +373,11 @@ namespace RealisticRoads
             panel.Poll();
             // The curve just built: now the line beside it.
             if (pending != null && pending.State != 0) FinishParallel();
+            if (upgradeMode)
+            {
+                UpdateUpgrade();
+                return;
+            }
 
             // Live preview: the clicked points plus the mouse position while
             // drawing (not while planning: then the plan stays as it is). Only
@@ -869,7 +875,7 @@ namespace RealisticRoads
                 else if (e.keyCode == KeyCode.Escape)
                 {
                     e.Use();
-                    if (points.Count > 0)
+                    if (points.Count > 0 || upgradePoints.Count > 0)
                     {
                         ClearPoints();
                         Mod.Log("Curve cleared (Esc again leaves the tool)");
@@ -883,9 +889,9 @@ namespace RealisticRoads
                 }
                 else if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
                 {
-                    // Drawing: done, check and adjust the plan. Planning: build it.
+                    // Drawing: done, check and adjust the plan. Planning (or upgrading): build it.
                     e.Use();
-                    if (planning) BuildCurrent();
+                    if (planning || upgradeMode) BuildCurrent();
                     else StartPlanning();
                 }
                 else if (e.keyCode == KeyCode.Z && e.control)
@@ -903,6 +909,28 @@ namespace RealisticRoads
             }
 
             if (e.type != EventType.MouseDown || m_toolController.IsInsideUI) return;
+
+            if (upgradeMode)
+            {
+                // Upgrading: a click on a road is where it starts, the next where it
+                // ends (a third starts again); right-click takes the last one back.
+                UpgradePoint point;
+                if (e.button == 0 && UpgradePointAt(out point))
+                {
+                    e.Use();
+                    if (upgradePoints.Count >= 2) upgradePoints.Clear();
+                    upgradePoints.Add(point);
+                    choicesVersion++;
+                    Mod.Log("Upgrade: " + (upgradePoints.Count == 1 ? "from" : "to") + " segment #" + point.Segment);
+                }
+                else if (e.button == 1 && upgradePoints.Count > 0)
+                {
+                    e.Use();
+                    upgradePoints.RemoveAt(upgradePoints.Count - 1);
+                    choicesVersion++;
+                }
+                return;
+            }
 
             if (planning)
             {
@@ -972,6 +1000,11 @@ namespace RealisticRoads
         {
             base.RenderOverlay(cameraInfo);
             var overlay = Singleton<RenderManager>.instance.OverlayEffect;
+            if (upgradeMode)
+            {
+                DrawUpgrade(cameraInfo, overlay);
+                return;
+            }
             DrawPlanned(cameraInfo, overlay, preview);
             DrawPlanned(cameraInfo, overlay, second);
 
@@ -1358,6 +1391,165 @@ namespace RealisticRoads
             if (draggedPin != null && !heightPins.Contains(draggedPin)) draggedPin = null;
         }
 
+        // --- upgrade along a curve: an existing road changed into the picked one ---
+
+        private struct UpgradePoint
+        {
+            public ushort Segment;
+            public float T;
+            public bool OnNode;       // at a node: the upgrade starts (or ends) there
+            public Vector3 Position;
+        }
+
+        private bool upgradeMode;
+        private readonly List<UpgradePoint> upgradePoints = new List<UpgradePoint>();
+        private UpgradePlan upgradePlan;          // the preview
+        private bool wallsOn = true;              // retaining walls along cuttings and lowered roads
+
+        private void ToggleUpgrade()
+        {
+            upgradeMode = !upgradeMode;
+            upgradePoints.Clear();
+            upgradePlan = null;
+            choicesVersion++;
+            Mod.Log(upgradeMode ? "Upgrade: click a road where it starts, then where it ends" : "Upgrade off: drawing again");
+        }
+
+        private void ToggleWalls()
+        {
+            wallsOn = !wallsOn;
+            choicesVersion++;
+            Mod.Log("Retaining walls " + (wallsOn ? "on" : "off") + " for the next roads built");
+        }
+
+        // The road under the mouse as an upgrade point: at a node (one of its
+        // roads, of the picked road's kind if it has one) or on a road.
+        private bool UpgradePointAt(out UpgradePoint point)
+        {
+            point = new UpgradePoint();
+            if (!hoverValid) return false;
+            var net = NetManager.instance;
+            ushort node = hoverNode, segment = hoverSegment;
+            if (node != 0)
+            {
+                ushort pick = 0;
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort road = net.m_nodes.m_buffer[node].GetSegment(i);
+                    if (road == 0) continue;
+                    if (pick == 0 || (RoadPlanner.SameKind(net.m_segments.m_buffer[road].Info, SelectedNetwork) &&
+                                      !RoadPlanner.SameKind(net.m_segments.m_buffer[pick].Info, SelectedNetwork))) pick = road;
+                }
+                if (pick == 0) return false;
+                point = new UpgradePoint
+                {
+                    Segment = pick,
+                    T = net.m_segments.m_buffer[pick].m_startNode == node ? 0f : 1f,
+                    OnNode = true,
+                    Position = net.m_nodes.m_buffer[node].m_position,
+                };
+                return true;
+            }
+            if (segment == 0) return false;
+            point = new UpgradePoint { Segment = segment, T = hoverT, Position = hoverPosition };
+            return true;
+        }
+
+        // Main thread, every frame while upgrading: the stretch from the first
+        // point to the second (or to the mouse), worked out when either changes.
+        private void UpdateUpgrade()
+        {
+            var hover = new UpgradePoint();
+            bool withHover = upgradePoints.Count == 1 && mouseRayValid && UpgradePointAt(out hover);
+            string key = "upgrade|" + choicesVersion + "|" + upgradePoints.Count + "|" +
+                         (withHover ? hover.Segment + "," + Mathf.RoundToInt(hover.T * 20f) + "," + hover.OnNode : "") + "|" +
+                         (SelectedNetwork != null ? SelectedNetwork.name : "");
+            if (key != previewKey || ++framesSincePreview >= PreviewRefreshFrames)
+            {
+                previewKey = key;
+                framesSincePreview = 0;
+                preview = null;
+                second = null;
+                upgradePlan = null;
+                if (upgradePoints.Count >= 2 || withHover)
+                {
+                    var a = upgradePoints[0];
+                    var b = upgradePoints.Count >= 2 ? upgradePoints[1] : hover;
+                    upgradePlan = RoadUpgrade.Make(SelectedNetwork, a.Segment, a.T, a.OnNode, b.Segment, b.T, b.OnNode);
+                }
+                ShowPanel();
+            }
+            HideButtons(0);
+            foreach (var label in mapLabels) label.isVisible = false;
+            UpdateCursorLabel(false);
+        }
+
+        private PanelModel UpgradeModel(PanelModel model)
+        {
+            string road = SelectedNetwork != null ? Title(SelectedNetwork) : "the picked road";
+            model.Mode = "UPGRADE: click a road where the upgrade starts, then where it ends; the roads between become " + road +
+                         " (same shape, same junctions). Check mark / Enter: upgrade. Right-click: take back a point. Upgrade button: back to drawing.";
+            model.HasPoints = upgradePoints.Count > 0;
+            var plan = upgradePlan;
+            if (plan == null)
+            {
+                model.Summary = upgradePoints.Count == 0 ? "Click a road where the upgrade starts" : "Click (or point at) where it ends";
+                return model;
+            }
+            model.Summary = plan.Segments.Count + " segment(s), " + plan.Length.ToString("N0") + " m become " + road +
+                            (plan.Cost > 0 ? "   ·   cost " + (plan.Cost / 100).ToString("N0") : "");
+            model.Details = plan.Unchanged > 0 ? plan.Unchanged + " segment(s) on the way already are" : "";
+            model.Problems.AddRange(plan.Problems);
+            model.Warnings.AddRange(plan.Warnings);
+            model.CanBuild = upgradePoints.Count >= 2 && plan.Ok;
+            return model;
+        }
+
+        private void BuildUpgrade()
+        {
+            if (SelectedNetwork == null || upgradePoints.Count < 2)
+            {
+                Mod.Log("Upgrade: click two points on a road first");
+                return;
+            }
+            var a = upgradePoints[0];
+            var b = upgradePoints[1];
+            var plan = RoadUpgrade.Make(SelectedNetwork, a.Segment, a.T, a.OnNode, b.Segment, b.T, b.OnNode);
+            if (!plan.Ok)
+            {
+                Mod.Log("Not upgraded: " + string.Join("; ", plan.Problems.ToArray()));
+                return;
+            }
+            Mod.Log("Upgrading " + plan.Segments.Count + " segment(s), " + plan.Length.ToString("F0") + " m, to " + SelectedNetwork.name);
+            NetworkBuilder.Upgrade(plan);
+            upgradePoints.Clear();
+            upgradePlan = null;
+            choicesVersion++;
+        }
+
+        // The stretch to upgrade: its segments in the new road's colour (red if
+        // it can't be done), and the points.
+        private void DrawUpgrade(RenderManager.CameraInfo cameraInfo, OverlayEffect overlay)
+        {
+            var plan = upgradePlan;
+            if (plan != null)
+            {
+                float width = (SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 4f) * 2f;
+                Color color = plan.Ok ? GoodColor : BadColor;
+                foreach (ushort segment in plan.Segments)
+                {
+                    Vector3 a, b, c, d;
+                    CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+                    overlay.DrawBezier(cameraInfo, color, new Bezier3 { a = a, b = b, c = c, d = d }, width, 100000f, -100000f, -1f, 1280f, false, true);
+                }
+            }
+            foreach (var point in upgradePoints)
+                overlay.DrawCircle(cameraInfo, SnapColor, point.Position, HandleSize, -1f, 1280f, false, true);
+            UpgradePoint hover;
+            if (mouseRayValid && UpgradePointAt(out hover))
+                overlay.DrawCircle(cameraInfo, HoverColor, hover.Position, PointSize, -1f, 1280f, false, true);
+        }
+
         // The parallel line as the tool is set now (null: Parallel is off).
         private ParallelSpec CurrentParallel()
         {
@@ -1430,6 +1622,7 @@ namespace RealisticRoads
             }
             Mod.Log("Building the parallel " + waiting.Spec.Info.name + ": " + parallel.Length.ToString("F0") + " m in " +
                     (parallel.Points.Count - 1) + " segment(s), " + parallel.Crossings.Count + " crossing(s)");
+            parallel.Plan.Walls = waiting.Walls;
             NetworkBuilder.BuildCurve(waiting.Spec.Info, parallel.Plan, waiting.Group);
         }
 
@@ -1524,7 +1717,7 @@ namespace RealisticRoads
             foreach (ushort s in near)
             {
                 var seg = net.m_segments.m_buffer[s];
-                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !SameKind(seg.Info, info)) continue;
+                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !RoadPlanner.SameKind(seg.Info, info)) continue;
                 foreach (ushort end in new[] { seg.m_startNode, seg.m_endNode })
                 {
                     float d = CurveMath.FlatDistance(net.m_nodes.m_buffer[end].m_position, at);
@@ -1541,7 +1734,7 @@ namespace RealisticRoads
             foreach (ushort s in near)
             {
                 var seg = net.m_segments.m_buffer[s];
-                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !SameKind(seg.Info, info)) continue;
+                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !RoadPlanner.SameKind(seg.Info, info)) continue;
                 Vector3 on;
                 float onT = CrossingFinder.ClosestT(s, at, out on);
                 if (CurveMath.FlatDistance(on, at) > seg.Info.m_halfWidth) continue;
@@ -1551,12 +1744,6 @@ namespace RealisticRoads
                 at = on;
                 return;
             }
-        }
-
-        private static bool SameKind(NetInfo a, NetInfo b)
-        {
-            return a != null && b != null && a.m_class != null && b.m_class != null &&
-                   a.m_class.m_service == b.m_class.m_service && a.m_class.m_subService == b.m_class.m_subService;
         }
 
         private void ToggleParallel()
@@ -1604,6 +1791,11 @@ namespace RealisticRoads
 
         private void BuildCurrent()
         {
+            if (upgradeMode)
+            {
+                BuildUpgrade();
+                return;
+            }
             if (SelectedNetwork == null)
             {
                 Mod.Log("Pick a road in the vanilla Roads menu first, then open the curve tool again");
@@ -1644,12 +1836,13 @@ namespace RealisticRoads
                 spec = KeepParallel(parallel);
             }
 
+            division.Plan.Walls = wallsOn;
             Mod.Log("Building " + SelectedNetwork.name + ": " + division.Length.ToString("F0") + " m in " +
                     (division.Points.Count - 1) + " segment(s), " + division.Crossings.Count + " crossing(s)");
             if (spec == null) NetworkBuilder.BuildCurve(SelectedNetwork, division.Plan);
             else
             {
-                var waiting = new PendingParallel { Main = division, Spec = spec, Group = NetworkBuilder.NewGroup() };
+                var waiting = new PendingParallel { Main = division, Spec = spec, Group = NetworkBuilder.NewGroup(), Walls = wallsOn };
                 NetworkBuilder.BuildCurve(SelectedNetwork, division.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
                 pending = waiting;
             }
@@ -2534,6 +2727,8 @@ namespace RealisticRoads
                 panel.ChangeGap = ChangeGap;
                 panel.FlipSide = FlipSide;
                 panel.PickBeside = PickBeside;
+                panel.ToggleUpgrade = ToggleUpgrade;
+                panel.ToggleWalls = ToggleWalls;
             }
             panel.Show(Model());
         }
@@ -2580,6 +2775,8 @@ namespace RealisticRoads
                 ParallelLeft = parallelLeft,
                 Beside = besideNetwork != null ? Title(besideNetwork) : "Same road, other way",
                 BesideOther = besideNetwork != null,
+                Upgrade = upgradeMode,
+                Walls = wallsOn,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
                 Mode = planning
                     ? "PLANNING: drag the points to adjust; pick each crossing here or on the map. Check mark / Enter: build. Esc: scrap. Right-click: keep drawing."
@@ -2587,6 +2784,7 @@ namespace RealisticRoads
                     : "DRAWING: click to add points (Tab: straight / curved; type a length or turn above for an exact point). " +
                       "Double-click or Enter when done, to check and adjust the plan before building.",
             };
+            if (upgradeMode) return UpgradeModel(model);
             var division = preview;
             if (division == null || division.Points.Count < 2 || division.Plan == null)
             {
@@ -2892,6 +3090,8 @@ namespace RealisticRoads
             heightPins.Clear();
             stretches.Clear();
             draggedPin = null;
+            upgradePoints.Clear();
+            upgradePlan = null;
             preview = null;
             choicesVersion++;
         }
