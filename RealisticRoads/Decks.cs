@@ -396,6 +396,7 @@ namespace RealisticRoads
         private static readonly HashSet<string> missing = new HashSet<string>();
         private static MaterialPropertyBlock block;
         private static readonly HashSet<ushort> failedFrames = new HashSet<ushort>();   // drawing threw: skipped (logged once)
+        private static readonly List<Frame> drawn = new List<Frame>();   // this frame's frames (kept, not made anew)
 
         // Any thread (the game asks for node pillars on the simulation thread).
         // True if this node carries one of our frames (so no pillar of its own).
@@ -485,11 +486,12 @@ namespace RealisticRoads
                 foreach (var mesh in unused) if (mesh != null) UnityEngine.Object.Destroy(mesh);
                 unused.Clear();
             }
-            List<Frame> list;
+            var list = drawn;
             lock (frames)
             {
                 if (frames.Count == 0) return;
-                list = new List<Frame>(frames.Values);
+                list.Clear();
+                list.AddRange(frames.Values);
             }
             var nodes = NetManager.instance.m_nodes.m_buffer;
             var stale = new List<ushort>();

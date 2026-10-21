@@ -26,6 +26,9 @@ namespace RealisticRoads
         private const float Level = 0.15f;       // rising less than this per metre: the dug slope has ended
         private const float DrawDistance = 4000f;
         private const int RefreshFrames = 120;   // the ground is looked at again this often (the game digs after building)
+        private const int SettledFrames = 600;   // ... and this often once it has stayed the same a few times
+        private const int SettledAfter = 5;
+        private const float JunctionMargin = 2f; // walls stop this far before the side roads at a junction
 
         private class Wall
         {
@@ -36,12 +39,14 @@ namespace RealisticRoads
             public Vector3 Origin;
             public float Signature = float.NaN;  // of the ground the mesh was made for
             public int Checked = -RefreshFrames;
+            public int Unchanged;                // checks in a row that found the ground as it was
         }
 
         private static readonly Dictionary<ushort, Wall> walls = new Dictionary<ushort, Wall>();
         private static readonly List<Mesh> unused = new List<Mesh>();
         private static readonly HashSet<ushort> failed = new HashSet<ushort>();
         private static int frame;
+        private static readonly List<Wall> drawn = new List<Wall>();   // this frame's walls (kept, not made anew)
 
         // Simulation thread, while building: walls along 'segment' wherever it
         // is below the ground, in the material of 'road''s pillars.
@@ -91,11 +96,12 @@ namespace RealisticRoads
                 foreach (var mesh in unused) if (mesh != null) UnityEngine.Object.Destroy(mesh);
                 unused.Clear();
             }
-            List<Wall> list;
+            var list = drawn;
             lock (walls)
             {
                 if (walls.Count == 0) return;
-                list = new List<Wall>(walls.Values);
+                list.Clear();
+                list.AddRange(walls.Values);
             }
             frame++;
             var segments = NetManager.instance.m_segments.m_buffer;
@@ -118,7 +124,8 @@ namespace RealisticRoads
                     if (!DeckFrames.MaterialFor(wall.Pillar, out material)) continue;
                     // Looked at again now and then: the game digs the cutting after
                     // the road is built, and the player may reshape the ground.
-                    if (frame - wall.Checked >= RefreshFrames)
+                    int interval = wall.Unchanged >= SettledAfter ? SettledFrames : RefreshFrames;
+                    if (frame - wall.Checked >= interval)
                     {
                         wall.Checked = frame + (wall.Segment % RefreshFrames);   // spread over the frames
                         var sections = Sections(wall.Segment);
@@ -129,7 +136,9 @@ namespace RealisticRoads
                             wall.Origin = middle;
                             wall.Mesh = MakeMesh(sections, middle, material.Value);
                             wall.Signature = signature;
+                            wall.Unchanged = 0;
                         }
+                        else wall.Unchanged++;
                     }
                     if (wall.Mesh != null) DeckFrames.Draw(wall.Mesh, wall.Origin, wall.Pillar, material.Key);
                 }
@@ -161,6 +170,10 @@ namespace RealisticRoads
             CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
             int steps = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(s.m_averageLength, 1f) / SampleStep), 2, 64);
             var terrain = TerrainManager.instance;
+            // At a junction the side roads come in: no wall across their mouths.
+            var nodes = NetManager.instance.m_nodes.m_buffer;
+            float startClear = JunctionClear(segment, s.m_startNode, half), endClear = JunctionClear(segment, s.m_endNode, half);
+            Vector3 startNode = nodes[s.m_startNode].m_position, endNode = nodes[s.m_endNode].m_position;
             var result = new Section[2][];
             for (int side = 0; side < 2; side++)
             {
@@ -183,9 +196,10 @@ namespace RealisticRoads
                         reach = r;
                     }
                     top = Mathf.Min(top, p.y + MaxWall);
+                    bool clear = CurveMath.FlatDistance(edge, startNode) >= startClear && CurveMath.FlatDistance(edge, endNode) >= endClear;
                     result[side][k] = new Section
                     {
-                        Wall = top - p.y >= MinWall,
+                        Wall = clear && top - p.y >= MinWall,
                         Edge = edge,
                         Out = right,
                         Top = top,
@@ -194,6 +208,26 @@ namespace RealisticRoads
                 }
             }
             return result;
+        }
+
+        // How far from a junction node the walls of 'segment' (half as wide as
+        // 'half') stop: past the widest other road there (0 where the road just
+        // goes on).
+        private static float JunctionClear(ushort segment, ushort node, float half)
+        {
+            var net = NetManager.instance;
+            int roads = 0;
+            float widest = 0f;
+            for (int i = 0; i < 8; i++)
+            {
+                ushort other = net.m_nodes.m_buffer[node].GetSegment(i);
+                if (other == 0) continue;
+                roads++;
+                if (other == segment) continue;
+                var info = net.m_segments.m_buffer[other].Info;
+                if (info != null) widest = Mathf.Max(widest, info.m_halfWidth);
+            }
+            return roads > 2 ? widest + half + JunctionMargin : 0f;
         }
 
         private static float Signature(Section[][] sections)
@@ -227,6 +261,12 @@ namespace RealisticRoads
                     // The concrete top, out to where the ground is as high again.
                     Vector3 pFar = pTop + p.Out * p.Reach, qFar = qTop + q.Out * q.Reach;
                     Quad(vertices, normals, triangles, pBack, qBack, qFar, pFar, Vector3.up);
+                    // Where a run of wall starts or ends: its end closed.
+                    Vector3 along = CurveMath.FlatNormal(q.Edge - p.Edge);
+                    if (k == 1 || !side[k - 2].Wall)
+                        Quad(vertices, normals, triangles, pBottom, pTop, pBack, pBottom + p.Out * Thickness, -along);
+                    if (k == side.Length - 1 || !side[k + 1].Wall)
+                        Quad(vertices, normals, triangles, qBottom, qTop, qBack, qBottom + q.Out * Thickness, along);
                 }
             if (vertices.Count == 0) return null;
             return DeckFrames.MakeMesh(vertices, normals, triangles, uv);

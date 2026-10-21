@@ -218,12 +218,19 @@ namespace RealisticRoads
             modeButton.relativePosition = new Vector3(x, Mathf.Max((modeHost.height - 36f) * 0.5f, 0f));
         }
 
+        // The game's options panels with the road tool's modes (straight, curved,
+        // upgrade...): roads, and the tracks and paths menus, which have their own.
+        private static readonly string[] OptionPanels = { "RoadsOptionPanel", "TracksOptionPanel", "PathsOptionPanel" };
+
         private static UIComponent FindOptionsPanel()
         {
             var view = UIView.GetAView();
             if (view == null) return null;
             foreach (var panel in view.GetComponentsInChildren<UIPanel>())
-                if (panel != null && panel.isVisible && panel.name != null && panel.name.StartsWith("RoadsOptionPanel")) return panel;
+            {
+                if (panel == null || !panel.isVisible || panel.name == null) continue;
+                foreach (var prefix in OptionPanels) if (panel.name.StartsWith(prefix)) return panel;
+            }
             return null;
         }
 
