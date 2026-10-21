@@ -209,9 +209,36 @@ line(d, (12, 12, 28, 28), DASH, 4.5)
 line(d, (28, 12, 12, 28), DASH, 4.5)
 save(im, "reset")
 
+# parallel drawing: two roads side by side (ours and its pair), the side
+# switch (arrows left and right), and what goes beside (a road and a track)
+im, d = canvas()
+P = [(4, 34), (16, 34), (14, 8), (26, 8)]
+for dx in (0, 10):
+    pts = []
+    for i in range(33):
+        t = i / 32.0
+        w = ((1 - t) ** 3, 3 * t * (1 - t) ** 2, 3 * t * t * (1 - t), t ** 3)
+        pts.append(((sum(c * P[j][0] for j, c in enumerate(w)) + dx) * S, sum(c * P[j][1] for j, c in enumerate(w)) * S))
+    d.line(pts, fill=OURS, width=int(5 * S), joint="curve")
+save(im, "parallel")
+
+im, d = canvas()
+line(d, (7, 20, 33, 20), DASH, 3)
+d.polygon(p(3, 20, 11, 13, 11, 27), fill=DASH)
+d.polygon(p(37, 20, 29, 13, 29, 27), fill=DASH)
+line(d, (20, 6, 20, 13), OURS, 4); line(d, (20, 27, 20, 34), OURS, 4)
+save(im, "side")
+
+im, d = canvas()
+line(d, (12, 4, 12, 36), OURS, 7)
+line(d, (27, 4, 27, 36), EXIST, 2); line(d, (33, 4, 33, 36), EXIST, 2)
+for y0 in (7, 13, 19, 25, 31):
+    line(d, (25, y0, 35, y0), EXIST, 2)
+save(im, "beside")
+
 # preview sheet for checking by eye
 names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under",
-         "elevated", "auto", "reset"]
+         "elevated", "auto", "reset", "parallel", "side", "beside"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")

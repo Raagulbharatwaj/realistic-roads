@@ -72,6 +72,16 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      stretch ramps to it at the grade, so a whole road made Elevated still meets the roads at its ends. Marked stretches show as a band along the top of the view; the
      cross clears everything set in the side view. Heights and stretches stay on their piece of the curve when points
      are dragged;
+   - **Parallel** (the third row of the DRAW bar): builds a second road beside the curve, so you draw a dual
+     carriageway or a road with a track beside it in one go. **Gap** -/+ sets the space between the two roads' edges
+     (4 m to start, 0 to 40 m); the arrows put it on the other side of the curve. By default it is the same road
+     running the other way (a one-way pair: on the left for right-hand traffic). For another road or track, pick it in
+     the game's menu, press the **2** button, then pick the curve's own road; press **2** again to go back. The
+     parallel line is planned on its own (its crossings show in the list and on the map with a **P**: P1, P2...), with
+     the curve's point heights and the side view's heights and stretches. Its ends join a road or node of its kind
+     they land on. **Build** builds the curve, then plans the parallel line again against the roads as they are now
+     (the curve's junctions may have cut them) and builds it; one **Ctrl+Z** removes both. On the inside of a bend
+     tighter than the gap it would fold over itself: the panel says so. It doesn't follow decks yet;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,

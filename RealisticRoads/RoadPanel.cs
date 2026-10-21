@@ -27,6 +27,11 @@ namespace RealisticRoads
         public PanelProfile Profile;              // the curve seen from the side (null: nothing to show)
         public string ProfileText = "";           // highest / deepest / steepest
         public bool Shaped;                       // heights dragged or stretches marked in the side view
+        public bool Parallel;                     // a second road or track is built beside the curve
+        public float Gap;                         // metres between their edges
+        public bool ParallelLeft;                 // it is on the left of the curve as drawn
+        public string Beside = "";                // what it is
+        public bool BesideOther;                  // another road or track (not the same road the other way)
     }
 
     // How a stretch of the curve is built: the colours of the preview and the profile.
@@ -139,13 +144,18 @@ namespace RealisticRoads
         public Action<float> ChangeRadius;
         public Action ToggleSnap;
         public Action ToggleDeck, ToggleUnder;
+        // The parallel line: on / off, the gap, which side, and what it is.
+        public Action ToggleParallel, FlipSide, PickBeside;
+        public Action<float> ChangeGap;
+        private UIButton parallelButton, sideButton, besideButton;
+        private UILabel gapLabel, besideLabel;
         public Action<string, string> Typed;
         public Action TypedSubmit;
         private UIButton curveButton, straightButton, snapButton, deckButton, underButton;
         private UILabel radiusLabel;
         private UITextField lengthField, turnField;
         private const float BarTop = 46f;
-        private const float ContentTop = BarTop + 64f;   // the rows below the DRAW bar
+        private const float ContentTop = BarTop + 100f;  // the rows below the DRAW bar
         private UIButton buildButton, undoButton;
         private const int PageSize = 5;             // items along the road shown at a time
         private int page;                           // which PageSize items are shown
@@ -253,6 +263,32 @@ namespace RealisticRoads
             turnField = BarField(Pad + 176f, y, 52f,
                 "Turn from the last piece in degrees: + right, - left (the first piece: bearing from north); Enter places the point");
             BarLabel("° (+ right)", Pad + 232f, y + 4f, 84f);
+
+            // Parallel: a second road beside the curve (a one-way pair, or a
+            // road and a track), the gap between them, its side, and what it is.
+            y += 30f;
+            parallelButton = BarButton(Icons.Parallel, "P", "Parallel: build a second road beside the curve, at the gap set here.\n" +
+                "The same road runs the other way (a one-way pair); or pick a road or track for it with the button on the right.\n" +
+                "Each is planned on its own (crossings, bridges, tunnels); one Build and one Ctrl+Z for both", Pad, y,
+                () => { if (ToggleParallel != null) ToggleParallel(); });
+            float gx = Pad + IconSize + 6f;
+            BarLabel("Gap", gx, y + 8f, 28f);
+            BarButton(Icons.Minus, "-", "Narrower gap between the two roads' edges", gx + 28f, y,
+                () => { if (ChangeGap != null) ChangeGap(-CurveTool.GapStep); });
+            gapLabel = BarLabel("", gx + 28f + IconSize, y + 8f, 36f);
+            gapLabel.textAlignment = UIHorizontalAlignment.Center;
+            BarButton(Icons.Plus, "+", "Wider gap between the two roads' edges (up to " + CurveTool.MaxGap.ToString("0") + " m)",
+                gx + 64f + IconSize, y, () => { if (ChangeGap != null) ChangeGap(CurveTool.GapStep); });
+            float sx = gx + 64f + 2f * IconSize + 6f;
+            sideButton = BarButton(Icons.Side, "<>", "Put the parallel road on the other side of the curve", sx, y,
+                () => { if (FlipSide != null) FlipSide(); });
+            besideButton = BarButton(Icons.Beside, "2", "What goes beside: pick a road or track in the game's menu, press this, " +
+                "then pick the curve's own road.\nPress again for the same road as the curve, running the other way", sx + IconSize + 3f, y,
+                () => { if (PickBeside != null) PickBeside(); });
+            besideLabel = BarLabel("", sx + 2f * IconSize + 6f, y + 2f, Width - Pad - (sx + 2f * IconSize + 6f));
+            besideLabel.wordWrap = true;
+            besideLabel.size = new Vector2(besideLabel.size.x, 28f);
+            besideLabel.textScale = 0.65f;
         }
 
         private UIButton BarButton(string icon, string letter, string tooltip, float x, float y, Action onClick)
@@ -343,6 +379,19 @@ namespace RealisticRoads
             Select(snapButton, model.Snapping);
             Select(deckButton, model.Deck);
             Select(underButton, model.Under);
+            Select(parallelButton, model.Parallel);
+            Select(sideButton, model.Parallel && !model.ParallelLeft);
+            Select(besideButton, model.Parallel && model.BesideOther);
+            if (gapLabel != null)
+            {
+                string gap = model.Gap.ToString("0") + " m";
+                if (gapLabel.text != gap) gapLabel.text = gap;
+            }
+            if (besideLabel != null)
+            {
+                string beside = model.Parallel ? (model.ParallelLeft ? "Left: " : "Right: ") + model.Beside : "Parallel off";
+                if (besideLabel.text != beside) besideLabel.text = beside;
+            }
             if (radiusLabel != null)
             {
                 string text = model.Radius < 0.5f ? "sharp" : model.Radius.ToString("0") + " m";
@@ -364,6 +413,8 @@ namespace RealisticRoads
             if (profileTexture != null) UnityEngine.Object.Destroy(profileTexture);
             panel = null;
             curveButton = straightButton = snapButton = deckButton = underButton = null;
+            parallelButton = sideButton = besideButton = null;
+            gapLabel = besideLabel = null;
             radiusLabel = null;
             lengthField = turnField = null;
             profileSprite = null;

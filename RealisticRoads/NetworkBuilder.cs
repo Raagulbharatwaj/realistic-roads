@@ -75,6 +75,7 @@ namespace RealisticRoads
             public readonly List<Turned> Turns = new List<Turned>();
             public int Paid;                         // construction cost charged (refunded on undo)
             public ItemClass PaidClass;
+            public int Group;                        // builds with the same group (not 0) are undone together
         }
 
         private struct Turned
@@ -96,10 +97,24 @@ namespace RealisticRoads
             UndoCount = undoStack.Count;
         }
 
-        // Builds 'plan' (see RoadPlanner) with 'info'.
-        public static void BuildCurve(NetInfo info, Plan plan)
+        // Builds 'plan' (see RoadPlanner) with 'info'. Builds given the same
+        // 'group' (NewGroup) are undone together; 'done' is told on the
+        // simulation thread whether it was built.
+        public static void BuildCurve(NetInfo info, Plan plan, int group = 0, Action<bool> done = null)
         {
-            SimulationManager.instance.AddAction(() => BuildNow(info, plan));
+            SimulationManager.instance.AddAction(() =>
+            {
+                bool built = BuildNow(info, plan, group);
+                if (done != null) done(built);
+            });
+        }
+
+        private static int lastGroup;
+
+        // Main thread: a group for builds that are undone together.
+        public static int NewGroup()
+        {
+            return ++lastGroup;
         }
 
         public static void UndoLast()
@@ -116,9 +131,9 @@ namespace RealisticRoads
             });
         }
 
-        private static bool BuildNow(NetInfo info, Plan plan)
+        private static bool BuildNow(NetInfo info, Plan plan, int undoGroup)
         {
-            var build = new Build();
+            var build = new Build { Group = undoGroup };
             try
             {
                 var net = NetManager.instance;
@@ -784,13 +799,19 @@ namespace RealisticRoads
                 Mod.Log("Nothing to undo");
                 return;
             }
-            var build = undoStack[undoStack.Count - 1];
-            undoStack.RemoveAt(undoStack.Count - 1);
-            UndoCount = undoStack.Count;
-            Remove(build);
-            Refund(build);
-            Mod.Log("Undo: removed " + build.Segments.Count + " segment(s)" +
-                    (build.Splits.Count > 0 ? " and restored " + build.Splits.Count + " existing segment(s)" : ""));
+            // A build and the ones made with it (a parallel pair), newest first.
+            int group;
+            do
+            {
+                var build = undoStack[undoStack.Count - 1];
+                undoStack.RemoveAt(undoStack.Count - 1);
+                UndoCount = undoStack.Count;
+                Remove(build);
+                Refund(build);
+                Mod.Log("Undo: removed " + build.Segments.Count + " segment(s)" +
+                        (build.Splits.Count > 0 ? " and restored " + build.Splits.Count + " existing segment(s)" : ""));
+                group = build.Group;
+            } while (group != 0 && undoStack.Count > 0 && undoStack[undoStack.Count - 1].Group == group);
         }
 
         // Simulation thread. Removes our segments, then any node we created

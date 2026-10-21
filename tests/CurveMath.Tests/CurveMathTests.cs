@@ -620,4 +620,46 @@ public class CurveMathTests
         Assert.Equal(90f, CurveMath.Remap(curve, chord, 100f), 3);
         Assert.Equal(-5f, CurveMath.Remap(chord, curve, -5f), 3);
     }
+
+    [Fact]
+    public void Offset_StraightLine_IsParallel()
+    {
+        var line = new List<Vector3> { V(0, 0, 5), V(0, 50, 5), V(0, 100, 5) };   // heading north
+        var right = CurveMath.Offset(line, 10f);
+        foreach (var p in right) Assert.Equal(10f, p.x, 3);   // east of it
+        Assert.Equal(5f, right[1].y, 3);
+        var left = CurveMath.Offset(line, -10f);
+        Assert.Equal(-10f, left[2].x, 3);
+        Assert.False(CurveMath.Folds(line, right));
+    }
+
+    [Fact]
+    public void Offset_Corner_KeepsBothSidesAtTheGap()
+    {
+        // North, then east: a right-angled corner at (0, 100).
+        var line = new List<Vector3> { V(0, 0), V(0, 100), V(100, 100) };
+        var outside = CurveMath.Offset(line, -10f);   // left of the road: outside the right turn
+        Assert.Equal(-10f, outside[1].x, 3);
+        Assert.Equal(110f, outside[1].z, 3);
+        Assert.Equal(110f, outside[2].z, 3);
+    }
+
+    [Fact]
+    public void Offset_InsideTightBend_Folds()
+    {
+        var arc = Arc(20f, 180f, 37);                   // a 20 m radius half circle, turning left
+        var inside = CurveMath.Offset(arc, -30f);       // left: the inside, wider than the radius
+        Assert.True(CurveMath.Folds(arc, inside));
+        var outside = CurveMath.Offset(arc, 30f);
+        Assert.False(CurveMath.Folds(arc, outside));
+        var near = CurveMath.Offset(arc, -10f);
+        Assert.False(CurveMath.Folds(arc, near));
+    }
+
+    [Fact]
+    public void Distances_AddUpAlongTheLine()
+    {
+        var d = CurveMath.Distances(new[] { V(0, 0), V(3, 4), V(3, 10) });
+        Assert.Equal(new[] { 0f, 5f, 11f }, d);
+    }
 }

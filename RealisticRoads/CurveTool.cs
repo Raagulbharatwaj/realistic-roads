@@ -64,6 +64,8 @@ namespace RealisticRoads
         // crossed, so two crossings of one road each keep their own choice.
         private readonly Dictionary<int, CrossingType> crossingTypes = new Dictionary<int, CrossingType>();
         private readonly Dictionary<int, float> crossingExtra = new Dictionary<int, float>();
+        private readonly Dictionary<int, CrossingType> parallelTypes = new Dictionary<int, CrossingType>();   // the parallel line's
+        private readonly Dictionary<int, float> parallelExtra = new Dictionary<int, float>();
         private readonly Dictionary<int, float> waterExtra = new Dictionary<int, float>();
         private readonly Dictionary<int, bool> waterTunnel = new Dictionary<int, bool>();   // water crossings chosen as tunnels
 
@@ -192,7 +194,118 @@ namespace RealisticRoads
             public Forced[] Forced;      // per node: marked Elevated or Tunnel in the side view
             public List<ForcedStretch> ForcedRanges = new List<ForcedStretch>();   // those stretches, along Polyline
             public List<KeyValuePair<Vector3, float>> Heights = new List<KeyValuePair<Vector3, float>>();   // dragged heights: where, how high
+            public List<float> Corners;  // sharp corners, along Polyline
+            public List<float> Lifts;    // each point's own height (Page Up / Page Down)
+            public LineSetup Setup;      // the road it is planned for, and the player's choices for it
         }
+
+        // The road (or track) a division is planned for, with the player's
+        // choices for it: the curve drawn, or the parallel line beside it.
+        private class LineSetup
+        {
+            public NetInfo Info;
+            public Dictionary<int, CrossingType> Types;
+            public Dictionary<int, float> Extra;
+            public Dictionary<int, bool> WaterTunnel;
+            public Dictionary<int, float> WaterExtra;
+            public List<HeightPin> Pins;
+            public List<ForcedStretch> Stretches;
+            // Choices found by where the crossing is: the parallel line is planned
+            // again once the curve is built, and the roads it crossed may have
+            // been cut into new pieces (new numbers) by then.
+            public List<PlacedChoice> ByPlace;
+        }
+
+        private struct PlacedChoice
+        {
+            public Vector3 At;
+            public CrossingType Type;
+            public float Extra;
+        }
+
+        private const float PlaceMatch = 8f;    // a choice found by place: the crossing this close to where it was
+        private LineSetup line;                 // the one being divided (main thread)
+        private NetInfo Net => line != null ? line.Info : SelectedNetwork;
+
+        private LineSetup MainSetup()
+        {
+            return new LineSetup
+            {
+                Info = SelectedNetwork, Types = crossingTypes, Extra = crossingExtra, WaterTunnel = waterTunnel, WaterExtra = waterExtra,
+                Pins = heightPins, Stretches = stretches,
+            };
+        }
+
+        // The type the player chose for a crossing of the line being divided:
+        // by where it is when planned again after a build (the roads' numbers
+        // may have changed, and been given to other roads), else by the road.
+        private bool ChosenType(Crossing crossing, out CrossingType type)
+        {
+            int choice = ChoiceAt(crossing);
+            if (choice >= 0)
+            {
+                type = line.ByPlace[choice].Type;
+                return true;
+            }
+            return line.Types.TryGetValue(crossing.Key, out type);
+        }
+
+        private float ChosenExtra(Crossing crossing)
+        {
+            int choice = ChoiceAt(crossing);
+            if (choice >= 0) return line.ByPlace[choice].Extra;
+            float extra;
+            return line.Extra.TryGetValue(crossing.Key, out extra) ? extra : 0f;
+        }
+
+        // The choice kept by place nearest to the crossing (-1: none).
+        private int ChoiceAt(Crossing crossing)
+        {
+            if (line.ByPlace == null) return -1;
+            int best = -1;
+            float bestDistance = PlaceMatch;
+            for (int i = 0; i < line.ByPlace.Count; i++)
+            {
+                float d = CurveMath.FlatDistance(line.ByPlace[i].At, crossing.Point);
+                if (d >= bestDistance) continue;
+                bestDistance = d;
+                best = i;
+            }
+            return best;
+        }
+
+        // --- parallel drawing: a second road or track beside the curve ------------
+
+        // What the parallel line is drawn with. Taken from the tool for the
+        // preview, and kept when building: it is planned again after the curve
+        // is built, when the points are already gone.
+        private class ParallelSpec
+        {
+            public NetInfo Main, Info;
+            public float Gap;
+            public bool Left, Reverse;
+            public LineSetup Setup;
+        }
+
+        // The curve is being built; the parallel line follows once it is.
+        private class PendingParallel
+        {
+            public Division Main;
+            public ParallelSpec Spec;
+            public int Group;
+            public volatile int State;   // 0: building the curve, 1: built, 2: not built
+        }
+
+        private bool parallelMode;
+        private float parallelGap = DefaultGap;  // metres between the two roads' edges
+        private bool parallelLeft = true;        // on the left of the curve as drawn (else the right)
+        private NetInfo besideNetwork;           // null: the same road, the other way (a one-way pair)
+        private Division second;                 // the parallel line's preview
+        private PendingParallel pending;
+        public const float DefaultGap = 4f;
+        public const float GapStep = 1f;
+        public const float MaxGap = 40f;
+        private const float EndSnap = 8f;        // a parallel end this close to a node joins it
 
         // --- the side view: heights dragged there, stretches marked Elevated / Tunnel ---
 
@@ -257,6 +370,8 @@ namespace RealisticRoads
             if (dragIndex >= 0) UpdateDrag();
             // A height dragged or a stretch selected in the side view.
             panel.Poll();
+            // The curve just built: now the line beside it.
+            if (pending != null && pending.State != 0) FinishParallel();
 
             // Live preview: the clicked points plus the mouse position while
             // drawing (not while planning: then the plan stays as it is). Only
@@ -305,6 +420,8 @@ namespace RealisticRoads
                 liveRoadT.Add(aimRoadT);
             }
             preview = Divide(live, liveNodes, liveSegments, liveTs, liveLifts, liveStraight, liveDeck, liveUnder, liveRoad, liveRoadT);
+            // The parallel line beside it (not along decks yet).
+            second = parallelMode && !liveDeck.Contains(true) ? DivideParallel(preview, CurrentParallel()) : null;
             cursorText = CursorText(withHover);
             ShowPanel();
             PlaceButtons();
@@ -844,9 +961,9 @@ namespace RealisticRoads
         public override void RenderGeometry(RenderManager.CameraInfo cameraInfo)
         {
             base.RenderGeometry(cameraInfo);
-            var division = preview;
-            if (division != null && division.Points.Count >= 2 && division.Plan != null)
-                RoadPreview.Render(SelectedNetwork, division.Plan);
+            foreach (var division in new[] { preview, second })
+                if (division != null && division.Points.Count >= 2 && division.Plan != null)
+                    RoadPreview.Render(division.Setup != null ? division.Setup.Info : SelectedNetwork, division.Plan);
         }
 
         // Main thread. Colours the curve as it will be built, marks where the
@@ -855,11 +972,27 @@ namespace RealisticRoads
         {
             base.RenderOverlay(cameraInfo);
             var overlay = Singleton<RenderManager>.instance.OverlayEffect;
-            var division = preview;
+            DrawPlanned(cameraInfo, overlay, preview);
+            DrawPlanned(cameraInfo, overlay, second);
 
+            // Where the mouse is (or was pinned) on the panel's side view.
+            Vector3 marked;
+            if (panel.TryGetCursor(out marked))
+            {
+                float size = (SelectedNetwork != null ? SelectedNetwork.m_halfWidth * 2f : 8f) + 10f;
+                overlay.DrawCircle(cameraInfo, CursorColor, marked, size, marked.y - 6f, marked.y + 6f, false, true);
+            }
+            DrawPoints(cameraInfo, overlay);
+        }
+
+        // A planned curve on the map in the colours of how it will be built,
+        // its pillars and its crossings.
+        private void DrawPlanned(RenderManager.CameraInfo cameraInfo, OverlayEffect overlay, Division division)
+        {
             if (division != null && division.Points.Count >= 2 && division.Plan != null)
             {
-                float width = SelectedNetwork != null ? SelectedNetwork.m_halfWidth * 2f : 8f;
+                var info = division.Setup != null && division.Setup.Info != null ? division.Setup.Info : SelectedNetwork;
+                float width = info != null ? info.m_halfWidth * 2f : 8f;
                 var plan = division.Plan;
                 var kinds = plan.Kinds;
                 bool inThreeD = RoadPreview.Available;
@@ -889,15 +1022,11 @@ namespace RealisticRoads
                     overlay.DrawCircle(cameraInfo, color, crossing.Point, width + 6f, low, high, false, true);
                 }
             }
+        }
 
-            // Where the mouse is (or was pinned) on the panel's side view.
-            Vector3 marked;
-            if (panel.TryGetCursor(out marked))
-            {
-                float size = (SelectedNetwork != null ? SelectedNetwork.m_halfWidth * 2f : 8f) + 10f;
-                overlay.DrawCircle(cameraInfo, CursorColor, marked, size, marked.y - 6f, marked.y + 6f, false, true);
-            }
-
+        // The points (handles while planning), and the next point at the mouse.
+        private void DrawPoints(RenderManager.CameraInfo cameraInfo, OverlayEffect overlay)
+        {
             // While planning the points are handles: bigger, the grabbed one white.
             for (int i = 0; i < points.Count; i++)
             {
@@ -914,9 +1043,9 @@ namespace RealisticRoads
                 if (aimGuided)
                 {
                     Vector3 a = guideFrom, d = guideFrom + guideDirection * (guideLength + GuideBeyond);
-                    var line = new Bezier3 { a = a, b = Vector3.Lerp(a, d, 1f / 3f), c = Vector3.Lerp(a, d, 2f / 3f), d = d };
+                    var guide = new Bezier3 { a = a, b = Vector3.Lerp(a, d, 1f / 3f), c = Vector3.Lerp(a, d, 2f / 3f), d = d };
                     bool road = guideKind == CurveMath.SnapKind.Parallel || guideKind == CurveMath.SnapKind.Perpendicular;
-                    overlay.DrawBezier(cameraInfo, road ? SnapColor : GuideColor, line, GuideWidth, 0f, 0f, -1f, 1280f, false, true);
+                    overlay.DrawBezier(cameraInfo, road ? SnapColor : GuideColor, guide, GuideWidth, 0f, 0f, -1f, 1280f, false, true);
                 }
             }
         }
@@ -952,7 +1081,8 @@ namespace RealisticRoads
         {
             var plan = division.Plan;
             var terrain = TerrainManager.instance;
-            float ourHalf = SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f;
+            var info = division.Setup != null && division.Setup.Info != null ? division.Setup.Info : SelectedNetwork;
+            float ourHalf = info != null ? info.m_halfWidth : 8f;
             foreach (int i in PillarNodes(division))
             {
                 Vector3 p = plan.Points[i];
@@ -1228,6 +1358,240 @@ namespace RealisticRoads
             if (draggedPin != null && !heightPins.Contains(draggedPin)) draggedPin = null;
         }
 
+        // The parallel line as the tool is set now (null: Parallel is off).
+        private ParallelSpec CurrentParallel()
+        {
+            if (!parallelMode || SelectedNetwork == null) return null;
+            var info = besideNetwork ?? SelectedNetwork;
+            return new ParallelSpec
+            {
+                Main = SelectedNetwork, Info = info, Gap = parallelGap, Left = parallelLeft, Reverse = besideNetwork == null,
+                Setup = new LineSetup
+                {
+                    Info = info, Types = parallelTypes, Extra = parallelExtra, WaterTunnel = waterTunnel, WaterExtra = waterExtra,
+                    Pins = heightPins, Stretches = stretches,
+                },
+            };
+        }
+
+        // Why the parallel line can't be drawn (null: it can).
+        private static string ParallelBlocked(List<bool> deckModes)
+        {
+            return deckModes.Contains(true) ? "a parallel line can't follow a deck yet: turn Parallel or Deck off" : null;
+        }
+
+        // A copy of everything the parallel line is drawn with, for planning it
+        // again after the curve is built (the points and choices are cleared).
+        // Its crossing choices are kept by where they are too: the curve's
+        // junctions may cut the roads it crosses into new pieces.
+        private ParallelSpec KeepParallel(Division parallel)
+        {
+            var spec = CurrentParallel();
+            var setup = spec.Setup;
+            var kept = new LineSetup
+            {
+                Info = setup.Info,
+                Types = new Dictionary<int, CrossingType>(setup.Types),
+                Extra = new Dictionary<int, float>(setup.Extra),
+                WaterTunnel = new Dictionary<int, bool>(setup.WaterTunnel),
+                WaterExtra = new Dictionary<int, float>(setup.WaterExtra),
+                Pins = new List<HeightPin>(),
+                Stretches = new List<ForcedStretch>(),
+                ByPlace = new List<PlacedChoice>(),
+            };
+            foreach (var pin in setup.Pins) kept.Pins.Add(new HeightPin { At = pin.At, Height = pin.Height });
+            foreach (var stretch in setup.Stretches) kept.Stretches.Add(new ForcedStretch { From = stretch.From, To = stretch.To, Kind = stretch.Kind });
+            foreach (var crossing in parallel.Crossings)
+                kept.ByPlace.Add(new PlacedChoice { At = crossing.Point, Type = crossing.Type, Extra = crossing.ExtraHeight });
+            spec.Setup = kept;
+            return spec;
+        }
+
+        // The curve was built (or not): plan the parallel line again against
+        // the roads as they are now, and build it, undone together with the curve.
+        private void FinishParallel()
+        {
+            var waiting = pending;
+            pending = null;
+            if (waiting.State != 1)
+            {
+                Mod.Log("The parallel line was not built: the curve wasn't");
+                return;
+            }
+            var parallel = DivideParallel(waiting.Main, waiting.Spec);
+            if (parallel == null || parallel.Plan == null || !parallel.Ok || !parallel.Plan.Ok)
+            {
+                string why = parallel == null || parallel.Plan == null ? "it can't be drawn there"
+                    : !parallel.Ok ? "it bends too sharply" : string.Join("; ", parallel.Plan.Problems.ToArray());
+                Mod.Log("The parallel line was not built (" + why + "). Ctrl+Z removes the curve");
+                Mod.WarnNow("Parallel line not built", "The curve was built, but the line beside it wasn't: " + why +
+                                                     ". Ctrl+Z removes the curve.");
+                return;
+            }
+            Mod.Log("Building the parallel " + waiting.Spec.Info.name + ": " + parallel.Length.ToString("F0") + " m in " +
+                    (parallel.Points.Count - 1) + " segment(s), " + parallel.Crossings.Count + " crossing(s)");
+            NetworkBuilder.BuildCurve(waiting.Spec.Info, parallel.Plan, waiting.Group);
+        }
+
+        // The parallel line beside a divided curve: the curve's samples moved
+        // sideways by both half widths and the gap, with the points' places and
+        // heights and the side view's settings carried across (end to end for
+        // a one-way pair, which runs the other way), then planned like any
+        // curve. Each end joins a road of its kind it lands on, else it is free.
+        private Division DivideParallel(Division main, ParallelSpec spec)
+        {
+            if (spec == null || main == null || main.Polyline == null || main.Polyline.Count < 2 || main.ControlAt == null ||
+                main.Lifts == null || main.Length < 1f) return null;
+            float offset = (spec.Main.m_halfWidth + spec.Gap + spec.Info.m_halfWidth) * (spec.Left ? -1f : 1f);
+            var polyline = CurveMath.Offset(main.Polyline, offset);
+            bool folds = CurveMath.Folds(main.Polyline, polyline);
+            var mainAlong = CurveMath.Distances(main.Polyline);
+            var along = CurveMath.Distances(polyline);
+            int n = main.ControlAt.Length - 1;
+            var controlAt = new float[n + 1];
+            for (int i = 0; i <= n; i++) controlAt[i] = CurveMath.Remap(mainAlong, along, main.ControlAt[i]);
+            var corners = new List<float>();
+            if (main.Corners != null) foreach (float corner in main.Corners) corners.Add(CurveMath.Remap(mainAlong, along, corner));
+            var lifts = new List<float>(main.Lifts);
+            var pins = new List<HeightPin>();
+            foreach (var pin in spec.Setup.Pins) pins.Add(new HeightPin { At = pin.At, Height = pin.Height });
+            var forced = new List<ForcedStretch>();
+            foreach (var stretch in spec.Setup.Stretches) forced.Add(new ForcedStretch { From = stretch.From, To = stretch.To, Kind = stretch.Kind });
+            if (spec.Reverse)
+            {
+                polyline.Reverse();
+                float total = along[along.Length - 1];
+                var reversed = new float[n + 1];
+                for (int i = 0; i <= n; i++) reversed[i] = total - controlAt[n - i];
+                controlAt = reversed;
+                for (int i = 0; i < corners.Count; i++) corners[i] = total - corners[i];
+                corners.Reverse();
+                lifts.Reverse();
+                foreach (var pin in pins) pin.At = n - pin.At;
+                foreach (var stretch in forced)
+                {
+                    float from = stretch.From;
+                    stretch.From = n - stretch.To;
+                    stretch.To = n - from;
+                }
+            }
+
+            ushort startNode, endNode, startSegment, endSegment;
+            float startT, endT;
+            float reach = Mathf.Min(EndSnap, Mathf.Abs(offset) * 0.5f);
+            Vector3 start = polyline[0], end = polyline[polyline.Count - 1];
+            EndOn(ref start, spec.Info, reach, out startNode, out startSegment, out startT);
+            EndOn(ref end, spec.Info, reach, out endNode, out endSegment, out endT);
+            polyline[0] = start;
+            polyline[polyline.Count - 1] = end;
+            if (startNode != 0 || startSegment != 0) lifts[0] = 0f;
+            if (endNode != 0 || endSegment != 0) lifts[n] = 0f;
+
+            line = new LineSetup
+            {
+                Info = spec.Info, Types = spec.Setup.Types, Extra = spec.Setup.Extra, WaterTunnel = spec.Setup.WaterTunnel,
+                WaterExtra = spec.Setup.WaterExtra, Pins = pins, Stretches = forced, ByPlace = spec.Setup.ByPlace,
+            };
+            var division = DivideAlong(polyline, controlAt, corners, Vector3.zero, Vector3.zero, startNode, endNode, lifts,
+                new List<bool>(), new List<bool>(), new HashSet<ushort>());
+            division.Setup = spec.Setup;   // choices made on it go to the parallel line's own
+            division.Lifts = lifts;
+            if (division.Points.Count < 2) return division;
+            var raisedPoints = new List<KeyValuePair<Vector3, float>>();
+            for (int i = 0; i <= n; i++)
+            {
+                if (Mathf.Abs(lifts[i]) <= 0.01f) continue;
+                Vector3 point, ignore;
+                CurveMath.PointAt(polyline, controlAt[i], out point, out ignore);
+                raisedPoints.Add(new KeyValuePair<Vector3, float>(point, lifts[i]));
+            }
+            PlanDivision(division, startNode, endNode, startSegment, startT, endSegment, endT, raisedPoints);
+            if (folds)
+                division.Plan.Problems.Add("On the inside of a bend tighter than the gap the parallel line folds over itself: " +
+                                           "widen the bend, narrow the gap or put it on the other side");
+            return division;
+        }
+
+        // A parallel end on a node, or on the middle of a road, of its own
+        // kind joins it there ('at' moves onto it).
+        private static void EndOn(ref Vector3 at, NetInfo info, float reach, out ushort node, out ushort segment, out float t)
+        {
+            node = segment = 0;
+            t = 0f;
+            var net = NetManager.instance;
+            var near = new List<ushort>(RoadPlanner.NearbySegments(at, reach + 64f));
+            float best = reach;
+            foreach (ushort s in near)
+            {
+                var seg = net.m_segments.m_buffer[s];
+                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !SameKind(seg.Info, info)) continue;
+                foreach (ushort end in new[] { seg.m_startNode, seg.m_endNode })
+                {
+                    float d = CurveMath.FlatDistance(net.m_nodes.m_buffer[end].m_position, at);
+                    if (d >= best) continue;
+                    best = d;
+                    node = end;
+                }
+            }
+            if (node != 0)
+            {
+                at = net.m_nodes.m_buffer[node].m_position;
+                return;
+            }
+            foreach (ushort s in near)
+            {
+                var seg = net.m_segments.m_buffer[s];
+                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !SameKind(seg.Info, info)) continue;
+                Vector3 on;
+                float onT = CrossingFinder.ClosestT(s, at, out on);
+                if (CurveMath.FlatDistance(on, at) > seg.Info.m_halfWidth) continue;
+                if (onT * seg.m_averageLength < Crossing.NodeSnap || (1f - onT) * seg.m_averageLength < Crossing.NodeSnap) continue;
+                segment = s;
+                t = onT;
+                at = on;
+                return;
+            }
+        }
+
+        private static bool SameKind(NetInfo a, NetInfo b)
+        {
+            return a != null && b != null && a.m_class != null && b.m_class != null &&
+                   a.m_class.m_service == b.m_class.m_service && a.m_class.m_subService == b.m_class.m_subService;
+        }
+
+        private void ToggleParallel()
+        {
+            parallelMode = !parallelMode;
+            choicesVersion++;
+            Mod.Log("Parallel line " + (parallelMode ? "on" : "off"));
+        }
+
+        private void ChangeGap(float step)
+        {
+            parallelGap = Mathf.Clamp(parallelGap + step, 0f, MaxGap);
+            choicesVersion++;
+        }
+
+        private void FlipSide()
+        {
+            parallelLeft = !parallelLeft;
+            parallelTypes.Clear();
+            parallelExtra.Clear();
+            choicesVersion++;
+        }
+
+        // The road or track picked in the game's menu now goes beside the
+        // curve (then pick the curve's own); pressed again: the same road as
+        // the curve, the other way (a one-way pair).
+        private void PickBeside()
+        {
+            besideNetwork = besideNetwork == null ? SelectedNetwork : null;
+            parallelTypes.Clear();
+            parallelExtra.Clear();
+            choicesVersion++;
+            Mod.Log("Parallel line: " + (besideNetwork != null ? besideNetwork.name + " beside the curve" : "the same road, the other way"));
+        }
+
         private static bool IsRaised(NodeKind kind)
         {
             return kind == NodeKind.Bridge || kind == NodeKind.Elevated;
@@ -1263,9 +1627,32 @@ namespace RealisticRoads
                 return;
             }
 
+            // The parallel line: checked now, built (planned again) once the curve is.
+            ParallelSpec spec = null;
+            if (parallelMode)
+            {
+                string why = ParallelBlocked(pointDeck);
+                var parallel = why == null ? DivideParallel(division, CurrentParallel()) : null;
+                if (why == null && (parallel == null || parallel.Plan == null)) why = "the parallel line can't be drawn here";
+                else if (why == null && !parallel.Ok) why = "the parallel line bends too sharply";
+                else if (why == null && !parallel.Plan.Ok) why = "parallel line: " + string.Join("; ", parallel.Plan.Problems.ToArray());
+                if (why != null)
+                {
+                    Mod.Log("Not built: " + why);
+                    return;
+                }
+                spec = KeepParallel(parallel);
+            }
+
             Mod.Log("Building " + SelectedNetwork.name + ": " + division.Length.ToString("F0") + " m in " +
                     (division.Points.Count - 1) + " segment(s), " + division.Crossings.Count + " crossing(s)");
-            NetworkBuilder.BuildCurve(SelectedNetwork, division.Plan);
+            if (spec == null) NetworkBuilder.BuildCurve(SelectedNetwork, division.Plan);
+            else
+            {
+                var waiting = new PendingParallel { Main = division, Spec = spec, Group = NetworkBuilder.NewGroup() };
+                NetworkBuilder.BuildCurve(SelectedNetwork, division.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
+                pending = waiting;
+            }
             ClearPoints();
         }
 
@@ -1277,6 +1664,7 @@ namespace RealisticRoads
         private Division Divide(List<Vector3> controls, List<ushort> nodes, List<ushort> segments, List<float> ts, List<float> lifts,
             List<bool> pointModes, List<bool> deckModes, List<bool> underModes, List<ushort> roads, List<float> roadTs)
         {
+            line = MainSetup();
             if (controls.Count < 2) return new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>(), InTangents = new List<Vector3>() };
 
             int n = controls.Count - 1;
@@ -1324,28 +1712,37 @@ namespace RealisticRoads
             var raisedPoints = new List<KeyValuePair<Vector3, float>>();
             for (int i = 0; i <= n; i++)
                 if (Mathf.Abs(lifts[i]) > 0.01f) raisedPoints.Add(new KeyValuePair<Vector3, float>(controls[i], lifts[i]));
-            FindDecks(division, SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f);
-            division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
-                division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
-                startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
+            division.Lifts = lifts;
+            PlanDivision(division, nodes[0], nodes[n], startSegment, ts[0], endSegment, ts[n], raisedPoints);
+            return division;
+        }
+
+        // Heights, road versions and pillars for a divided curve (RoadPlanner),
+        // its cost and the buildings in its way.
+        private void PlanDivision(Division division, ushort startNode, ushort endNode, ushort startSegment, float startT,
+            ushort endSegment, float endT, List<KeyValuePair<Vector3, float>> raisedPoints)
+        {
+            FindDecks(division, Net != null ? Net.m_halfWidth : 8f);
+            division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
+                division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
+                startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
                 division.Heights, division.Forced);
             // Raised stretches get a node (and pillar) every RaisedSpacing, like the
             // vanilla tool's elevated roads; plan again with them.
             if (AddRaisedNodes(division))
             {
-                FindDecks(division, SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f);
-                division.Plan = RoadPlanner.Make(SelectedNetwork, division.Points, division.Tangents,
-                    division.Crossings, division.CrossingIndex, division.WaterRuns, nodes[0], nodes[n],
-                    startSegment, ts[0], endSegment, ts[n], raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
+                FindDecks(division, Net != null ? Net.m_halfWidth : 8f);
+                division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
+                    division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
+                    startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
                     division.Heights, division.Forced);
             }
             DropNodesOverCrossings(division);
             division.NodeAlong = NodeDistances(division);
-            division.Cost = NetworkBuilder.Cost(SelectedNetwork, division.Plan);
+            division.Cost = NetworkBuilder.Cost(Net, division.Plan);
             int blocked = BuildingsInTheWay(division);
             if (blocked > 0)
                 division.Plan.Warnings.Add("Runs through " + blocked + " building(s): bulldoze them first (they are not removed)");
-            return division;
         }
 
         // How far either side of a crossing our bridge's nodes go: past the other
@@ -1355,7 +1752,7 @@ namespace RealisticRoads
             Vector3 point, ours;
             CurveMath.PointAt(polyline, crossing.Distance, out point, out ours);
             crossing.Skew = RoadPlanner.Skew(crossing, ours);
-            return RoadPlanner.DeckHalf(crossing, SelectedNetwork, crossing.Type == CrossingType.Overpass);
+            return RoadPlanner.DeckHalf(crossing, Net, crossing.Type == CrossingType.Overpass);
         }
 
         // Splits raised pieces longer than RaisedSpacing (descending, so the
@@ -1378,7 +1775,7 @@ namespace RealisticRoads
                 if (plan.Kinds[i - 1] != NodeKind.Elevated || plan.Kinds[i] != NodeKind.Elevated) continue;
                 if (keep.Contains(i) || keep.Contains(i - 1)) continue;
                 float length = CurveMath.FlatDistance(division.Points[i - 1], division.Points[i]);
-                float spacing = RoadPlanner.IsRail(SelectedNetwork) ? RailRaisedSpacing : RaisedSpacing;
+                float spacing = RoadPlanner.IsRail(Net) ? RailRaisedSpacing : RaisedSpacing;
                 int pieces = Mathf.CeilToInt(length / spacing - 0.15f);
                 if (pieces < 2) continue;
                 var bezier = PieceBezier(division, i);
@@ -1430,14 +1827,14 @@ namespace RealisticRoads
         private int BuildingsInTheWay(Division division)
         {
             var plan = division.Plan;
-            if (plan == null || SelectedNetwork == null) return 0;
+            if (plan == null || Net == null) return 0;
             var manager = BuildingManager.instance;
             var buildings = manager.m_buildings.m_buffer;
             var grid = manager.m_buildingGrid;
             const int resolution = BuildingManager.BUILDINGGRID_RESOLUTION;
             const float cell = BuildingManager.BUILDINGGRID_CELL_SIZE;
             var hit = new HashSet<ushort>();
-            float half = SelectedNetwork.m_halfWidth;
+            float half = Net.m_halfWidth;
             for (int i = 1; i < plan.Points.Count; i++)
             {
                 if (IsRaised(plan.Kinds[i - 1]) && IsRaised(plan.Kinds[i])) continue;
@@ -1474,24 +1871,35 @@ namespace RealisticRoads
         private Division DivideShaped(List<Vector3> controls, Vector3 startDir, Vector3 endDir, ushort startNode, ushort endNode,
             List<float> lifts, List<bool> straight, List<bool> deck, List<bool> below, List<List<Vector3>> paths, HashSet<ushort> under)
         {
-            var division = new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>(), InTangents = new List<Vector3>() };
             int[] controlSamples;
             List<float> corners;
             var polyline = CurveMath.SampleMixed(controls, straight, cornerRadius, startDir, endDir, out controlSamples, out corners, paths);
+            return DivideAlong(polyline, ControlDistances(polyline, controlSamples), corners, startDir, endDir, startNode, endNode,
+                lifts, deck, below, under);
+        }
+
+        // Cuts a sampled curve into nodes: crossings, water, corners and the
+        // player's heights get nodes of their own, the rest is spaced out.
+        // 'controlAt': each point's distance along it; 'lifts': each point's height.
+        private Division DivideAlong(List<Vector3> polyline, float[] controlAt, List<float> corners, Vector3 startDir, Vector3 endDir,
+            ushort startNode, ushort endNode, List<float> lifts, List<bool> deck, List<bool> below, HashSet<ushort> under)
+        {
+            var division = new Division { Points = new List<Vector3>(), Tangents = new List<Vector3>(), InTangents = new List<Vector3>() };
             division.Length = CurveMath.Length(polyline);
             division.Polyline = polyline;
+            division.Corners = corners;
+            division.Setup = line;
             if (division.Length < 1f) return division;
 
             // Stretches over water get long bridge spans; crossings become fixed nodes.
             division.WaterRuns = FindWater(polyline);
             var cuts = new List<KeyValuePair<float, Crossing>>();
             // A point with a height of its own gets a node, so the height is held exactly there.
-            var controlAt = ControlDistances(polyline, controlSamples);
             division.ControlAt = controlAt;
             // A height dragged in the side view holds the node there (it was a
             // node already: the drag picked it). Stretches marked in it are
             // measured along the curve, like the decks.
-            foreach (var pin in heightPins)
+            foreach (var pin in line.Pins)
             {
                 float at;
                 if (!CurveMath.PlaceAlong(controlAt, pin.At, out at)) continue;
@@ -1500,7 +1908,7 @@ namespace RealisticRoads
                 CurveMath.PointAt(polyline, at, out point, out ignore);
                 division.Heights.Add(new KeyValuePair<Vector3, float>(point, pin.Height));
             }
-            foreach (var stretch in stretches)
+            foreach (var stretch in line.Stretches)
             {
                 float from, to;
                 if (!CurveMath.PlaceAlong(controlAt, stretch.From, out from)) continue;
@@ -1514,7 +1922,7 @@ namespace RealisticRoads
             }
             // A sharp corner (two straight pieces meeting at an angle) is a node.
             foreach (float corner in corners) cuts.Add(new KeyValuePair<float, Crossing>(corner, null));
-            for (int i = 1; i < controls.Count - 1; i++)
+            for (int i = 1; i < controlAt.Length - 1 && i < lifts.Count; i++)
                 if (Mathf.Abs(lifts[i]) > 0.01f) cuts.Add(new KeyValuePair<float, Crossing>(controlAt[i], null));
             foreach (var run in division.WaterRuns)
             {
@@ -1524,7 +1932,7 @@ namespace RealisticRoads
             var timesCrossed = new Dictionary<ushort, int>();
             var snapped = new List<int>();
             var found = new List<Crossing>();
-            foreach (var crossing in CrossingFinder.Find(polyline, SelectedNetwork, startNode, endNode))
+            foreach (var crossing in CrossingFinder.Find(polyline, Net, startNode, endNode))
             {
                 if (crossing.Distance < MinSpacing * 0.5f || crossing.Distance > division.Length - MinSpacing * 0.5f) continue;
                 if (InDeck(division.DeckRanges, crossing.Distance))
@@ -1548,13 +1956,12 @@ namespace RealisticRoads
                     : forcedHere == Forced.Tunnel && crossing.Allows(CrossingType.Tunnel) ? CrossingType.Tunnel
                     : forcedHere == Forced.Elevated && crossing.Allows(CrossingType.Bridge) ? CrossingType.Bridge
                     : crossing.Allows(CrossingType.Junction) ? CrossingType.Junction : CrossingType.Bridge;
-                crossing.Type = crossingTypes.TryGetValue(crossing.Key, out type) && crossing.Allows(type) ? type : fallback;
+                crossing.Type = ChosenType(crossing, out type) && crossing.Allows(type) ? type : fallback;
                 // A ship route on a water crossing goes the way the whole crossing does:
                 // over it on the bridge, or under it in the tunnel.
                 var shipRun = crossing.ShipPath ? RunAt(division.WaterRuns, crossing.Distance) : null;
                 if (shipRun != null) crossing.Type = shipRun.Tunnel ? CrossingType.Tunnel : CrossingType.Bridge;
-                float extra;
-                crossing.ExtraHeight = crossingExtra.TryGetValue(crossing.Key, out extra) ? extra : 0f;
+                crossing.ExtraHeight = ChosenExtra(crossing);
                 cuts.Add(new KeyValuePair<float, Crossing>(crossing.Distance, crossing));
                 found.Add(crossing);
             }
@@ -1563,7 +1970,7 @@ namespace RealisticRoads
             // stands on the road or track below. Not where that side node would
             // land on another road or track we cross: the deck spans both.
             var footprint = new Dictionary<Crossing, float>();
-            float ourHalf = SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 8f;
+            float ourHalf = Net != null ? Net.m_halfWidth : 8f;
             foreach (var crossing in found)
                 footprint[crossing] = crossing.Type == CrossingType.Bridge || crossing.Type == CrossingType.Overpass
                     ? SideOffset(polyline, crossing)
@@ -1819,9 +2226,9 @@ namespace RealisticRoads
                 // Remembered by roughly where it is, so the +/- survives small edits.
                 run.Key = Mathf.RoundToInt(middle.x / 64f) * 100003 + Mathf.RoundToInt(middle.z / 64f);
                 float extra;
-                run.Extra = waterExtra.TryGetValue(run.Key, out extra) ? extra : 0f;
+                run.Extra = line.WaterExtra.TryGetValue(run.Key, out extra) ? extra : 0f;
                 bool tunnel;
-                run.Tunnel = waterTunnel.TryGetValue(run.Key, out tunnel) && tunnel;
+                run.Tunnel = line.WaterTunnel.TryGetValue(run.Key, out tunnel) && tunnel;
             }
             return runs;
         }
@@ -1871,16 +2278,17 @@ namespace RealisticRoads
         private void PlaceButtons()
         {
             int used = 0, labelled = 0;
-            var division = preview;
             var camera = Camera.main;
             var view = UIView.GetAView();
-            if (division != null && division.Plan != null && camera != null && view != null)
+            var placed = new List<Vector4>();   // x, y, width, height of each row so far
+            foreach (var division in new[] { preview, second })
             {
-                // Same numbers and order as the panel's list along the road.
-                // Rows that would cover one already placed (crossings close
-                // together) are stacked above it.
+                if (division == null || division.Plan == null || camera == null || view == null) continue;
+                // Same numbers and order as the panel's list along the road (the
+                // parallel line's with a P). Rows that would cover one already
+                // placed (crossings close together) are stacked above it.
+                string prefix = division == second ? "P" : "";
                 var items = Along(division);
-                var placed = new List<Vector4>();   // x, y, width, height of each row so far
                 for (int n = 0; n < items.Count; n++)
                 {
                     var item = items[n];
@@ -1895,18 +2303,19 @@ namespace RealisticRoads
                         int count = allowed.Count + (c.Type == CrossingType.Bridge ? 2 : 0);
                         float x = gui.x - count * (IconSize + 2f) * 0.5f;
                         y = FreeRow(placed, x, y, count * (IconSize + 2f));
-                        UseLabel(labelled++, (n + 1) + " · " + ItemHeight(division, item), new Vector2(x, y - 22f));
+                        UseLabel(labelled++, prefix + (n + 1) + " · " + ItemHeight(division, item), new Vector2(x, y - 22f));
+                        var d = division;
                         foreach (var type in allowed)
                         {
                             var t = type;
                             UseButton(used++, RoadPanel.IconFor(t), RoadPanel.Letter(t), c.Describe(t), new Vector2(x, y), c.Type == t,
-                                () => SetType(c, t));
+                                () => SetType(d, c, t));
                             x += IconSize + 2f;
                         }
                         if (c.Type == CrossingType.Bridge)
                         {
-                            UseButton(used++, Icons.Plus, "+", "Higher (+" + HeightStep + " m)", new Vector2(x, y), false, () => AddExtra(c, HeightStep));
-                            UseButton(used++, Icons.Minus, "-", "Lower (-" + HeightStep + " m)", new Vector2(x + IconSize + 2f, y), false, () => AddExtra(c, -HeightStep));
+                            UseButton(used++, Icons.Plus, "+", "Higher (+" + HeightStep + " m)", new Vector2(x, y), false, () => AddExtra(d, c, HeightStep));
+                            UseButton(used++, Icons.Minus, "-", "Lower (-" + HeightStep + " m)", new Vector2(x + IconSize + 2f, y), false, () => AddExtra(d, c, -HeightStep));
                         }
                     }
                     else
@@ -1916,7 +2325,7 @@ namespace RealisticRoads
                         float rowWidth = (r.Tunnel ? 2f : 4f) * (IconSize + 2f);
                         float left = gui.x - rowWidth * 0.5f;
                         y = FreeRow(placed, left, y, rowWidth);
-                        UseLabel(labelled++, (n + 1) + " · " + ItemHeight(division, item), new Vector2(left, y - 22f));
+                        UseLabel(labelled++, prefix + (n + 1) + " · " + ItemHeight(division, item), new Vector2(left, y - 22f));
                         UseButton(used++, RoadPanel.IconFor(CrossingType.Bridge), "B", "Bridge over the water", new Vector2(left, y),
                             !r.Tunnel, () => SetWaterTunnel(r, false));
                         UseButton(used++, RoadPanel.IconFor(CrossingType.Tunnel), "T", "Tunnel under the water (under its bed; the entrances on the shores)",
@@ -2051,21 +2460,23 @@ namespace RealisticRoads
             }
         }
 
-        private void SetType(Crossing crossing, CrossingType type)
+        // A crossing of 'division' (the curve, or the parallel line) chosen as 'type'.
+        private void SetType(Division division, Crossing crossing, CrossingType type)
         {
-            crossingTypes[crossing.Key] = type;
+            division.Setup.Types[crossing.Key] = type;
             // A ship route: the whole water crossing it is on goes over or under.
-            var run = crossing.ShipPath && preview != null ? RunAt(preview.WaterRuns, crossing.Distance) : null;
+            var run = crossing.ShipPath ? RunAt(division.WaterRuns, crossing.Distance) : null;
             if (run != null) waterTunnel[run.Key] = type == CrossingType.Tunnel;
             choicesVersion++;
             Mod.Log("Crossing with " + crossing.ExistingName + " (#" + crossing.Segment + "): " + crossing.Describe(type));
         }
 
-        private void AddExtra(Crossing crossing, float step)
+        private void AddExtra(Division division, Crossing crossing, float step)
         {
             float extra;
-            crossingExtra.TryGetValue(crossing.Key, out extra);
-            crossingExtra[crossing.Key] = Mathf.Clamp(extra + step, 0f, MaxExtraHeight);
+            var extras = division.Setup.Extra;
+            extras.TryGetValue(crossing.Key, out extra);
+            extras[crossing.Key] = Mathf.Clamp(extra + step, 0f, MaxExtraHeight);
             choicesVersion++;
         }
 
@@ -2119,6 +2530,10 @@ namespace RealisticRoads
                 panel.FreeNode = FreeNode;
                 panel.MarkStretch = MarkStretch;
                 panel.ResetShape = ResetShape;
+                panel.ToggleParallel = ToggleParallel;
+                panel.ChangeGap = ChangeGap;
+                panel.FlipSide = FlipSide;
+                panel.PickBeside = PickBeside;
             }
             panel.Show(Model());
         }
@@ -2160,6 +2575,11 @@ namespace RealisticRoads
                 Deck = deckMode && !underMode,
                 Under = deckMode && underMode,
                 Shaped = heightPins.Count > 0 || stretches.Count > 0,
+                Parallel = parallelMode,
+                Gap = parallelGap,
+                ParallelLeft = parallelLeft,
+                Beside = besideNetwork != null ? Title(besideNetwork) : "Same road, other way",
+                BesideOther = besideNetwork != null,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
                 Mode = planning
                     ? "PLANNING: drag the points to adjust; pick each crossing here or on the map. Check mark / Enter: build. Esc: scrap. Right-click: keep drawing."
@@ -2217,14 +2637,44 @@ namespace RealisticRoads
             if (!division.Ok) model.Problems.Add("A bend is too sharp (over " + MaxBend + " degrees per segment): spread the points out");
 
             // Everything along the road, in order from the first point: crossings
-            // and water bridges in one numbered list (the same numbers are on the map).
+            // and water bridges in one numbered list (the same numbers are on the
+            // map); then the parallel line's, numbered with a P.
+            AddItems(model, division, "");
+            if (second != null && second.Plan != null)
+            {
+                AddItems(model, second, "P");
+                model.Summary += "   ·   parallel " + second.Length.ToString("N0") + " m" +
+                                 (second.Cost > 0 ? ", cost " + (second.Cost / 100).ToString("N0") : "");
+            }
+            model.Problems.AddRange(plan.Problems);
+            model.Warnings.AddRange(plan.Warnings);
+            model.CanBuild = SelectedNetwork != null && division.Ok && plan.Ok;
+            if (parallelMode)
+            {
+                string why = ParallelBlocked(pointDeck) ?? (deckMode && !planning && points.Count > 0 ? ParallelBlocked(new List<bool> { true }) : null);
+                if (why == null && (second == null || second.Plan == null)) why = "the parallel line can't be drawn here";
+                if (why != null) model.Problems.Add(char.ToUpper(why[0]) + why.Substring(1));
+                else
+                {
+                    if (!second.Ok) model.Problems.Add("Parallel line: a bend is too sharp (over " + MaxBend + " degrees per segment)");
+                    foreach (var problem in second.Plan.Problems) model.Problems.Add("Parallel line: " + problem);
+                    foreach (var warning in second.Plan.Warnings) model.Warnings.Add("Parallel line: " + warning);
+                }
+                model.CanBuild &= why == null && second.Ok && second.Plan.Ok;
+            }
+            return model;
+        }
+
+        // The panel's rows for everything along 'division', numbered from 'prefix'1.
+        private void AddItems(PanelModel model, Division division, string prefix)
+        {
             var items = Along(division);
             for (int n = 0; n < items.Count; n++)
             {
                 var item = items[n];
                 var row = new PanelCrossing
                 {
-                    Title = (n + 1) + "   at " + item.At.ToString("N0") + " m   " + ItemName(item),
+                    Title = prefix + (n + 1) + "   at " + item.At.ToString("N0") + " m   " + ItemName(item),
                     Detail = ItemDetail(division, item),
                     Step = HeightStep,
                 };
@@ -2234,8 +2684,8 @@ namespace RealisticRoads
                     row.Selected = crossing.Type;
                     row.HeightButtons = crossing.Type == CrossingType.Bridge;
                     foreach (var type in AllTypes) if (crossing.Allows(type)) row.Allowed.Add(type);
-                    row.Pick = type => SetType(crossing, type);
-                    row.Raise = step => AddExtra(crossing, step);
+                    row.Pick = type => SetType(division, crossing, type);
+                    row.Raise = step => AddExtra(division, crossing, step);
                 }
                 else
                 {
@@ -2249,10 +2699,6 @@ namespace RealisticRoads
                 }
                 model.Items.Add(row);
             }
-            model.Problems.AddRange(plan.Problems);
-            model.Warnings.AddRange(plan.Warnings);
-            model.CanBuild = SelectedNetwork != null && division.Ok && plan.Ok;
-            return model;
         }
 
         // The road's name as the game shows it.
@@ -2438,6 +2884,9 @@ namespace RealisticRoads
             ClearTyped();
             crossingTypes.Clear();
             crossingExtra.Clear();
+            parallelTypes.Clear();
+            parallelExtra.Clear();
+            second = null;
             waterExtra.Clear();
             waterTunnel.Clear();
             heightPins.Clear();

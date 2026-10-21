@@ -54,6 +54,13 @@ namespace RealisticRoads
             Log(title + ": " + message);
         }
 
+        // Main thread: the same message box, now.
+        public static void WarnNow(string title, string message)
+        {
+            WarnAfterLoad(title, message);
+            ShowPendingWarning();
+        }
+
         internal static void ShowPendingWarning()
         {
             if (pendingMessage == null) return;
