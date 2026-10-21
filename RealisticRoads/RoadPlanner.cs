@@ -58,6 +58,7 @@ namespace RealisticRoads
         public bool[] UnderDeck;              // of those, the nodes of a deck under the road (a tunnel)
         public bool[] Middle;                 // suspension bridges: the node between two towers
         public bool[] Held;                   // height set by an end or a crossing (not draggable in the side view)
+        public bool Walls;                    // retaining walls along it where it is below the ground (and the roads it lowers)
         public List<Crossing> Crossings = new List<Crossing>();
         public List<int> CrossingIndex = new List<int>();   // node index of each crossing
         public Dictionary<int, Lowering> Lowerings = new Dictionary<int, Lowering>();  // by crossing number
@@ -544,6 +545,14 @@ namespace RealisticRoads
             var result = new T[array.Length - 1];
             for (int i = 0, j = 0; i < array.Length; i++) if (i != index) result[j++] = array[i];
             return result;
+        }
+
+        // Two networks of the same kind (roads and roads, train tracks and
+        // train tracks...): they can join, and one can replace the other.
+        public static bool SameKind(NetInfo a, NetInfo b)
+        {
+            return a != null && b != null && a.m_class != null && b.m_class != null &&
+                   a.m_class.m_service == b.m_class.m_service && a.m_class.m_subService == b.m_class.m_subService;
         }
 
         public static NetInfo InfoFor(NetInfo info, NodeKind kind)

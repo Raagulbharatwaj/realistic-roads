@@ -368,6 +368,51 @@ namespace RealisticRoads
             return length;
         }
 
+        // The line 'offset' metres to the right of a polyline (left if negative),
+        // through the same samples: each point moves along the mean of the two
+        // pieces' normals, far enough that both pieces stay 'offset' away
+        // (a sharp corner gets a mitred corner). Heights are kept.
+        public static List<Vector3> Offset(IList<Vector3> polyline, float offset)
+        {
+            int n = polyline.Count;
+            var result = new List<Vector3>(n);
+            for (int i = 0; i < n; i++)
+            {
+                Vector3 before = Vector3.zero, after = Vector3.zero;
+                for (int k = i; k > 0 && before == Vector3.zero; k--) before = FlatNormal(polyline[k] - polyline[k - 1]);
+                for (int k = i; k < n - 1 && after == Vector3.zero; k++) after = FlatNormal(polyline[k + 1] - polyline[k]);
+                if (before == Vector3.zero) before = after;
+                if (after == Vector3.zero) after = before;
+                Vector3 rightBefore = new Vector3(before.z, 0f, -before.x), rightAfter = new Vector3(after.z, 0f, -after.x);
+                Vector3 mean = FlatNormal(rightBefore + rightAfter);
+                if (mean == Vector3.zero) mean = rightAfter;   // turning right back: a hairpin's tip
+                float along = Math.Max(mean.x * rightAfter.x + mean.z * rightAfter.z, 0.25f);
+                result.Add(polyline[i] + mean * (offset / along));
+            }
+            return result;
+        }
+
+        // True if an offset line runs backwards anywhere: on the inside of a
+        // bend tighter than the offset it folds over itself.
+        public static bool Folds(IList<Vector3> polyline, IList<Vector3> offset)
+        {
+            for (int i = 1; i < polyline.Count && i < offset.Count; i++)
+            {
+                Vector3 a = polyline[i] - polyline[i - 1], b = offset[i] - offset[i - 1];
+                if (a.x * a.x + a.z * a.z < 0.0001f) continue;
+                if (a.x * b.x + a.z * b.z < 0f) return true;
+            }
+            return false;
+        }
+
+        // Ground distance from the start to each sample of a polyline.
+        public static float[] Distances(IList<Vector3> polyline)
+        {
+            var result = new float[polyline.Count];
+            for (int i = 1; i < polyline.Count; i++) result[i] = result[i - 1] + FlatDistance(polyline[i - 1], polyline[i]);
+            return result;
+        }
+
         // A place on the drawn curve as piece + fraction (2.25: a quarter of the
         // way from point 2 to point 3), so it stays on its piece while points
         // move. 'controlAt' is each point's distance along the curve.

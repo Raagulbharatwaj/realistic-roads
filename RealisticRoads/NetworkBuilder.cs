@@ -75,6 +75,10 @@ namespace RealisticRoads
             public readonly List<Turned> Turns = new List<Turned>();
             public int Paid;                         // construction cost charged (refunded on undo)
             public ItemClass PaidClass;
+            public int Group;                        // builds with the same group (not 0) are undone together
+            // Existing nodes we gave another road (an upgrade) and what they were.
+            public readonly List<KeyValuePair<ushort, NetInfo>> NodeInfos = new List<KeyValuePair<ushort, NetInfo>>();
+            public readonly List<ushort> Walls = new List<ushort>();   // segments given retaining walls
         }
 
         private struct Turned
@@ -96,10 +100,92 @@ namespace RealisticRoads
             UndoCount = undoStack.Count;
         }
 
-        // Builds 'plan' (see RoadPlanner) with 'info'.
-        public static void BuildCurve(NetInfo info, Plan plan)
+        // Builds 'plan' (see RoadPlanner) with 'info'. Builds given the same
+        // 'group' (NewGroup) are undone together; 'done' is told on the
+        // simulation thread whether it was built.
+        public static void BuildCurve(NetInfo info, Plan plan, int group = 0, Action<bool> done = null)
         {
-            SimulationManager.instance.AddAction(() => BuildNow(info, plan));
+            SimulationManager.instance.AddAction(() =>
+            {
+                bool built = BuildNow(info, plan, group);
+                if (done != null) done(built);
+            });
+        }
+
+        // Upgrades an existing stretch (see RoadUpgrade); one Ctrl+Z puts it back.
+        public static void Upgrade(UpgradePlan plan)
+        {
+            SimulationManager.instance.AddAction(() => UpgradeNow(plan));
+        }
+
+        // Simulation thread. Each segment is replaced on the same nodes (through
+        // SplitSegment with no cuts, so undo rebuilds the original), then the
+        // nodes between upgraded segments take the new road, and the pillars
+        // follow it.
+        private static bool UpgradeNow(UpgradePlan plan)
+        {
+            var build = new Build();
+            try
+            {
+                var net = NetManager.instance;
+                if (InGame() && plan.Cost > 0)
+                {
+                    var economy = EconomyManager.instance;
+                    var construction = ResourceNamed("Construction");
+                    if (economy.PeekResource(construction, plan.Cost) != plan.Cost)
+                    {
+                        Mod.Log("Not upgraded: it costs " + (plan.Cost / 100) + " and the city can't afford it");
+                        return false;
+                    }
+                    economy.FetchResource(construction, plan.Cost, plan.Info.m_class);
+                    build.Paid = plan.Cost;
+                    build.PaidClass = plan.Info.m_class;
+                }
+                int changed = 0;
+                for (int i = 0; i < plan.Segments.Count; i++)
+                {
+                    ushort segment = plan.Segments[i];
+                    var s = net.m_segments.m_buffer[segment];
+                    // Changed since it was planned: left alone.
+                    if ((s.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || s.Info != plan.OldInfos[i]) continue;
+                    SplitSegment(segment, new float[0], new[] { plan.NewInfos[i] }, build);
+                    changed++;
+                }
+                foreach (var pair in plan.Nodes)
+                {
+                    ushort node = pair.Key;
+                    if (!NodeExists(node)) continue;
+                    build.NodeInfos.Add(new KeyValuePair<ushort, NetInfo>(node, net.m_nodes.m_buffer[node].Info));
+                    SetNodeInfo(node, pair.Value);
+                }
+                Keep(build);
+                Mod.Log("Upgraded " + changed + " segment(s) to " + plan.Info.name + ". Ctrl+Z in the tool puts the old road back.");
+                return true;
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Upgrading the road failed; putting back what was changed", e);
+                Remove(build);
+                Refund(build);
+                return false;
+            }
+        }
+
+        private static void SetNodeInfo(ushort node, NetInfo info)
+        {
+            if (info == null) return;
+            var net = NetManager.instance;
+            net.m_nodes.m_buffer[node].m_infoIndex = (ushort)info.m_prefabDataIndex;
+            net.UpdateNode(node);
+            UpdatePillar(node);
+        }
+
+        private static int lastGroup;
+
+        // Main thread: a group for builds that are undone together.
+        public static int NewGroup()
+        {
+            return ++lastGroup;
         }
 
         public static void UndoLast()
@@ -116,9 +202,9 @@ namespace RealisticRoads
             });
         }
 
-        private static bool BuildNow(NetInfo info, Plan plan)
+        private static bool BuildNow(NetInfo info, Plan plan, int undoGroup)
         {
-            var build = new Build();
+            var build = new Build { Group = undoGroup };
             try
             {
                 var net = NetManager.instance;
@@ -168,6 +254,7 @@ namespace RealisticRoads
                         // one is right there) dropped into the cutting, and its nodes on
                         // both sides moved down along the ramp.
                         var lowering = plan.Lowerings[c];
+                        var lowered = new List<ushort>();
                         if (lowering.SplitAt.Length > 0)
                         {
                             var split = SplitSegment(crossing.Segment, lowering.SplitAt, null, build);
@@ -177,6 +264,7 @@ namespace RealisticRoads
                                 position.y = lowering.SplitHeights[i];
                                 net.MoveNode(split.Nodes[i], position);
                                 RefreshDirections(split.Nodes[i]);
+                                lowered.Add(split.Nodes[i]);
                             }
                         }
                         for (int i = 0; i < lowering.Nodes.Count; i++)
@@ -188,7 +276,18 @@ namespace RealisticRoads
                             position.y = lowering.NodeHeights[i];
                             net.MoveNode(node, position);
                             RefreshDirections(node);
+                            lowered.Add(node);
                         }
+                        // Retaining walls along the lowered road, where it is below the ground.
+                        if (plan.Walls)
+                            foreach (ushort node in lowered)
+                                for (int k = 0; k < 8; k++)
+                                {
+                                    ushort road = net.m_nodes.m_buffer[node].GetSegment(k);
+                                    if (road == 0 || build.Walls.Contains(road)) continue;
+                                    RetainingWalls.Add(road, net.m_segments.m_buffer[road].Info);
+                                    build.Walls.Add(road);
+                                }
                         continue;
                     }
 
@@ -315,6 +414,12 @@ namespace RealisticRoads
                     sim.m_currentBuildIndex++;
                     build.Segments.Add(segment);
                     build.Stamps.Segment(segment);
+                    // In a cutting (or the ramp into a tunnel): retaining walls along it.
+                    if (plan.Walls && (plan.Kinds[i - 1] == NodeKind.Cut || plan.Kinds[i] == NodeKind.Cut))
+                    {
+                        RetainingWalls.Add(segment, info);
+                        build.Walls.Add(segment);
+                    }
                 }
 
                 // Pillars under our raised nodes. The vanilla tool adds them as its own
@@ -653,7 +758,7 @@ namespace RealisticRoads
         // A road whose AI can't price itself (a mod's road not fully set up)
         // is priced as the ground road, or free; logged once per road, not
         // every preview frame.
-        private static long PieceCost(NetInfo piece, NetInfo ground, Vector3 a, Vector3 b, float ha, float hb)
+        internal static long PieceCost(NetInfo piece, NetInfo ground, Vector3 a, Vector3 b, float ha, float hb)
         {
             foreach (var candidate in new[] { piece, ground })
             {
@@ -784,13 +889,19 @@ namespace RealisticRoads
                 Mod.Log("Nothing to undo");
                 return;
             }
-            var build = undoStack[undoStack.Count - 1];
-            undoStack.RemoveAt(undoStack.Count - 1);
-            UndoCount = undoStack.Count;
-            Remove(build);
-            Refund(build);
-            Mod.Log("Undo: removed " + build.Segments.Count + " segment(s)" +
-                    (build.Splits.Count > 0 ? " and restored " + build.Splits.Count + " existing segment(s)" : ""));
+            // A build and the ones made with it (a parallel pair), newest first.
+            int group;
+            do
+            {
+                var build = undoStack[undoStack.Count - 1];
+                undoStack.RemoveAt(undoStack.Count - 1);
+                UndoCount = undoStack.Count;
+                Remove(build);
+                Refund(build);
+                Mod.Log("Undo: removed " + build.Segments.Count + " segment(s)" +
+                        (build.Splits.Count > 0 ? " and restored " + build.Splits.Count + " existing segment(s)" : ""));
+                group = build.Group;
+            } while (group != 0 && undoStack.Count > 0 && undoStack[undoStack.Count - 1].Group == group);
         }
 
         // Simulation thread. Removes our segments, then any node we created
@@ -804,6 +915,7 @@ namespace RealisticRoads
             foreach (var node in build.Nodes)
                 if (build.Stamps.OwnsNode(node) && SegmentCount(node) == 0) net.ReleaseNode(node);
             DeckFrames.Forget(build.Nodes);
+            RetainingWalls.Forget(build.Walls);
 
             // Existing nodes we lowered go back up.
             for (int i = build.Moves.Count - 1; i >= 0; i--)
@@ -822,6 +934,10 @@ namespace RealisticRoads
                 net.m_segments.m_buffer[turn.Segment].m_endDirection = turn.EndDirection;
                 net.UpdateSegment(turn.Segment);
             }
+
+            // Nodes an upgrade gave the new road go back to the old one.
+            for (int i = build.NodeInfos.Count - 1; i >= 0; i--)
+                if (NodeExists(build.NodeInfos[i].Key)) SetNodeInfo(build.NodeInfos[i].Key, build.NodeInfos[i].Value);
 
             for (int i = build.Splits.Count - 1; i >= 0; i--)
             {
