@@ -14,7 +14,7 @@ namespace RealisticRoads
     public class Mod : IUserMod
     {
         public string Name => "Realistic Roads (beta)";
-        public string Description => "CS2-style road drawing: long curves, bridges, tunnels, overpasses and underpasses at each crossing.";
+        public string Description => "Plan your roads and add layers to your city: draw a whole route, choose how it crosses everything, stack decks over and under streets.";
 
         // Settings (Options > Mod Settings), kept between games.
         // Read on the main thread when the mod starts; plain fields after that,

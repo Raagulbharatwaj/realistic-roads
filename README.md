@@ -1,8 +1,9 @@
 # Realistic Roads (Cities: Skylines 1 mod)
 
-CS2-style road building for CS1: draw a whole curve in one go, see it planned, and build it, with bridges,
-flyovers, overpasses, underpasses and tunnels at every crossing. The mod is now only the curve tool (RR); the
-smooth split, junction and road builder tools were removed to focus on it.
+**Plan your roads and add layers to your city.** Draw a whole route in one go, see it planned from the side, choose
+how it crosses everything in its way, then build it: flyovers, overpasses, underpasses and tunnels at every
+crossing, bridges or tunnels across water, double-decker roads over streets and metro one level under them.
+The mod is the curve tool (RR); the old smooth split, junction and road builder tools were removed to focus on it.
 
 > **Road builder roads are lost.** Cities with roads made by the old road builder (RB) lose those roads with this
 > version: the game reports them missing. Bulldoze them, or replace them with a vanilla road, using the previous
