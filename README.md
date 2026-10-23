@@ -93,11 +93,6 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      many segments and metres change and the cost (the new road's price less the old one's); Enter or the check mark
      upgrades, one Ctrl+Z puts the old road back. Nodes between upgraded segments become the new road too (pillars
      follow); nodes at junctions with other roads are left to them;
-   - **Walls** (next to Upgrade, on by default): a road below the ground (a cutting, the ramp down into one) and a
-     road lowered for an overpass are built as their **walled version**: the game's own slope version, the one it uses
-     for the ramps into its tunnels, with concrete walls holding the ground back on both sides. Nothing extra is built
-     beside the road, so nothing runs across the roads that cross it. A road with no slope version keeps the plain road
-     and its earth slopes. Undone (Ctrl+Z) with the road;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,

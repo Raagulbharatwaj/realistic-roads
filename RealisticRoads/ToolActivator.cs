@@ -226,12 +226,15 @@ namespace RealisticRoads
         {
             var view = UIView.GetAView();
             if (view == null) return null;
+            UIComponent other = null;
             foreach (var panel in view.GetComponentsInChildren<UIPanel>())
             {
                 if (panel == null || !panel.isVisible || panel.name == null) continue;
                 foreach (var prefix in OptionPanels) if (panel.name.StartsWith(prefix)) return panel;
+                // A menu (or a mod's) with an options panel of another name.
+                if (other == null && panel.name.EndsWith("OptionPanel")) other = panel;
             }
-            return null;
+            return other;
         }
 
         private static UIButton CreateModeButton(UIComponent host)

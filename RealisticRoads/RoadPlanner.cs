@@ -58,7 +58,6 @@ namespace RealisticRoads
         public bool[] UnderDeck;              // of those, the nodes of a deck under the road (a tunnel)
         public bool[] Middle;                 // suspension bridges: the node between two towers
         public bool[] Held;                   // height set by an end or a crossing (not draggable in the side view)
-        public bool Walls;                    // retaining walls along it where it is below the ground (and the roads it lowers)
         public List<Crossing> Crossings = new List<Crossing>();
         public List<int> CrossingIndex = new List<int>();   // node index of each crossing
         public Dictionary<int, Lowering> Lowerings = new Dictionary<int, Lowering>();  // by crossing number
@@ -358,6 +357,9 @@ namespace RealisticRoads
             var valleys = (float[])minH.Clone();
             if (solved && CurveMath.LiftValleys(distance, heights, isFixed, maxSlope, MaxGrade, RimReach, valleys))
             {
+                // Not above what a node must stay under (a road or deck over it):
+                // that would throw out the viaduct for the whole road.
+                for (int i = 0; i < n; i++) valleys[i] = Mathf.Max(minH[i], Mathf.Min(valleys[i], maxH[i]));
                 float[] lifted;
                 if (CurveMath.SolveHeights(distance, ground, valleys, maxH, isFixed, MaxGrade, out lifted))
                 {
@@ -369,6 +371,7 @@ namespace RealisticRoads
             var levelled = (float[])minH.Clone();
             if (CurveMath.LevelSpans(distance, ground, heights, isFixed, levelled))
             {
+                for (int i = 0; i < n; i++) levelled[i] = Mathf.Max(minH[i], Mathf.Min(levelled[i], maxH[i]));
                 float[] again;
                 bool solvedAgain = CurveMath.SolveHeights(distance, ground, levelled, maxH, isFixed, MaxGrade, out again);
                 if (solvedAgain || !solved)

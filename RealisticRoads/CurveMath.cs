@@ -656,7 +656,10 @@ namespace RealisticRoads
         // more at one point, like a path along roads through a junction)
         // rounded off: a curve tangent to both sides, as tight as 'radius' at
         // most, shortened where corners or the ends are close. The ends stay.
-        public static List<Vector3> RoundCorners(IList<Vector3> polyline, float radius, float minTurn = 8f)
+        // 'maxInward': how far the rounding may pass inside the corner (the
+        // curve's middle is reach * sin(turn / 2) / 2 from it), so a deck
+        // rounding a junction stays over the roads it follows.
+        public static List<Vector3> RoundCorners(IList<Vector3> polyline, float radius, float minTurn = 8f, float maxInward = float.MaxValue)
         {
             int n = polyline.Count;
             var result = new List<Vector3>(polyline);
@@ -697,7 +700,9 @@ namespace RealisticRoads
                 float s = along[apex[c]];
                 float before = c > 0 ? (s - along[apex[c - 1]]) * 0.5f : s * 0.9f;
                 float after = c < apex.Count - 1 ? (along[apex[c + 1]] - s) * 0.5f : (total - s) * 0.9f;
-                reach[c] = Mathf.Min(radius * (float)Math.Tan(turnAt[c] * 0.5f / Rad2Deg), Mathf.Min(before, after));
+                float half = turnAt[c] * 0.5f / Rad2Deg;
+                float inwardReach = 2f * maxInward / Mathf.Max((float)Math.Sin(half), 0.01f);
+                reach[c] = Mathf.Min(Mathf.Min(radius * (float)Math.Tan(half), inwardReach), Mathf.Min(before, after));
             }
 
             result.Clear();

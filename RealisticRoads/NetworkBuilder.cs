@@ -150,7 +150,7 @@ namespace RealisticRoads
                     var s = net.m_segments.m_buffer[segment];
                     // Changed since it was planned: left alone.
                     if ((s.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || s.Info != plan.OldInfos[i]) continue;
-                    SplitSegment(segment, new float[0], new[] { plan.NewInfos[i] }, build);
+                    SplitSegment(segment, new float[0], new[] { plan.NewInfos[i] }, build, plan.Inverts != null ? plan.Inverts[i] : (bool?)null);
                     changed++;
                 }
                 foreach (var pair in plan.Nodes)
@@ -171,58 +171,6 @@ namespace RealisticRoads
                 Refund(build);
                 return false;
             }
-        }
-
-        // A road's version with retaining walls on both sides, for cuttings: the
-        // game's own slope version (the walled ramp into its tunnels). Null if
-        // it has none (the cutting keeps the plain road and its earth slopes).
-        internal static NetInfo WalledVersion(NetInfo info)
-        {
-            return RoadPlanner.Variant(info, "m_slopeInfo");
-        }
-
-        // Simulation thread. A road lowered for our overpass: its segments that
-        // go below the ground at the lowered nodes become its walled version
-        // (on the same nodes; undone with the build), and so do the lowered
-        // nodes between walled segments.
-        private static void WallLowered(List<ushort> lowered, NetInfo road, NetInfo walled, Build build)
-        {
-            var net = NetManager.instance;
-            var terrain = TerrainManager.instance;
-            var segments = new List<ushort>();
-            foreach (ushort node in lowered)
-                for (int k = 0; k < 8; k++)
-                {
-                    ushort segment = net.m_nodes.m_buffer[node].GetSegment(k);
-                    if (segment == 0 || segments.Contains(segment) || net.m_segments.m_buffer[segment].Info != road) continue;
-                    bool below = false;
-                    foreach (ushort end in new[] { net.m_segments.m_buffer[segment].m_startNode, net.m_segments.m_buffer[segment].m_endNode })
-                    {
-                        Vector3 p = net.m_nodes.m_buffer[end].m_position;
-                        if (p.y - terrain.SampleRawHeightSmooth(p) <= -1f) below = true;
-                    }
-                    if (below) segments.Add(segment);
-                }
-            foreach (ushort segment in segments) SplitSegment(segment, new float[0], new[] { walled }, build);
-            foreach (ushort node in lowered)
-            {
-                if (!NodeExists(node) || net.m_nodes.m_buffer[node].Info == walled) continue;
-                bool all = true, any = false;
-                for (int k = 0; k < 8; k++)
-                {
-                    ushort segment = net.m_nodes.m_buffer[node].GetSegment(k);
-                    if (segment == 0) continue;
-                    any = true;
-                    if (net.m_segments.m_buffer[segment].Info != walled) all = false;
-                }
-                if (!any || !all) continue;
-                build.NodeInfos.Add(new KeyValuePair<ushort, NetInfo>(node, net.m_nodes.m_buffer[node].Info));
-                Vector3 position = net.m_nodes.m_buffer[node].m_position;
-                net.m_nodes.m_buffer[node].m_elevation =
-                    (byte)Mathf.Clamp(Mathf.RoundToInt(terrain.SampleRawHeightSmooth(position) - position.y), 1, 255);
-                SetNodeInfo(node, walled);
-            }
-            Mod.Log("  Lowered " + road.name + ": " + segments.Count + " more segment(s) walled (" + walled.name + ")");
         }
 
         private static void SetNodeInfo(ushort node, NetInfo info)
@@ -308,27 +256,15 @@ namespace RealisticRoads
                         // one is right there) dropped into the cutting, and its nodes on
                         // both sides moved down along the ramp.
                         var lowering = plan.Lowerings[c];
-                        var lowered = new List<ushort>();
-                        // With walls: the lowered road's pieces in the cutting are its
-                        // walled version (the one the game uses for tunnel ramps).
-                        NetInfo loweredInfo = net.m_segments.m_buffer[crossing.Segment].Info;
-                        NetInfo walled = plan.Walls ? WalledVersion(loweredInfo) : null;
                         if (lowering.SplitAt.Length > 0)
                         {
-                            NetInfo[] pieceInfos = null;
-                            if (walled != null)
-                            {
-                                pieceInfos = new NetInfo[lowering.SplitAt.Length + 1];
-                                for (int i = 0; i < pieceInfos.Length; i++) pieceInfos[i] = walled;
-                            }
-                            var split = SplitSegment(crossing.Segment, lowering.SplitAt, pieceInfos, build);
+                            var split = SplitSegment(crossing.Segment, lowering.SplitAt, null, build);
                             for (int i = 0; i < split.Nodes.Count; i++)
                             {
                                 Vector3 position = net.m_nodes.m_buffer[split.Nodes[i]].m_position;
                                 position.y = lowering.SplitHeights[i];
                                 net.MoveNode(split.Nodes[i], position);
                                 RefreshDirections(split.Nodes[i]);
-                                lowered.Add(split.Nodes[i]);
                             }
                         }
                         for (int i = 0; i < lowering.Nodes.Count; i++)
@@ -340,11 +276,7 @@ namespace RealisticRoads
                             position.y = lowering.NodeHeights[i];
                             net.MoveNode(node, position);
                             RefreshDirections(node);
-                            lowered.Add(node);
                         }
-                        // The rest of the lowered road (its segments on to the nodes moved
-                        // down) walled too, and the nodes between walled pieces.
-                        if (walled != null) WallLowered(lowered, loweredInfo, walled, build);
                         continue;
                     }
 
@@ -406,19 +338,15 @@ namespace RealisticRoads
                     if (nodeIds[i] != 0) continue;
                     NodeKind kind = plan.Kinds[i];
                     NetInfo nodeInfo = RoadPlanner.InfoFor(info, kind);
-                    // In a walled cutting the node is the walled version too, so the
-                    // walls run on through it.
-                    if (kind == NodeKind.Cut && plan.Walls && WalledVersion(info) != null) nodeInfo = WalledVersion(info);
                     ushort node;
                     if (!net.CreateNode(out node, ref sim.m_randomizer, nodeInfo, points[i], sim.m_currentBuildIndex))
                         throw new Exception("CreateNode failed at point " + i + " " + points[i]);
                     sim.m_currentBuildIndex++;
                     // Height above (or depth below) the ground: the game uses it for pillars
                     // and tunnels, and its upgrade tool picks the version by it (at least
-                    // 1 on a raised node, like its own tool). Plain ground and cutting
+                    // 1 on a raised node, like its own tool). Ground and cutting
                     // nodes keep 0 like vanilla ground roads.
-                    if (kind == NodeKind.Elevated || kind == NodeKind.Bridge || kind == NodeKind.Tunnel || kind == NodeKind.Slope ||
-                        (kind == NodeKind.Cut && nodeInfo != info))
+                    if (kind == NodeKind.Elevated || kind == NodeKind.Bridge || kind == NodeKind.Tunnel || kind == NodeKind.Slope)
                     {
                         float elevation = points[i].y - TerrainManager.instance.SampleRawHeightSmooth(points[i]);
                         net.m_nodes.m_buffer[node].m_elevation = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(elevation)), 1, 255);
@@ -436,7 +364,7 @@ namespace RealisticRoads
                 }
 
                 // Our segments: directions follow the curve, with the slope between the two nodes.
-                int bridges = 0, elevated = 0, tunnels = 0, walledCount = 0;
+                int bridges = 0, elevated = 0, tunnels = 0;
                 for (int i = 1; i <= last; i++)
                 {
                     float run = CurveMath.FlatDistance(points[i - 1], points[i]);
@@ -444,15 +372,7 @@ namespace RealisticRoads
                     Vector3 startDir = new Vector3(plan.Tangents[i - 1].x, slope, plan.Tangents[i - 1].z);
                     Vector3 endDir = -new Vector3(plan.InTangent(i).x, slope, plan.InTangent(i).z);
                     NetInfo segmentInfo = RoadPlanner.SegmentInfo(info, plan.Kinds[i - 1], plan.Kinds[i]) ?? info;
-                    // In a cutting (or the ramp down into one): with walls, the road's
-                    // walled version, which holds the ground back on both sides.
-                    bool inCut = plan.Kinds[i - 1] == NodeKind.Cut || plan.Kinds[i] == NodeKind.Cut;
-                    if (plan.Walls && inCut && segmentInfo == info && WalledVersion(info) != null)
-                    {
-                        segmentInfo = WalledVersion(info);
-                        walledCount++;
-                    }
-                    else if (segmentInfo != info)
+                    if (segmentInfo != info)
                     {
                         if (plan.Kinds[i - 1] == NodeKind.Bridge || plan.Kinds[i] == NodeKind.Bridge) bridges++;
                         else if (plan.Kinds[i - 1] == NodeKind.Tunnel || plan.Kinds[i] == NodeKind.Tunnel ||
@@ -525,7 +445,6 @@ namespace RealisticRoads
                 if (middles > 0) Mod.Log("  Suspension bridge: towers on every other node, " + middles + " middle node(s)");
                 if (bridges + elevated + tunnels > 0)
                     Mod.Log("  " + bridges + " bridge, " + elevated + " elevated, " + tunnels + " tunnel/slope segment(s)");
-                if (walledCount > 0) Mod.Log("  " + walledCount + " segment(s) in a walled cutting (" + WalledVersion(info).name + ")");
                 for (int c = 0; c < plan.Crossings.Count; c++)
                     Mod.Log("  Crossing " + (c + 1) + " with " + plan.Crossings[c].ExistingName + ": " + plan.Crossings[c].Describe());
 
@@ -1067,7 +986,7 @@ namespace RealisticRoads
         // Safe order: the new nodes are made first (a failure there leaves the
         // road untouched), and the split is in 'build' before the original is
         // removed, so a failure after that is undone by rebuilding it.
-        private static Split SplitSegment(ushort segment, float[] at, NetInfo[] pieceInfos, Build build)
+        private static Split SplitSegment(ushort segment, float[] at, NetInfo[] pieceInfos, Build build, bool? invert = null)
         {
             var net = NetManager.instance;
             var sim = SimulationManager.instance;
@@ -1132,22 +1051,24 @@ namespace RealisticRoads
                 NetInfo pieceInfo = pieceInfos != null ? pieceInfos[i - 1] : split.Info;
                 ushort piece;
                 if (!net.CreateSegment(out piece, ref sim.m_randomizer, pieceInfo, chain[i - 1], chain[i],
-                        startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex, split.Invert))
+                        startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex, invert ?? split.Invert))
                     throw new Exception("could not rebuild " + split.Info.name);
                 sim.m_currentBuildIndex++;
                 CalculateSegmentDirections(piece);
                 // The pieces keep the road's name, and its yield signs at its own ends.
                 var yield = (i == 1 ? split.Yield & NetSegment.Flags.YieldStart : NetSegment.Flags.None) |
                             (i == chain.Count - 1 ? split.Yield & NetSegment.Flags.YieldEnd : NetSegment.Flags.None);
-                KeepName(piece, split, yield);
+                KeepName(piece, split, yield, false);
                 split.Segments.Add(piece);
                 split.Stamps.Segment(piece);
             }
+            // Named once all the pieces are there and joined.
+            if (split.CustomName != null) foreach (ushort piece in split.Segments) KeepCustomName(piece, split.CustomName);
             return split;
         }
 
         // A segment's name and yield signs, as 'split''s road had them.
-        private static void KeepName(ushort segment, Split split, NetSegment.Flags yield)
+        private static void KeepName(ushort segment, Split split, NetSegment.Flags yield, bool rename = true)
         {
             var net = NetManager.instance;
             net.m_segments.m_buffer[segment].m_nameSeed = split.NameSeed;
@@ -1156,14 +1077,18 @@ namespace RealisticRoads
                 net.m_segments.m_buffer[segment].m_flags |= yield;
                 net.UpdateSegment(segment);
             }
-            if (split.CustomName == null) return;
+            if (rename && split.CustomName != null) KeepCustomName(segment, split.CustomName);
+        }
+
+        private static void KeepCustomName(ushort segment, string name)
+        {
             try
             {
-                Rename(segment, split.CustomName);
+                Rename(segment, name);
             }
             catch (Exception e)
             {
-                Mod.LogError("Keeping the name '" + split.CustomName + "' failed", e);
+                Mod.LogError("Keeping the name '" + name + "' failed", e);
             }
         }
 

@@ -186,8 +186,11 @@ namespace RealisticRoads
         // tB): the shortest in metres, through any junction, at most MaxPathLength.
         // A point at a node (t 0 or 1) is that node, whichever of its roads it
         // was given with. Null if there is none; 'used' gets its segments.
-        // With 'kindOf', only along roads of its kind (SameKind).
-        public static List<Vector3> RoadPath(ushort segA, float tA, ushort segB, float tB, HashSet<ushort> used, NetInfo kindOf = null)
+        // With 'kindOf', only along roads of its kind (SameKind). 'along', if
+        // given, gets for each road gone along whether the way runs from its
+        // start node to its end node.
+        public static List<Vector3> RoadPath(ushort segA, float tA, ushort segB, float tB, HashSet<ushort> used, NetInfo kindOf = null,
+            Dictionary<ushort, bool> along = null)
         {
             if (segA == 0 || segB == 0) return null;
             var net = NetManager.instance;
@@ -247,6 +250,7 @@ namespace RealisticRoads
                 if (segA != segB) return null;
                 AddPart(path, segA, tA, tB);
                 if (used != null) used.Add(segA);
+                if (along != null) along[segA] = tB > tA;
                 return path.Count >= 2 ? path : null;
             }
 
@@ -267,15 +271,18 @@ namespace RealisticRoads
             float exitA = at == aStart ? 0f : 1f, entryB = bestNode == bStart ? 0f : 1f;
             AddPart(path, segA, tA, exitA);
             if (used != null && Mathf.Abs(tA - exitA) > OnTheNode) used.Add(segA);
+            if (along != null) along[segA] = exitA > tA;
             foreach (var link in chain)
             {
                 ushort road = link.Key;
                 float entry = segments[road].m_startNode == link.Value ? 0f : 1f;
                 AddPart(path, road, entry, 1f - entry);
                 if (used != null) used.Add(road);
+                if (along != null) along[road] = entry == 0f;
             }
             AddPart(path, segB, entryB, tB);
             if (used != null && Mathf.Abs(tB - entryB) > OnTheNode) used.Add(segB);
+            if (along != null) along[segB] = tB > entryB;
             return path.Count >= 2 ? path : null;
         }
 

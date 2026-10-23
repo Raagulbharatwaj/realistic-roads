@@ -54,6 +54,7 @@ namespace RealisticRoads
         private const float RailRaisedSpacing = 96f;  // rail: as few nodes as possible, long spans
         private const float DeckTurnRadius = 50f;      // a deck following roads turns at a junction no tighter than this
         private const float RailDeckTurnRadius = 90f;
+        private const float MaxDroppedSpan = 160f;     // longer than this, a node over a crossed road is kept (pillarless)
         private const float MinPillarHeight = 3f;      // a raised node lower than this over the ground gets no pillar
         private const float HeightStep = 5f;
         private const float MaxExtraHeight = 60f;
@@ -73,6 +74,10 @@ namespace RealisticRoads
         private readonly Dictionary<int, bool> waterTunnel = new Dictionary<int, bool>();   // water crossings chosen as tunnels
         // Where each water crossing (by key) was last seen: its middle.
         private readonly List<KeyValuePair<int, Vector3>> waterPlaces = new List<KeyValuePair<int, Vector3>>();
+        // The parallel line's own water choices: it may cross on a bridge where the curve tunnels.
+        private readonly Dictionary<int, float> parallelWaterExtra = new Dictionary<int, float>();
+        private readonly Dictionary<int, bool> parallelWaterTunnel = new Dictionary<int, bool>();
+        private readonly List<KeyValuePair<int, Vector3>> parallelWaterPlaces = new List<KeyValuePair<int, Vector3>>();
         private int lastWaterKey;
         private const float WaterMatch = 80f;   // a water crossing is the one remembered this close to its middle
 
@@ -210,6 +215,9 @@ namespace RealisticRoads
                     parallelReverse = false;   // a road and a track beside it run the same way
                     parallelTypes.Clear();
                     parallelExtra.Clear();
+                    parallelWaterExtra.Clear();
+                    parallelWaterTunnel.Clear();
+                    parallelWaterPlaces.Clear();
                     choicesVersion++;
                     Mod.Log("Parallel line: " + value.name + " beside the " + selectedNetwork.name);
                     return;
@@ -351,7 +359,6 @@ namespace RealisticRoads
             public Division Main;
             public ParallelSpec Spec;
             public int Group;
-            public bool Walls;
             public volatile int State;   // 0: building the curve, 1: built, 2: not built
         }
 
@@ -623,9 +630,24 @@ namespace RealisticRoads
                 p = CurveMath.Bezier(a, b, c, d, t);
             }
             else return false;
-            if (!SameRoad(info, SelectedNetwork)) return false;
+            // Another road of the same kind (a ramp off a highway deck) joins it
+            // too where it is a deck we built or a dead end; elsewhere it is a
+            // raised road to build a level over.
+            if (!SameRoad(info, SelectedNetwork) &&
+                !(RoadPlanner.SameKind(info, SelectedNetwork) && (OurDeckOrEnd(node) ||
+                  (node == 0 && (OurDeckOrEnd(net.m_segments.m_buffer[segment].m_startNode) || OurDeckOrEnd(net.m_segments.m_buffer[segment].m_endNode))))))
+                return false;
             float elevation = p.y - TerrainManager.instance.SampleRawHeightSmooth(p);
             return underMode ? elevation <= -DeckJoinHeight : elevation >= DeckJoinHeight;
+        }
+
+        private static bool OurDeckOrEnd(ushort node)
+        {
+            if (node == 0) return false;
+            if (DeckFrames.Holds(node)) return true;
+            int roads = 0;
+            for (int i = 0; i < 8; i++) if (NetManager.instance.m_nodes.m_buffer[node].GetSegment(i) != 0) roads++;
+            return roads == 1;
         }
 
         // 'info' is 'road' or one of its versions (elevated, bridge, slope, tunnel).
@@ -1537,23 +1559,17 @@ namespace RealisticRoads
         private bool upgradeMode;
         private readonly List<UpgradePoint> upgradePoints = new List<UpgradePoint>();
         private UpgradePlan upgradePlan;          // the preview
-        private bool wallsOn = true;              // retaining walls along cuttings and lowered roads
 
         private void ToggleUpgrade()
         {
             upgradeMode = !upgradeMode;
+            pickingBeside = false;
             upgradePoints.Clear();
             upgradePlan = null;
             choicesVersion++;
             Mod.Log(upgradeMode ? "Upgrade: click a road where it starts, then where it ends" : "Upgrade off: drawing again");
         }
 
-        private void ToggleWalls()
-        {
-            wallsOn = !wallsOn;
-            choicesVersion++;
-            Mod.Log("Retaining walls " + (wallsOn ? "on" : "off") + " for the next roads built");
-        }
 
         // The road under the mouse as an upgrade point: at a node (one of its
         // roads, of the picked road's kind if it has one) or on a road.
@@ -1693,8 +1709,8 @@ namespace RealisticRoads
                 Main = SelectedNetwork, Info = info, Gap = parallelGap, Left = parallelLeft, Reverse = parallelReverse,
                 Setup = new LineSetup
                 {
-                    Info = info, Types = parallelTypes, Extra = parallelExtra, WaterTunnel = waterTunnel, WaterExtra = waterExtra,
-                    WaterPlaces = waterPlaces,
+                    Info = info, Types = parallelTypes, Extra = parallelExtra, WaterTunnel = parallelWaterTunnel, WaterExtra = parallelWaterExtra,
+                    WaterPlaces = parallelWaterPlaces,
                     Pins = heightPins, Stretches = stretches,
                 },
             };
@@ -1757,7 +1773,6 @@ namespace RealisticRoads
             }
             Mod.Log("Building the parallel " + waiting.Spec.Info.name + ": " + parallel.Length.ToString("F0") + " m in " +
                     (parallel.Points.Count - 1) + " segment(s), " + parallel.Crossings.Count + " crossing(s)");
-            parallel.Plan.Walls = waiting.Walls;
             NetworkBuilder.BuildCurve(waiting.Spec.Info, parallel.Plan, waiting.Group);
         }
 
@@ -1884,6 +1899,8 @@ namespace RealisticRoads
         private void ToggleParallel()
         {
             parallelMode = !parallelMode;
+            // Off: a road picked in the menu is the curve's again, not one for beside it.
+            if (!parallelMode) pickingBeside = false;
             choicesVersion++;
             Mod.Log("Parallel line " + (parallelMode ? "on" : "off"));
         }
@@ -1899,6 +1916,9 @@ namespace RealisticRoads
             parallelLeft = !parallelLeft;
             parallelTypes.Clear();
             parallelExtra.Clear();
+            parallelWaterExtra.Clear();
+            parallelWaterTunnel.Clear();
+            parallelWaterPlaces.Clear();
             choicesVersion++;
         }
 
@@ -1925,6 +1945,9 @@ namespace RealisticRoads
             }
             parallelTypes.Clear();
             parallelExtra.Clear();
+            parallelWaterExtra.Clear();
+            parallelWaterTunnel.Clear();
+            parallelWaterPlaces.Clear();
             choicesVersion++;
         }
 
@@ -1934,6 +1957,9 @@ namespace RealisticRoads
             parallelReverse = !parallelReverse;
             parallelTypes.Clear();
             parallelExtra.Clear();
+            parallelWaterExtra.Clear();
+            parallelWaterTunnel.Clear();
+            parallelWaterPlaces.Clear();
             choicesVersion++;
             Mod.Log("Parallel line runs " + (parallelReverse ? "the other way" : "the same way"));
         }
@@ -1995,13 +2021,12 @@ namespace RealisticRoads
                 spec = KeepParallel(parallel);
             }
 
-            division.Plan.Walls = wallsOn;
             Mod.Log("Building " + SelectedNetwork.name + ": " + division.Length.ToString("F0") + " m in " +
                     (division.Points.Count - 1) + " segment(s), " + division.Crossings.Count + " crossing(s)");
             if (spec == null) NetworkBuilder.BuildCurve(SelectedNetwork, division.Plan);
             else
             {
-                var waiting = new PendingParallel { Main = division, Spec = spec, Group = NetworkBuilder.NewGroup(), Walls = wallsOn };
+                var waiting = new PendingParallel { Main = division, Spec = spec, Group = NetworkBuilder.NewGroup() };
                 NetworkBuilder.BuildCurve(SelectedNetwork, division.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
                 pending = waiting;
             }
@@ -2039,9 +2064,15 @@ namespace RealisticRoads
                 below.Add(onDeck && i < underModes.Count && underModes[i]);
                 // Rounded where it turns at a junction (the roads meet at an angle
                 // in the junction's middle).
+                // Never so wide that the deck leaves the narrowest road it follows
+                // (it would cut across the block's corner).
+                var followed = new HashSet<ushort>();
                 var path = onDeck && roads[i - 1] != 0 && roads[i] != 0
-                    ? Decks.CachedRoadPath(roads[i - 1], roadTs[i - 1], roads[i], roadTs[i], under) : null;
-                paths.Add(path != null ? CurveMath.RoundCorners(path, RoadPlanner.IsRail(Net) ? RailDeckTurnRadius : DeckTurnRadius) : null);
+                    ? Decks.CachedRoadPath(roads[i - 1], roadTs[i - 1], roads[i], roadTs[i], followed) : null;
+                under.UnionWith(followed);
+                paths.Add(path != null
+                    ? CurveMath.RoundCorners(path, RoadPlanner.IsRail(Net) ? RailDeckTurnRadius : DeckTurnRadius, 8f, InwardAllowed(followed))
+                    : null);
             }
             // A straight end piece meets the road there at its own angle; a curved one may continue it.
             Vector3 startDir = straight[0] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[0], controls[1] - controls[0], true);
@@ -2180,6 +2211,10 @@ namespace RealisticRoads
                 if (!IsRaised(plan.Kinds[k - 1]) || !IsRaised(plan.Kinds[k + 1])) continue;
                 if (IsCorner(division, k)) continue;
                 if (CurveMath.BendAngle(division.Tangents[k - 1], division.InTangents[k + 1]) > MaxBend) continue;
+                // Not where the one span left would be too long for the game (a
+                // crossing at a shallow angle, or several side by side): the node
+                // stays, with no pillar (over the road or track it crosses).
+                if (CurveMath.FlatDistance(division.Points[k - 1], division.Points[k + 1]) > MaxDroppedSpan) continue;
                 division.Points.RemoveAt(k);
                 division.Tangents.RemoveAt(k);
                 division.InTangents.RemoveAt(k);
@@ -2472,6 +2507,20 @@ namespace RealisticRoads
         // Which nodes are on a deck, and the road under each of them.
         // Per node: on a deck (and what is below it), or in a stretch marked in
         // the side view.
+        // How far a deck may round a junction's corner inside it: to a metre
+        // short of the edge of the narrowest of the roads it follows.
+        private static float InwardAllowed(HashSet<ushort> roads)
+        {
+            float narrowest = float.MaxValue;
+            var segments = NetManager.instance.m_segments.m_buffer;
+            foreach (ushort segment in roads)
+            {
+                var info = segments[segment].Info;
+                if (info != null) narrowest = Mathf.Min(narrowest, info.m_halfWidth);
+            }
+            return narrowest == float.MaxValue ? 4f : Mathf.Max(narrowest - 1f, 2f);
+        }
+
         // The roads at the curve's joined ends: a deck joined to one of ours is
         // not a level above it (Decks.Under leaves them out).
         private static HashSet<ushort> JoinedRoads(ushort startNode, ushort endNode, ushort startSegment, ushort endSegment)
@@ -2725,21 +2774,22 @@ namespace RealisticRoads
                     else
                     {
                         var r = item.Water;
+                        var d = division;
                         // Bridge or tunnel, and for a bridge its height.
                         float rowWidth = (r.Tunnel ? 2f : 4f) * (IconSize + 2f);
                         float left = gui.x - rowWidth * 0.5f;
                         y = FreeRow(placed, left, y, rowWidth);
                         UseLabel(labelled++, prefix + (n + 1) + " · " + ItemHeight(division, item), new Vector2(left, y - 22f));
                         UseButton(used++, RoadPanel.IconFor(CrossingType.Bridge), "B", "Bridge over the water", new Vector2(left, y),
-                            !r.Tunnel, () => SetWaterTunnel(r, false));
+                            !r.Tunnel, () => SetWaterTunnel(d, r, false));
                         UseButton(used++, RoadPanel.IconFor(CrossingType.Tunnel), "T", "Tunnel under the water (under its bed; the entrances on the shores)",
-                            new Vector2(left + IconSize + 2f, y), r.Tunnel, () => SetWaterTunnel(r, true));
+                            new Vector2(left + IconSize + 2f, y), r.Tunnel, () => SetWaterTunnel(d, r, true));
                         if (!r.Tunnel)
                         {
                             UseButton(used++, Icons.Plus, "+", "Bridge higher over the water (+" + HeightStep + " m)",
-                                new Vector2(left + 2f * (IconSize + 2f), y), false, () => AddWaterExtra(r, HeightStep));
+                                new Vector2(left + 2f * (IconSize + 2f), y), false, () => AddWaterExtra(d, r, HeightStep));
                             UseButton(used++, Icons.Minus, "-", "Bridge lower over the water (-" + HeightStep + " m)",
-                                new Vector2(left + 3f * (IconSize + 2f), y), false, () => AddWaterExtra(r, -HeightStep));
+                                new Vector2(left + 3f * (IconSize + 2f), y), false, () => AddWaterExtra(d, r, -HeightStep));
                         }
                     }
                 }
@@ -2870,7 +2920,7 @@ namespace RealisticRoads
             division.Setup.Types[crossing.Key] = type;
             // A ship route: the whole water crossing it is on goes over or under.
             var run = crossing.ShipPath ? RunAt(division.WaterRuns, crossing.Distance) : null;
-            if (run != null) waterTunnel[run.Key] = type == CrossingType.Tunnel;
+            if (run != null) division.Setup.WaterTunnel[run.Key] = type == CrossingType.Tunnel;
             choicesVersion++;
             Mod.Log("Crossing with " + crossing.ExistingName + " (#" + crossing.Segment + "): " + crossing.Describe(type));
         }
@@ -2884,9 +2934,10 @@ namespace RealisticRoads
             choicesVersion++;
         }
 
-        private void SetWaterTunnel(WaterRun run, bool tunnel)
+        // A water crossing of 'division' (the curve, or the parallel line): each keeps its own.
+        private void SetWaterTunnel(Division division, WaterRun run, bool tunnel)
         {
-            waterTunnel[run.Key] = tunnel;
+            division.Setup.WaterTunnel[run.Key] = tunnel;
             choicesVersion++;
             Mod.Log("Water crossing at " + Format(run.Middle) + ": " + (tunnel ? "tunnel under it" : "bridge over it"));
         }
@@ -2898,11 +2949,12 @@ namespace RealisticRoads
             return null;
         }
 
-        private void AddWaterExtra(WaterRun run, float step)
+        private void AddWaterExtra(Division division, WaterRun run, float step)
         {
             float extra;
-            waterExtra.TryGetValue(run.Key, out extra);
-            waterExtra[run.Key] = Mathf.Clamp(extra + step, -5f, MaxExtraHeight);
+            var extras = division.Setup.WaterExtra;
+            extras.TryGetValue(run.Key, out extra);
+            extras[run.Key] = Mathf.Clamp(extra + step, -5f, MaxExtraHeight);
             choicesVersion++;
         }
 
@@ -2940,7 +2992,6 @@ namespace RealisticRoads
                 panel.PickBeside = PickBeside;
                 panel.FlipDirection = FlipDirection;
                 panel.ToggleUpgrade = ToggleUpgrade;
-                panel.ToggleWalls = ToggleWalls;
             }
             panel.Show(Model());
         }
@@ -2990,7 +3041,6 @@ namespace RealisticRoads
                 BesideOther = besideNetwork != null || pickingBeside,
                 ParallelReverse = parallelReverse,
                 Upgrade = upgradeMode,
-                Walls = wallsOn,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
                 Mode = planning
                     ? "PLANNING: drag the points to adjust; pick each crossing here or on the map. Check mark / Enter: build. Esc: scrap. Right-click: keep drawing."
@@ -3105,9 +3155,9 @@ namespace RealisticRoads
                     row.Allowed.Add(CrossingType.Bridge);
                     row.Allowed.Add(CrossingType.Tunnel);
                     row.Selected = run.Tunnel ? CrossingType.Tunnel : CrossingType.Bridge;
-                    row.Pick = type => SetWaterTunnel(run, type == CrossingType.Tunnel);
+                    row.Pick = type => SetWaterTunnel(division, run, type == CrossingType.Tunnel);
                     row.HeightButtons = !run.Tunnel;
-                    row.Raise = step => AddWaterExtra(run, step);
+                    row.Raise = step => AddWaterExtra(division, run, step);
                 }
                 model.Items.Add(row);
             }
@@ -3305,6 +3355,9 @@ namespace RealisticRoads
             crossingExtra.Clear();
             parallelTypes.Clear();
             parallelExtra.Clear();
+            parallelWaterExtra.Clear();
+            parallelWaterTunnel.Clear();
+            parallelWaterPlaces.Clear();
             second = null;
             waterExtra.Clear();
             waterTunnel.Clear();
