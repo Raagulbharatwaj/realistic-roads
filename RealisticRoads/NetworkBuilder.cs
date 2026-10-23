@@ -7,7 +7,7 @@ namespace RealisticRoads
 {
     // Creates and removes roads. All game changes happen on the simulation
     // thread; the public methods only queue the work.
-    public static class NetworkBuilder
+    public static partial class NetworkBuilder
     {
         private const int MaxUndo = 20;
         private const float ContinueAngle = 55f;     // continue an existing road if within this angle
@@ -81,7 +81,7 @@ namespace RealisticRoads
             public int Group;                        // builds with the same group (not 0) are undone together
             // Existing nodes we gave another road (an upgrade) and what they were.
             public readonly List<KeyValuePair<ushort, NetInfo>> NodeInfos = new List<KeyValuePair<ushort, NetInfo>>();
-            public readonly List<ushort> Walls = new List<ushort>();   // segments given retaining walls
+            public readonly List<ushort> Walls = new List<ushort>();   // roads to get retaining walls (quays) at the end of the build
         }
 
         private struct Turned
@@ -287,9 +287,7 @@ namespace RealisticRoads
                                 for (int k = 0; k < 8; k++)
                                 {
                                     ushort road = net.m_nodes.m_buffer[node].GetSegment(k);
-                                    if (road == 0 || build.Walls.Contains(road)) continue;
-                                    RetainingWalls.Add(road, net.m_segments.m_buffer[road].Info);
-                                    build.Walls.Add(road);
+                                    if (road != 0 && !build.Walls.Contains(road)) build.Walls.Add(road);
                                 }
                         continue;
                     }
@@ -418,11 +416,7 @@ namespace RealisticRoads
                     build.Segments.Add(segment);
                     build.Stamps.Segment(segment);
                     // In a cutting (or the ramp into a tunnel): retaining walls along it.
-                    if (plan.Walls && (plan.Kinds[i - 1] == NodeKind.Cut || plan.Kinds[i] == NodeKind.Cut))
-                    {
-                        RetainingWalls.Add(segment, info);
-                        build.Walls.Add(segment);
-                    }
+                    if (plan.Walls && (plan.Kinds[i - 1] == NodeKind.Cut || plan.Kinds[i] == NodeKind.Cut)) build.Walls.Add(segment);
                 }
 
                 // Pillars under our raised nodes. The vanilla tool adds them as its own
@@ -464,6 +458,21 @@ namespace RealisticRoads
                     Mod.Log("  " + bridges + " bridge, " + elevated + " elevated, " + tunnels + " tunnel/slope segment(s)");
                 for (int c = 0; c < plan.Crossings.Count; c++)
                     Mod.Log("  Crossing " + (c + 1) + " with " + plan.Crossings[c].ExistingName + ": " + plan.Crossings[c].Describe());
+
+                // Retaining walls (quays) along what is below the ground. A wall that
+                // can't be built never undoes the road.
+                if (build.Walls.Count > 0)
+                {
+                    Mod.Log("  Retaining walls along " + build.Walls.Count + " segment(s) below the ground");
+                    try
+                    {
+                        BuildWalls(build.Walls, build);
+                    }
+                    catch (Exception e)
+                    {
+                        Mod.LogError("Building the retaining walls failed; the road is built without them", e);
+                    }
+                }
 
                 Keep(build);
                 Mod.Log("Built " + build.Segments.Count + " segment(s) of " + info.name +
@@ -918,7 +927,6 @@ namespace RealisticRoads
             foreach (var node in build.Nodes)
                 if (build.Stamps.OwnsNode(node) && SegmentCount(node) == 0) net.ReleaseNode(node);
             DeckFrames.Forget(build.Nodes);
-            RetainingWalls.Forget(build.Walls);
 
             // Existing nodes we lowered go back up.
             for (int i = build.Moves.Count - 1; i >= 0; i--)

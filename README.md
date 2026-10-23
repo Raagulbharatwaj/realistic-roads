@@ -94,13 +94,12 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      upgrades, one Ctrl+Z puts the old road back. Nodes between upgraded segments become the new road too (pillars
      follow); nodes at junctions with other roads are left to them;
    - **Walls** (next to Upgrade, on by default): retaining walls along the roads built below the ground (cuttings and
-     tunnel ramps) and the roads lowered for an overpass, like a quay: at each edge of the road a solid wall from just
-     under the road up to the ground as it was, with its top reaching out over the whole slope the game dug, to where the
-     ground is untouched, so no dug slope is left showing. None where the road is less than 1.5 m down, across the mouth
-     of a side road, or where another road passes over at ground level (the bridge has that span). They use the road's
-     pillar concrete (like the deck frames), are saved with the city, follow the ground as the game digs it, and go with
-     Ctrl+Z. They need the mod's patches: with two copies of the mod loaded (a local build and the Workshop item) the
-     game warns you; keep one;
+     tunnel ramps) and the roads lowered for an overpass, made of the game's own **quay** network: a chain of quays along
+     each edge of the road, their top at the height of the ground as it was, the road on the quay's water side. Like a
+     quay on a shore, each holds the ground up to its top on its land side, so the slope the road dug is filled back and
+     only the wall is seen, under bridges and decks too. None where the road is less than 1.5 m down or across the mouth
+     of a side road. They are built and undone (Ctrl+Z) with the road. A game without the quay network gets no walls (the
+     log says so);
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,

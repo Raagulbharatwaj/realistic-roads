@@ -825,14 +825,13 @@ namespace RealisticRoads
         }
     }
 
-    // Draws the deck frames and retaining walls with the rest of the roads.
+    // Draws the deck frames with the rest of the roads.
     [HarmonyPatch(typeof(NetManager), "EndRenderingImpl")]
     public static class DeckRenderPatch
     {
         public static void Postfix(RenderManager.CameraInfo __0)
         {
             DeckFrames.Render(__0);
-            RetainingWalls.Render(__0);
         }
     }
 }
