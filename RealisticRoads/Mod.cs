@@ -184,7 +184,6 @@ namespace RealisticRoads
             Mod.ShowPendingWarning();
             ToolActivator.Create(mode);
             RoadUpgrade.Forget();   // this city's roads (their versions are looked up afresh)
-            NetworkBuilder.ForgetQuay();
             // Nodes carrying a deck frame keep no pillar of their own, whatever was saved.
             SimulationManager.instance.AddAction(DeckFrames.RemovePillars);
         }
@@ -196,7 +195,6 @@ namespace RealisticRoads
             // Nothing of this city kept (its roads, meshes) once it is gone.
             RoadUpgrade.Forget();
             DeckFrames.Clear();
-            NetworkBuilder.ForgetQuay();
         }
     }
 
