@@ -24,6 +24,9 @@ namespace RealisticRoads
             public ushort StartNode, EndNode;
             public Vector3 StartDirection, EndDirection;
             public bool Invert;
+            public NetSegment.Flags Yield;          // its yield (stop) signs at either end
+            public ushort NameSeed;                 // its generated street name
+            public string CustomName;               // the name the player gave it (null: none)
             public bool Released;                   // the original has been removed (undo must rebuild it)
             public readonly List<ushort> Segments = new List<ushort>();
             public readonly List<ushort> Nodes = new List<ushort>();
@@ -967,6 +970,7 @@ namespace RealisticRoads
                         split.StartDirection, split.EndDirection, sim.m_currentBuildIndex, sim.m_currentBuildIndex, split.Invert))
                 {
                     sim.m_currentBuildIndex++;
+                    KeepName(restored, split, split.Yield);
                     // The restored road has a new id: older builds still on the undo
                     // stack may refer to it by the old one (e.g. they had cut it).
                     Remap(split.Original, restored);
@@ -1014,6 +1018,9 @@ namespace RealisticRoads
                 StartDirection = s.m_startDirection,
                 EndDirection = s.m_endDirection,
                 Invert = (s.m_flags & NetSegment.Flags.Invert) != NetSegment.Flags.None,
+                Yield = s.m_flags & (NetSegment.Flags.YieldStart | NetSegment.Flags.YieldEnd),
+                NameSeed = s.m_nameSeed,
+                CustomName = CustomNameOf(segment),
             };
 
             Vector3 a, b, c, d;
@@ -1059,10 +1066,65 @@ namespace RealisticRoads
                     throw new Exception("could not rebuild " + split.Info.name);
                 sim.m_currentBuildIndex++;
                 CalculateSegmentDirections(piece);
+                // The pieces keep the road's name, and its yield signs at its own ends.
+                var yield = (i == 1 ? split.Yield & NetSegment.Flags.YieldStart : NetSegment.Flags.None) |
+                            (i == chain.Count - 1 ? split.Yield & NetSegment.Flags.YieldEnd : NetSegment.Flags.None);
+                KeepName(piece, split, yield);
                 split.Segments.Add(piece);
                 split.Stamps.Segment(piece);
             }
             return split;
+        }
+
+        // A segment's name and yield signs, as 'split''s road had them.
+        private static void KeepName(ushort segment, Split split, NetSegment.Flags yield)
+        {
+            var net = NetManager.instance;
+            net.m_segments.m_buffer[segment].m_nameSeed = split.NameSeed;
+            if (yield != NetSegment.Flags.None)
+            {
+                net.m_segments.m_buffer[segment].m_flags |= yield;
+                net.UpdateSegment(segment);
+            }
+            if (split.CustomName == null) return;
+            try
+            {
+                Rename(segment, split.CustomName);
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Keeping the name '" + split.CustomName + "' failed", e);
+            }
+        }
+
+        // The name the player gave a segment (null: none). The game's calls are
+        // kept in methods of their own, so a game version without them only
+        // loses the names (the failure comes when such a method is called).
+        private static string CustomNameOf(ushort segment)
+        {
+            try
+            {
+                return ReadName(segment);
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Reading a street name failed", e);
+                return null;
+            }
+        }
+
+        private static string ReadName(ushort segment)
+        {
+            var net = NetManager.instance;
+            if ((net.m_segments.m_buffer[segment].m_flags & NetSegment.Flags.CustomName) == NetSegment.Flags.None) return null;
+            return net.GetSegmentName(segment);
+        }
+
+        // Simulation thread (where the game's own renaming runs).
+        private static void Rename(ushort segment, string name)
+        {
+            var steps = NetManager.instance.SetSegmentName(segment, name);
+            while (steps.MoveNext()) { }
         }
 
         public static bool NodeExists(ushort node)

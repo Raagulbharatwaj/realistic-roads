@@ -62,20 +62,39 @@ namespace RealisticRoads
             }
         }
 
+        // The arguments, in one array kept between calls (the preview is drawn
+        // every frame): filled once with the defaults, then only the road and
+        // the four vectors change. Main thread.
+        private static object[] args;
+        private static int[] vectorSlots;
+        private static int infoSlot = -1;
+
         private static object[] Arguments(NetInfo info, Vector3 startPosition, Vector3 endPosition, Vector3 startDirection, Vector3 endDirection)
         {
-            var args = new object[parameters.Length];
-            var vectors = new[] { startPosition, endPosition, startDirection, endDirection };
-            int vector = 0;
-            for (int i = 0; i < parameters.Length; i++)
+            if (args == null)
             {
-                var type = parameters[i].ParameterType;
-                if (type == typeof(NetInfo)) args[i] = info;
-                else if (type == typeof(NetSegment.Flags)) args[i] = NetSegment.Flags.All;
-                else if (type == typeof(Vector3)) args[i] = vector < vectors.Length ? vectors[vector++] : Vector3.zero;
-                else if (type == typeof(bool)) args[i] = false;
-                else args[i] = type.IsValueType ? Activator.CreateInstance(type) : null;
+                args = new object[parameters.Length];
+                var slots = new System.Collections.Generic.List<int>();
+                for (int i = 0; i < parameters.Length; i++)
+                {
+                    var type = parameters[i].ParameterType;
+                    if (type == typeof(NetInfo)) infoSlot = i;
+                    else if (type == typeof(NetSegment.Flags)) args[i] = NetSegment.Flags.All;
+                    else if (type == typeof(Vector3))
+                    {
+                        if (slots.Count < 4) slots.Add(i);
+                        args[i] = Vector3.zero;
+                    }
+                    else if (type == typeof(bool)) args[i] = false;
+                    else args[i] = type.IsValueType ? Activator.CreateInstance(type) : null;
+                }
+                vectorSlots = slots.ToArray();
             }
+            if (infoSlot >= 0) args[infoSlot] = info;
+            if (vectorSlots.Length > 0) args[vectorSlots[0]] = startPosition;
+            if (vectorSlots.Length > 1) args[vectorSlots[1]] = endPosition;
+            if (vectorSlots.Length > 2) args[vectorSlots[2]] = startDirection;
+            if (vectorSlots.Length > 3) args[vectorSlots[3]] = endDirection;
             return args;
         }
 

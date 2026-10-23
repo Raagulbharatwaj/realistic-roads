@@ -171,6 +171,10 @@ namespace RealisticRoads
         {
             Mod.Log("City unloading");
             ToolActivator.Destroy();
+            // Nothing of this city kept (its roads, meshes) once it is gone.
+            RoadUpgrade.Forget();
+            DeckFrames.Clear();
+            RetainingWalls.Clear();
         }
     }
 

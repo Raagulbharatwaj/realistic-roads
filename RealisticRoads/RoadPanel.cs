@@ -126,6 +126,9 @@ namespace RealisticRoads
         private bool selecting;                   // that press moved: a stretch is being selected
         private float selectFrom = -1f, selectTo = -1f;   // the selected stretch, metres along (-1: none)
         private Color32[] profileBase;            // the drawn side view without the selection and cursor
+        // The two pictures' pixels, kept (not made anew each time the side view changes).
+        private readonly Color32[] baseBuffer = new Color32[ProfileWidth * ProfileHeight];
+        private readonly Color32[] shownBuffer = new Color32[ProfileWidth * ProfileHeight];
         private UIButton elevatedButton, tunnelButton, autoButton, resetButton;
         private UILabel shapeHint;                // what the buttons act on
         private const float NodeGrab = 6f;        // pixels from a node's dot that grab it
@@ -672,7 +675,29 @@ namespace RealisticRoads
             if (string.IsNullOrEmpty(text)) return 0;
             int perLine = Mathf.Max(8, Mathf.FloorToInt(width / (CharWidth * scale)));
             int lines = 0;
-            foreach (var paragraph in text.Split('\n')) lines += Mathf.Max(1, Mathf.CeilToInt(paragraph.Length / (float)perLine));
+            // Wrapped at spaces like the label does (a word that doesn't fit goes to
+            // the next line; one longer than a line is broken).
+            foreach (var paragraph in text.Split('\n'))
+            {
+                int used = 0;
+                lines++;
+                foreach (var word in paragraph.Split(' '))
+                {
+                    int length = word.Length;
+                    if (used > 0 && used + 1 + length > perLine)
+                    {
+                        lines++;
+                        used = 0;
+                    }
+                    if (used > 0) used++;
+                    while (length > perLine)
+                    {
+                        lines++;
+                        length -= perLine;
+                    }
+                    used += length;
+                }
+            }
             return lines;
         }
 
@@ -867,7 +892,7 @@ namespace RealisticRoads
             drawLow = low;
             drawHigh = high;
 
-            var pixels = new Color32[w * h];
+            var pixels = baseBuffer;
             for (int i = 0; i < pixels.Length; i++) pixels[i] = ProfileBack;
             var roadRows = new int[w];
             var groundRows = new int[w];
@@ -925,7 +950,7 @@ namespace RealisticRoads
                 }
 
             profileBase = pixels;
-            profilePixels = new Color32[pixels.Length];
+            profilePixels = shownBuffer;
             if (cursorAlong > profile.Length) cursorAlong = profile.Length;
             if (selectFrom > profile.Length || selectTo > profile.Length) ClearSelection();
             ShowCursor();

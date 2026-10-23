@@ -68,6 +68,10 @@ namespace RealisticRoads
         private readonly Dictionary<int, float> parallelExtra = new Dictionary<int, float>();
         private readonly Dictionary<int, float> waterExtra = new Dictionary<int, float>();
         private readonly Dictionary<int, bool> waterTunnel = new Dictionary<int, bool>();   // water crossings chosen as tunnels
+        // Where each water crossing (by key) was last seen: its middle.
+        private readonly List<KeyValuePair<int, Vector3>> waterPlaces = new List<KeyValuePair<int, Vector3>>();
+        private int lastWaterKey;
+        private const float WaterMatch = 80f;   // a water crossing is the one remembered this close to its middle
 
         // On-screen buttons, reused every frame: button i runs buttonActions[i].
         private readonly List<UIButton> buttons = new List<UIButton>();
@@ -146,13 +150,39 @@ namespace RealisticRoads
         private float simRayLength;
         private volatile bool mouseRayValid;
 
-        // Written by SimulationStep (simulation thread), read on the main thread.
+        // What is under the mouse: written as one by SimulationStep (simulation
+        // thread) under hoverLock, and copied once a frame on the main thread
+        // (TakeHover) into the fields below, so all of them come from the same
+        // raycast (a Vector3 isn't written or read atomically).
+        private struct Hover
+        {
+            public bool Valid;
+            public ushort Node, Segment;
+            public float T;
+            public Vector3 Position, Marker;
+        }
+
+        private readonly object hoverLock = new object();
+        private Hover simHover;
+        // Main thread's copy.
         private Vector3 hoverPosition;
-        private volatile bool hoverValid;
-        private volatile ushort hoverNode;
-        private volatile ushort hoverSegment;
+        private bool hoverValid;
+        private ushort hoverNode;
+        private ushort hoverSegment;
         private float hoverT;
         private Vector3 hoverMarker;
+
+        private void TakeHover()
+        {
+            Hover h;
+            lock (hoverLock) h = simHover;
+            hoverValid = h.Valid;
+            hoverNode = h.Node;
+            hoverSegment = h.Segment;
+            hoverT = h.T;
+            hoverPosition = h.Position;
+            hoverMarker = h.Marker;
+        }
 
         // Preview, recomputed on the main thread when its inputs change.
         private Division preview;
@@ -208,6 +238,7 @@ namespace RealisticRoads
             public Dictionary<int, float> Extra;
             public Dictionary<int, bool> WaterTunnel;
             public Dictionary<int, float> WaterExtra;
+            public List<KeyValuePair<int, Vector3>> WaterPlaces;
             public List<HeightPin> Pins;
             public List<ForcedStretch> Stretches;
             // Choices found by where the crossing is: the parallel line is planned
@@ -232,6 +263,7 @@ namespace RealisticRoads
             return new LineSetup
             {
                 Info = SelectedNetwork, Types = crossingTypes, Extra = crossingExtra, WaterTunnel = waterTunnel, WaterExtra = waterExtra,
+                WaterPlaces = waterPlaces,
                 Pins = heightPins, Stretches = stretches,
             };
         }
@@ -341,6 +373,7 @@ namespace RealisticRoads
             base.OnDisable();
             ClearPoints();
             hoverValid = false;
+            lock (hoverLock) simHover = new Hover();
             mouseRayValid = false;
             panel.Hide();
             HideButtons(0);
@@ -367,6 +400,8 @@ namespace RealisticRoads
                 mouseRayValid = false;
             }
 
+            // Everything below sees the same raycast.
+            TakeHover();
             // Planning: a point being dragged follows the mouse.
             if (dragIndex >= 0) UpdateDrag();
             // A height dragged or a stretch selected in the side view.
@@ -743,21 +778,21 @@ namespace RealisticRoads
                 simRay = mouseRay;
                 simRayLength = mouseRayLength;
             }
-            if (!mouseRayValid)
-            {
-                hoverValid = false;
-                hoverNode = 0;
-                hoverSegment = 0;
-                return;
-            }
+            var hover = new Hover();
+            if (mouseRayValid) hover = FindHover();
+            lock (hoverLock) simHover = hover;
+        }
 
+        // Simulation thread. What the mouse is on: a node, the middle of a
+        // road, or the ground (or nothing).
+        private Hover FindHover()
+        {
             Vector3 ground;
             bool onGround = GroundUnderMouse(out ground);
 
             ushort midSegment;
             Vector3 roadHit;
             ushort node = FindSnapNode(out midSegment, out roadHit);
-            hoverSegment = 0;
             if (node == 0 && midSegment != 0)
             {
                 // On the middle of a road: join it there (cut at build time).
@@ -765,30 +800,14 @@ namespace RealisticRoads
                 float t = CrossingFinder.ClosestT(midSegment, roadHit, out onRoad);
                 float length = NetManager.instance.m_segments.m_buffer[midSegment].m_averageLength;
                 if (t * length > Crossing.NodeSnap && (1f - t) * length > Crossing.NodeSnap)
-                {
-                    hoverT = t;
-                    hoverSegment = midSegment;
-                    hoverPosition = onRoad;
-                    hoverMarker = onRoad;
-                    hoverNode = 0;
-                    hoverValid = true;
-                    return;
-                }
+                    return new Hover { Valid = true, Segment = midSegment, T = t, Position = onRoad, Marker = onRoad };
             }
             if (node != 0)
             {
                 Vector3 position = NetManager.instance.m_nodes.m_buffer[node].m_position;
-                hoverMarker = position;
-                hoverPosition = position;
-                hoverNode = node;
-                hoverValid = true;
-                return;
+                return new Hover { Valid = true, Node = node, Position = position, Marker = position };
             }
-
-            hoverValid = onGround;
-            hoverPosition = ground;
-            hoverMarker = ground;
-            hoverNode = 0;
+            return new Hover { Valid = onGround, Position = ground, Marker = ground };
         }
 
         // Simulation thread. A node under the mouse, or the end of the road
@@ -831,14 +850,19 @@ namespace RealisticRoads
             var terrain = TerrainManager.instance;
             Vector3 origin = simRay.origin;
             Vector3 direction = simRay.direction;
-            const float step = 8f;
+            // Steps as long as half the height above the ground (2 to 64 m): few
+            // samples high up, short ones near the ground, so a ridge seen at a
+            // grazing angle isn't stepped over.
+            const float minStep = 2f, maxStep = 64f;
             Vector3 previous = origin;
-            for (float d = step; d <= simRayLength; d += step)
+            for (float d = minStep; d <= simRayLength;)
             {
                 Vector3 p = origin + direction * d;
-                if (p.y > terrain.SampleRawHeightSmoothWithWater(p, false, 0f))
+                float surface = terrain.SampleRawHeightSmoothWithWater(p, false, 0f);
+                if (p.y > surface)
                 {
                     previous = p;
+                    d += Mathf.Clamp((p.y - surface) * 0.5f, minStep, maxStep);
                     continue;
                 }
 
@@ -1561,6 +1585,7 @@ namespace RealisticRoads
                 Setup = new LineSetup
                 {
                     Info = info, Types = parallelTypes, Extra = parallelExtra, WaterTunnel = waterTunnel, WaterExtra = waterExtra,
+                    WaterPlaces = waterPlaces,
                     Pins = heightPins, Stretches = stretches,
                 },
             };
@@ -1587,6 +1612,7 @@ namespace RealisticRoads
                 Extra = new Dictionary<int, float>(setup.Extra),
                 WaterTunnel = new Dictionary<int, bool>(setup.WaterTunnel),
                 WaterExtra = new Dictionary<int, float>(setup.WaterExtra),
+                WaterPlaces = new List<KeyValuePair<int, Vector3>>(setup.WaterPlaces),
                 Pins = new List<HeightPin>(),
                 Stretches = new List<ForcedStretch>(),
                 ByPlace = new List<PlacedChoice>(),
@@ -1683,7 +1709,7 @@ namespace RealisticRoads
             line = new LineSetup
             {
                 Info = spec.Info, Types = spec.Setup.Types, Extra = spec.Setup.Extra, WaterTunnel = spec.Setup.WaterTunnel,
-                WaterExtra = spec.Setup.WaterExtra, Pins = pins, Stretches = forced, ByPlace = spec.Setup.ByPlace,
+                WaterExtra = spec.Setup.WaterExtra, WaterPlaces = spec.Setup.WaterPlaces, Pins = pins, Stretches = forced, ByPlace = spec.Setup.ByPlace,
             };
             var division = DivideAlong(polyline, controlAt, corners, Vector3.zero, Vector3.zero, startNode, endNode, lifts,
                 new List<bool>(), new List<bool>(), new HashSet<ushort>());
@@ -2411,13 +2437,31 @@ namespace RealisticRoads
             }
             // A wet sample or two at a shore or a puddle isn't a crossing.
             runs.RemoveAll(run => run.To - run.From < MinWaterWidth);
+            var taken = new HashSet<int>();
             foreach (var run in runs)
             {
                 Vector3 middle, tangent;
                 CurveMath.PointAt(polyline, (run.From + run.To) * 0.5f, out middle, out tangent);
                 run.Middle = middle;
-                // Remembered by roughly where it is, so the +/- survives small edits.
-                run.Key = Mathf.RoundToInt(middle.x / 64f) * 100003 + Mathf.RoundToInt(middle.z / 64f);
+                // Remembered by where it is: the crossing remembered nearest its
+                // middle (each once), which then follows it, so the bridge or
+                // tunnel and the +/- stay as the curve grows across the water or
+                // its points are dragged. A new one gets a new key.
+                var places = line.WaterPlaces;
+                int nearest = -1;
+                float best = WaterMatch;
+                for (int i = 0; i < places.Count; i++)
+                {
+                    if (taken.Contains(places[i].Key)) continue;
+                    float d = CurveMath.FlatDistance(places[i].Value, middle);
+                    if (d >= best) continue;
+                    best = d;
+                    nearest = i;
+                }
+                run.Key = nearest >= 0 ? places[nearest].Key : ++lastWaterKey;
+                if (nearest >= 0) places[nearest] = new KeyValuePair<int, Vector3>(run.Key, middle);
+                else places.Add(new KeyValuePair<int, Vector3>(run.Key, middle));
+                taken.Add(run.Key);
                 float extra;
                 run.Extra = line.WaterExtra.TryGetValue(run.Key, out extra) ? extra : 0f;
                 bool tunnel;
@@ -3087,6 +3131,7 @@ namespace RealisticRoads
             second = null;
             waterExtra.Clear();
             waterTunnel.Clear();
+            waterPlaces.Clear();
             heightPins.Clear();
             stretches.Clear();
             draggedPin = null;
