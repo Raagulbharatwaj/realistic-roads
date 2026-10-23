@@ -52,6 +52,9 @@ namespace RealisticRoads
         private const float MinWaterWidth = 4f;       // narrower wet patches are ignored
         private const float RaisedSpacing = 90f;      // node (pillar) spacing on raised road stretches: long spans, few nodes
         private const float RailRaisedSpacing = 96f;  // rail: as few nodes as possible, long spans
+        private const float DeckTurnRadius = 50f;      // a deck following roads turns at a junction no tighter than this
+        private const float RailDeckTurnRadius = 90f;
+        private const float MinPillarHeight = 3f;      // a raised node lower than this over the ground gets no pillar
         private const float HeightStep = 5f;
         private const float MaxExtraHeight = 60f;
         private const float IconSize = 34f;
@@ -518,6 +521,13 @@ namespace RealisticRoads
             aimT = hoverT;
             aimRoad = 0;
             aimRoadT = 0f;
+            // A deck point on a deck of ours joins it at its level: the deck goes
+            // on from there (over the road under it), not a level above it.
+            if (deckMode && onMap && !typed && OwnDeckAt(hoverNode, hoverSegment, hoverT))
+            {
+                RoadUnderDeck(hoverNode, hoverSegment, hoverT, out aimRoad, out aimRoadT);
+                return;
+            }
             // A deck point on a road sits over its centre line: no junction with it.
             if (deckMode && onMap && !typed && RoadAt(hoverNode, hoverSegment, hoverT, out aimRoad, out aimRoadT))
             {
@@ -587,6 +597,80 @@ namespace RealisticRoads
             roadT = t;
             return true;
         }
+
+        // Raised (or, under the road, sunk) this far from the ground, a network of
+        // the kind being drawn is a deck to join, not a road to build a deck over.
+        private const float DeckJoinHeight = 4f;
+
+        // Whether the node or the point on the segment is on a deck of the
+        // network being drawn (any of its versions), up on pillars (or down
+        // under the road in Under mode): one to go on from, at its level.
+        private bool OwnDeckAt(ushort node, ushort segment, float t)
+        {
+            var net = NetManager.instance;
+            NetInfo info;
+            Vector3 p;
+            if (node != 0)
+            {
+                info = net.m_nodes.m_buffer[node].Info;
+                p = net.m_nodes.m_buffer[node].m_position;
+            }
+            else if (segment != 0)
+            {
+                info = net.m_segments.m_buffer[segment].Info;
+                Vector3 a, b, c, d;
+                CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+                p = CurveMath.Bezier(a, b, c, d, t);
+            }
+            else return false;
+            if (!SameRoad(info, SelectedNetwork)) return false;
+            float elevation = p.y - TerrainManager.instance.SampleRawHeightSmooth(p);
+            return underMode ? elevation <= -DeckJoinHeight : elevation >= DeckJoinHeight;
+        }
+
+        // 'info' is 'road' or one of its versions (elevated, bridge, slope, tunnel).
+        private static bool SameRoad(NetInfo info, NetInfo road)
+        {
+            if (info == null || road == null) return false;
+            if (info == road) return true;
+            foreach (var kind in new[] { NodeKind.Elevated, NodeKind.Bridge, NodeKind.Slope, NodeKind.Tunnel })
+                if (RoadPlanner.InfoFor(road, kind) == info) return true;
+            return false;
+        }
+
+        // The road under a deck of ours at the node or the point on the segment
+        // (0 if none), so the deck going on from there can follow it.
+        private void RoadUnderDeck(ushort node, ushort segment, float t, out ushort road, out float roadT)
+        {
+            road = 0;
+            roadT = 0f;
+            var net = NetManager.instance;
+            var ours = new HashSet<ushort>();
+            Vector3 p;
+            if (node != 0)
+            {
+                p = net.m_nodes.m_buffer[node].m_position;
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
+                    if (s != 0) ours.Add(s);
+                }
+            }
+            else
+            {
+                Vector3 a, b, c, d;
+                CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+                p = CurveMath.Bezier(a, b, c, d, t);
+                ours.Add(segment);
+            }
+            var info = SelectedNetwork;
+            var below = Decks.Under(p, info != null ? info.m_halfWidth : 8f, underMode, ours);
+            if (below.Segment == 0) return;
+            Vector3 onRoad;
+            road = below.Segment;
+            roadT = CrossingFinder.ClosestT(road, p, out onRoad);
+        }
+
         private Vector3 lastMouse;            // the mouse on the map when it was last there
         private bool haveLastMouse;
 
@@ -1209,7 +1293,7 @@ namespace RealisticRoads
             {
                 if (!IsRaised(plan.Kinds[i]) || noPillar.Contains(i)) continue;
                 Vector3 p = plan.Points[i];
-                if (p.y - terrain.SampleRawHeightSmoothWithWater(p, false, 0f) < 3f) continue;   // too low for a pillar
+                if (p.y - terrain.SampleRawHeightSmoothWithWater(p, false, 0f) < MinPillarHeight) continue;   // too low for a pillar
                 result.Add(i);
             }
             return result;
@@ -1953,8 +2037,11 @@ namespace RealisticRoads
                 bool onDeck = i < deckModes.Count && deckModes[i];
                 deck.Add(onDeck);
                 below.Add(onDeck && i < underModes.Count && underModes[i]);
-                paths.Add(onDeck && roads[i - 1] != 0 && roads[i] != 0
-                    ? Decks.CachedRoadPath(roads[i - 1], roadTs[i - 1], roads[i], roadTs[i], under) : null);
+                // Rounded where it turns at a junction (the roads meet at an angle
+                // in the junction's middle).
+                var path = onDeck && roads[i - 1] != 0 && roads[i] != 0
+                    ? Decks.CachedRoadPath(roads[i - 1], roadTs[i - 1], roads[i], roadTs[i], under) : null;
+                paths.Add(path != null ? CurveMath.RoundCorners(path, RoadPlanner.IsRail(Net) ? RailDeckTurnRadius : DeckTurnRadius) : null);
             }
             // A straight end piece meets the road there at its own angle; a curved one may continue it.
             Vector3 startDir = straight[0] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[0], controls[1] - controls[0], true);
@@ -1990,7 +2077,8 @@ namespace RealisticRoads
         private void PlanDivision(Division division, ushort startNode, ushort endNode, ushort startSegment, float startT,
             ushort endSegment, float endT, List<KeyValuePair<Vector3, float>> raisedPoints)
         {
-            FindDecks(division, Net != null ? Net.m_halfWidth : 8f);
+            var joined = JoinedRoads(startNode, endNode, startSegment, endSegment);
+            FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
             division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
                 division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
                 startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
@@ -1999,7 +2087,7 @@ namespace RealisticRoads
             // vanilla tool's elevated roads; plan again with them.
             if (AddRaisedNodes(division))
             {
-                FindDecks(division, Net != null ? Net.m_halfWidth : 8f);
+                FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
                 division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
                     division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
                     startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
@@ -2036,11 +2124,23 @@ namespace RealisticRoads
                 if (division.Crossings[c].Type == CrossingType.Bridge || division.Crossings[c].Type == CrossingType.Overpass)
                     keep.Add(division.CrossingIndex[c]);
             bool added = false;
+            var nodeAlong = NodeDistances(division);
+            var terrain = TerrainManager.instance;
             for (int i = plan.Points.Count - 1; i >= 1; i--)
             {
-                // Elevated stretches over land only: bridges over water keep their
-                // long, even spans (BridgeSpacing), with no extra pillar in the river.
-                if (plan.Kinds[i - 1] != NodeKind.Elevated || plan.Kinds[i] != NodeKind.Elevated) continue;
+                // Raised pieces over land: both ends up (elevated, or the bridge
+                // version over a lowered road), or a ramp with one end up that is
+                // still high enough in the middle for a pillar. Bridges over water
+                // keep their long, even spans (BridgeSpacing), with no extra pillar
+                // in the river.
+                bool upBefore = IsRaised(plan.Kinds[i - 1]), upAfter = IsRaised(plan.Kinds[i]);
+                if (!upBefore && !upAfter) continue;
+                if (InWater(division.WaterRuns, (nodeAlong[i - 1] + nodeAlong[i]) * 0.5f)) continue;
+                if (!upBefore || !upAfter)
+                {
+                    Vector3 middle = (plan.Points[i - 1] + plan.Points[i]) * 0.5f;
+                    if (middle.y - terrain.SampleRawHeightSmoothWithWater(middle, false, 0f) < MinPillarHeight) continue;
+                }
                 if (keep.Contains(i) || keep.Contains(i - 1)) continue;
                 float length = CurveMath.FlatDistance(division.Points[i - 1], division.Points[i]);
                 float spacing = RoadPlanner.IsRail(Net) ? RailRaisedSpacing : RaisedSpacing;
@@ -2372,7 +2472,25 @@ namespace RealisticRoads
         // Which nodes are on a deck, and the road under each of them.
         // Per node: on a deck (and what is below it), or in a stretch marked in
         // the side view.
-        private static void FindDecks(Division division, float ourHalfWidth)
+        // The roads at the curve's joined ends: a deck joined to one of ours is
+        // not a level above it (Decks.Under leaves them out).
+        private static HashSet<ushort> JoinedRoads(ushort startNode, ushort endNode, ushort startSegment, ushort endSegment)
+        {
+            var result = new HashSet<ushort>();
+            var nodes = NetManager.instance.m_nodes.m_buffer;
+            foreach (ushort node in new[] { startNode, endNode })
+                if (node != 0)
+                    for (int i = 0; i < 8; i++)
+                    {
+                        ushort s = nodes[node].GetSegment(i);
+                        if (s != 0) result.Add(s);
+                    }
+            if (startSegment != 0) result.Add(startSegment);
+            if (endSegment != 0) result.Add(endSegment);
+            return result;
+        }
+
+        private static void FindDecks(Division division, float ourHalfWidth, HashSet<ushort> joined = null)
         {
             int n = division.Points.Count;
             division.OnDeck = new bool[n];
@@ -2386,7 +2504,7 @@ namespace RealisticRoads
                 if (!InDeck(division.DeckRanges, division.NodeAlong[i])) continue;
                 division.OnDeck[i] = true;
                 division.UnderDeck[i] = InDeck(division.UnderRanges, division.NodeAlong[i]);
-                division.Below[i] = Decks.Under(division.Points[i], ourHalfWidth, division.UnderDeck[i]);
+                division.Below[i] = Decks.Under(division.Points[i], ourHalfWidth, division.UnderDeck[i], joined);
             }
         }
 
@@ -3147,7 +3265,14 @@ namespace RealisticRoads
             pointTs[dragIndex] = hoverT;
             ushort road;
             float roadT;
-            if (pointDeck[dragIndex] && RoadAt(hoverNode, hoverSegment, hoverT, out road, out roadT))
+            if (pointDeck[dragIndex] && OwnDeckAt(hoverNode, hoverSegment, hoverT))
+            {
+                // Onto a deck of ours: joined to it, going on over the road under it.
+                RoadUnderDeck(hoverNode, hoverSegment, hoverT, out road, out roadT);
+                pointRoad[dragIndex] = road;
+                pointRoadT[dragIndex] = roadT;
+            }
+            else if (pointDeck[dragIndex] && RoadAt(hoverNode, hoverSegment, hoverT, out road, out roadT))
             {
                 // A deck point stays over the road, not joined to it.
                 pointNodes[dragIndex] = 0;

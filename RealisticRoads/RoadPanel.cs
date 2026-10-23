@@ -305,8 +305,8 @@ namespace RealisticRoads
                 "every road between becomes the road picked in the game's menu, on the same nodes (shape and junctions kept),\n" +
                 "each in its own version (elevated, tunnel...). One Ctrl+Z puts the old road back", Pad, y,
                 () => { if (ToggleUpgrade != null) ToggleUpgrade(); });
-            wallsButton = BarButton(Icons.Walls, "W", "Retaining walls along cuttings, tunnel ramps and the roads lowered for an " +
-                "overpass, up to the ground beside them (on: green)", Pad + IconSize + 3f, y,
+            wallsButton = BarButton(Icons.Walls, "W", "Retaining walls (the game's quays) along cuttings, tunnel ramps and the roads " +
+                "lowered for an overpass, holding the ground up beside them (on: green)", Pad + IconSize + 3f, y,
                 () => { if (ToggleWalls != null) ToggleWalls(); });
             toolsLabel = BarLabel("", Pad + 2f * IconSize + 10f, y + 1f, Width - 2f * Pad - 2f * IconSize - 10f);
             toolsLabel.wordWrap = true;
