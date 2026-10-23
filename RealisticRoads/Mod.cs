@@ -61,6 +61,26 @@ namespace RealisticRoads
             ShowPendingWarning();
         }
 
+        // Two copies of the mod (a local build and the Workshop item, or two
+        // Workshop items) both run their tools: the player should keep one.
+        internal static void WarnIfLoadedTwice()
+        {
+            try
+            {
+                var copies = new List<string>();
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                    if (assembly.GetName().Name == typeof(Mod).Assembly.GetName().Name) copies.Add(assembly.GetName().Version.ToString());
+                if (copies.Count > 1)
+                    WarnAfterLoad("Loaded twice", "Realistic Roads is loaded " + copies.Count + " times (versions " +
+                                  string.Join(", ", copies.ToArray()) + "), probably a local build and the Workshop item. " +
+                                  "Untick one of them in Content Manager > Mods and restart the game.");
+            }
+            catch (Exception e)
+            {
+                LogError("Checking for a second copy failed", e);
+            }
+        }
+
         internal static void ShowPendingWarning()
         {
             if (pendingMessage == null) return;
@@ -160,6 +180,7 @@ namespace RealisticRoads
         public override void OnLevelLoaded(LoadMode mode)
         {
             Mod.Log("City loaded, mode = " + mode);
+            Mod.WarnIfLoadedTwice();
             Mod.ShowPendingWarning();
             ToolActivator.Create(mode);
             RoadUpgrade.Forget();   // this city's roads (their versions are looked up afresh)

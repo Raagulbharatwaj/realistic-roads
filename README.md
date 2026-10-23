@@ -73,15 +73,17 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      cross clears everything set in the side view. Heights and stretches stay on their piece of the curve when points
      are dragged;
    - **Parallel** (the third row of the DRAW bar): builds a second road beside the curve, so you draw a dual
-     carriageway or a road with a track beside it in one go. **Gap** -/+ sets the space between the two roads' edges
-     (4 m to start, 0 to 40 m); the arrows put it on the other side of the curve. By default it is the same road
-     running the other way (a one-way pair: on the left for right-hand traffic). For another road or track, pick it in
-     the game's menu, press the **2** button, then pick the curve's own road; press **2** again to go back. The
-     parallel line is planned on its own (its crossings show in the list and on the map with a **P**: P1, P2...), with
-     the curve's point heights and the side view's heights and stretches. Its ends join a road or node of its kind
-     they land on. **Build** builds the curve, then plans the parallel line again against the roads as they are now
-     (the curve's junctions may have cut them) and builds it; one **Ctrl+Z** removes both. On the inside of a bend
-     tighter than the gap it would fold over itself: the panel says so. It doesn't follow decks yet;
+     carriageway, a double track or a road with a track beside it in one go. **Gap** -/+ sets the space between the
+     two roads' edges (4 m to start, 0 to 40 m); the arrows put it on the other side of the curve. By default it is the
+     curve's own road. For another road or track, press **2** and then pick it in the game's menu: it goes beside, and
+     the curve keeps its own road (press **2** again to go back). The **direction** button says which way it runs: the
+     other way (a one-way pair, the default for the same road) or the same way (a double track, or a road and the track
+     beside it). The line under the buttons says what goes beside, on which side and which way. The parallel line is
+     planned on its own (its crossings show in the list and on the map with a **P**: P1, P2...), with the curve's point
+     heights and the side view's heights and stretches. Its ends join a road or node of its kind they land on.
+     **Build** builds the curve, then plans the parallel line again against the roads as they are now (the curve's
+     junctions may have cut them) and builds it; one **Ctrl+Z** removes both. On the inside of a bend tighter than the
+     gap it would fold over itself: the panel says so. It doesn't follow decks yet;
    - **Upgrade** (the fourth row of the DRAW bar): changes an existing road into the road picked in the game's menu
      along a whole stretch. Click the road where it starts, then where it ends (the stretch follows the roads between,
      round corners and through junctions, only along roads of the same kind). Every segment on the way is replaced on
@@ -92,10 +94,13 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      upgrades, one Ctrl+Z puts the old road back. Nodes between upgraded segments become the new road too (pillars
      follow); nodes at junctions with other roads are left to them;
    - **Walls** (next to Upgrade, on by default): retaining walls along the roads built below the ground (cuttings and
-     tunnel ramps) and the roads lowered for an overpass. Each wall stands at the road's edge, from just under the road
-     up to the ground beside the cutting, with a concrete top over the slope the game digs behind it; none where the
-     road is less than 1.5 m down. They use the road's pillar concrete (like the deck frames), are saved with the city,
-     follow the ground as the game digs it, and go with Ctrl+Z;
+     tunnel ramps) and the roads lowered for an overpass, like a quay: at each edge of the road a solid wall from just
+     under the road up to the ground as it was, with its top reaching out over the whole slope the game dug, to where the
+     ground is untouched, so no dug slope is left showing. None where the road is less than 1.5 m down, across the mouth
+     of a side road, or where another road passes over at ground level (the bridge has that span). They use the road's
+     pillar concrete (like the deck frames), are saved with the city, follow the ground as the game digs it, and go with
+     Ctrl+Z. They need the mod's patches: with two copies of the mod loaded (a local build and the Workshop item) the
+     game warns you; keep one;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,

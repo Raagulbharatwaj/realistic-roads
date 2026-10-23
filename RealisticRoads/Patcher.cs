@@ -9,7 +9,12 @@ namespace RealisticRoads
     // Harmony lets you run your own code before/after the game's methods.
     public static class Patcher
     {
-        private const string HarmonyId = "com.raagul.realisticroads";
+        // Each loaded copy of the mod patches under an id of its own: with two
+        // copies loaded (a local build and the Workshop one), disabling one must
+        // not take away the other's patches (the walls and deck frames are drawn
+        // by one, the pillars kept off the decks by another).
+        private const string HarmonyIdBase = "com.raagul.realisticroads";
+        private static readonly string HarmonyId = HarmonyIdBase + "." + Guid.NewGuid().ToString("N");
         private static bool patched;
 
         public static void PatchAll()
