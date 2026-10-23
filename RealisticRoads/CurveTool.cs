@@ -192,7 +192,30 @@ namespace RealisticRoads
         private const int PreviewRefreshFrames = 30;
 
         // The road/track the player last picked in the vanilla Roads menu.
-        public NetInfo SelectedNetwork { get; set; }
+        // The road (or track) picked in the game's menu. While the player is
+        // picking what goes beside the curve (PickBeside), the next one picked
+        // is the parallel line's, and the curve keeps its own.
+        public NetInfo SelectedNetwork
+        {
+            get { return selectedNetwork; }
+            set
+            {
+                if (pickingBeside && value != null && selectedNetwork != null && value != selectedNetwork)
+                {
+                    pickingBeside = false;
+                    besideNetwork = value;
+                    parallelReverse = false;   // a road and a track beside it run the same way
+                    parallelTypes.Clear();
+                    parallelExtra.Clear();
+                    choicesVersion++;
+                    Mod.Log("Parallel line: " + value.name + " beside the " + selectedNetwork.name);
+                    return;
+                }
+                selectedNetwork = value;
+            }
+        }
+
+        private NetInfo selectedNetwork;
 
         public bool IsActive => ToolsModifierControl.toolController != null &&
                                 ToolsModifierControl.toolController.CurrentTool == this;
@@ -332,6 +355,8 @@ namespace RealisticRoads
         private bool parallelMode;
         private float parallelGap = DefaultGap;  // metres between the two roads' edges
         private bool parallelLeft = true;        // on the left of the curve as drawn (else the right)
+        private bool parallelReverse = true;     // runs the other way (a one-way pair), else the same way (a double track)
+        private bool pickingBeside;              // the next road picked in the game's menu goes beside the curve
         private NetInfo besideNetwork;           // null: the same road, the other way (a one-way pair)
         private Division second;                 // the parallel line's preview
         private PendingParallel pending;
@@ -1581,7 +1606,7 @@ namespace RealisticRoads
             var info = besideNetwork ?? SelectedNetwork;
             return new ParallelSpec
             {
-                Main = SelectedNetwork, Info = info, Gap = parallelGap, Left = parallelLeft, Reverse = besideNetwork == null,
+                Main = SelectedNetwork, Info = info, Gap = parallelGap, Left = parallelLeft, Reverse = parallelReverse,
                 Setup = new LineSetup
                 {
                     Info = info, Types = parallelTypes, Extra = parallelExtra, WaterTunnel = waterTunnel, WaterExtra = waterExtra,
@@ -1796,13 +1821,37 @@ namespace RealisticRoads
         // The road or track picked in the game's menu now goes beside the
         // curve (then pick the curve's own); pressed again: the same road as
         // the curve, the other way (a one-way pair).
+        // What goes beside the curve: pressed, the next road or track picked in
+        // the game's menu (the curve keeps its own); pressed again while
+        // waiting, or with another road beside, back to the curve's own road.
         private void PickBeside()
         {
-            besideNetwork = besideNetwork == null ? SelectedNetwork : null;
+            if (besideNetwork != null || pickingBeside)
+            {
+                besideNetwork = null;
+                pickingBeside = false;
+                parallelReverse = true;
+                Mod.Log("Parallel line: the same road as the curve");
+            }
+            else
+            {
+                pickingBeside = true;
+                if (!parallelMode) parallelMode = true;
+                Mod.Log("Parallel line: pick the road or track for it in the game's menu");
+            }
             parallelTypes.Clear();
             parallelExtra.Clear();
             choicesVersion++;
-            Mod.Log("Parallel line: " + (besideNetwork != null ? besideNetwork.name + " beside the curve" : "the same road, the other way"));
+        }
+
+        // The other way (a one-way pair) or the same way (a double track).
+        private void FlipDirection()
+        {
+            parallelReverse = !parallelReverse;
+            parallelTypes.Clear();
+            parallelExtra.Clear();
+            choicesVersion++;
+            Mod.Log("Parallel line runs " + (parallelReverse ? "the other way" : "the same way"));
         }
 
         private static bool IsRaised(NodeKind kind)
@@ -2771,6 +2820,7 @@ namespace RealisticRoads
                 panel.ChangeGap = ChangeGap;
                 panel.FlipSide = FlipSide;
                 panel.PickBeside = PickBeside;
+                panel.FlipDirection = FlipDirection;
                 panel.ToggleUpgrade = ToggleUpgrade;
                 panel.ToggleWalls = ToggleWalls;
             }
@@ -2817,8 +2867,10 @@ namespace RealisticRoads
                 Parallel = parallelMode,
                 Gap = parallelGap,
                 ParallelLeft = parallelLeft,
-                Beside = besideNetwork != null ? Title(besideNetwork) : "Same road, other way",
-                BesideOther = besideNetwork != null,
+                Beside = pickingBeside ? "pick its road or track in the game's menu"
+                    : (besideNetwork != null ? Title(besideNetwork) : "the same road") + (parallelReverse ? ", other way" : ", same way"),
+                BesideOther = besideNetwork != null || pickingBeside,
+                ParallelReverse = parallelReverse,
                 Upgrade = upgradeMode,
                 Walls = wallsOn,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",

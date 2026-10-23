@@ -7,23 +7,24 @@ using UnityEngine;
 namespace RealisticRoads
 {
     // Retaining walls along the sides of a road below the ground: our cuttings
-    // and tunnel ramps, and the roads we lower for an overpass. A wall stands at
-    // each edge of the road, from just under it up to the ground beside it,
-    // with a concrete top over the slope the game digs behind it. Drawn with
-    // the road's pillar material, like the deck frames, and saved with the city.
+    // and tunnel ramps, and the roads we lower for an overpass. Like a quay: at
+    // each edge of the road a solid wall from just under it up to the ground as
+    // it was, and its top reaching out over the whole slope the game dug there,
+    // to where the ground is untouched, so no dug slope is seen. Drawn with the
+    // road's pillar material, like the deck frames, and saved with the city.
     public static class RetainingWalls
     {
         public const string DataId = "RealisticRoads.Walls";
         private const int Version = 1;
         private const float Gap = 0.2f;          // the wall's face this far outside the road's edge
-        private const float Thickness = 0.6f;
-        private const float Footing = 0.4f;      // the wall goes this far below the road
+        private const float Thickness = 1f;      // the least the wall's top reaches out
+        private const float Footing = 0.5f;      // the wall goes this far below the road
         private const float MinWall = 1.5f;      // lower than this above the road: no wall there
         private const float MaxWall = 16f;
         private const float SampleStep = 4f;     // metres between wall sections
-        private const float ReachStep = 1.5f;    // looking out from the edge for the ground beside the cutting
+        private const float ReachStep = 1.5f;    // looking out from the edge for the end of the dug slope
         private const float MaxReach = 30f;
-        private const float Level = 0.15f;       // rising less than this per metre: the dug slope has ended
+        private const float Dug = 0.3f;          // the ground seen this far below the ground as it was: dug by the road
         private const float DrawDistance = 4000f;
         private const int RefreshFrames = 120;   // the ground is looked at again this often (the game digs after building)
         private const int SettledFrames = 600;   // ... and this often once it has stayed the same a few times
@@ -157,8 +158,9 @@ namespace RealisticRoads
             public bool Wall;
             public Vector3 Edge;        // the wall's face, at the road's height
             public Vector3 Out;         // across the road, away from it
-            public float Top;           // the ground beside the cutting
-            public float Reach;         // how far out the dug slope goes
+            public float Top;           // the ground as it was at the wall: the wall's top
+            public float Reach;         // how far out the dug slope goes: the top covers it
+            public float FarTop;        // the ground as it was there
         }
 
         // Both sides of the road, every SampleStep metres: [side][sample].
@@ -185,29 +187,55 @@ namespace RealisticRoads
                     Vector3 along = CurveMath.FlatNormal(CurveMath.BezierDerivative(a, b, c, d, t));
                     Vector3 right = new Vector3(along.z, 0f, -along.x) * (side == 0 ? 1f : -1f);
                     Vector3 edge = p + right * (half + Gap);
-                    // Out from the edge until the ground stops rising: the top of the
-                    // dug slope (or the untouched ground, if not dug yet).
-                    float previous = terrain.SampleRawHeightSmooth(edge), top = previous, reach = 0f;
-                    for (float r = ReachStep; r <= MaxReach; r += ReachStep)
+                    // The wall's top: the ground as it was (the raw heights: before
+                    // roads dig into it). Its reach: out from the edge as far as the
+                    // ground seen (the detail heights, dug by the road) is lower than
+                    // that, to the top of the slope the game dug.
+                    float top = Mathf.Min(terrain.SampleRawHeightSmooth(edge), p.y + MaxWall);
+                    float reach = 0f;
+                    for (float r = 0f; r <= MaxReach; r += ReachStep)
                     {
-                        float h = terrain.SampleRawHeightSmooth(edge + right * r);
-                        if (h - previous < Level * ReachStep) break;
-                        previous = top = h;
-                        reach = r;
+                        Vector3 at = edge + right * r;
+                        if (terrain.SampleDetailHeight(at) < terrain.SampleRawHeightSmooth(at) - Dug) reach = r + ReachStep;
+                        else if (r > reach + ReachStep) break;   // past the slope (one undug spot may sit on it)
                     }
-                    top = Mathf.Min(top, p.y + MaxWall);
-                    bool clear = CurveMath.FlatDistance(edge, startNode) >= startClear && CurveMath.FlatDistance(edge, endNode) >= endClear;
+                    reach = Mathf.Max(reach, Thickness);
+                    float farTop = Mathf.Min(terrain.SampleRawHeightSmooth(edge + right * reach), p.y + MaxWall);
+                    bool clear = CurveMath.FlatDistance(edge, startNode) >= startClear && CurveMath.FlatDistance(edge, endNode) >= endClear &&
+                                 !Bridged(segment, edge, right, reach, top);
                     result[side][k] = new Section
                     {
                         Wall = clear && top - p.y >= MinWall,
                         Edge = edge,
                         Out = right,
                         Top = top,
-                        Reach = Mathf.Max(reach, Thickness),
+                        Reach = reach,
+                        FarTop = farTop,
                     };
                 }
             }
             return result;
+        }
+
+        // True where another road passes over the wall at the ground's height
+        // (our road on its deck over a lowered one): the wall's top would come
+        // up through it, so the bridge has that span.
+        private static bool Bridged(ushort segment, Vector3 edge, Vector3 outward, float reach, float top)
+        {
+            var net = NetManager.instance;
+            foreach (ushort other in RoadPlanner.NearbySegments(edge, reach + 40f))
+            {
+                if (other == segment) continue;
+                var s = net.m_segments.m_buffer[other];
+                if ((s.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || s.Info == null) continue;
+                for (int k = 0; k <= 2; k++)
+                {
+                    Vector3 at = edge + outward * (reach * k * 0.5f), on;
+                    CrossingFinder.ClosestT(other, at, out on);
+                    if (CurveMath.FlatDistance(on, at) <= s.Info.m_halfWidth + 1f && on.y > top - 3f) return true;
+                }
+            }
+            return false;
         }
 
         // How far from a junction node the walls of 'segment' (half as wide as
@@ -235,12 +263,15 @@ namespace RealisticRoads
             float sum = 0f;
             foreach (var side in sections)
                 foreach (var section in side)
-                    if (section.Wall) sum += section.Top * 1.3f + section.Reach + section.Edge.y * 0.7f;
+                    if (section.Wall) sum += section.Top * 1.3f + section.Reach + section.FarTop * 0.7f + section.Edge.y * 0.3f;
             return sum;
         }
 
-        // Each section between two spots with a wall: the face towards the road,
-        // the wall's top, and the concrete over the dug slope behind it.
+        // Each section between two spots with a wall: a solid block with no
+        // face missing above the ground (so it is never seen through): the face
+        // towards the road, its top reaching out over the dug slope, the far
+        // side going down into the ground, and its ends where a run starts or
+        // stops.
         private static Mesh MakeMesh(Section[][] sections, Vector3 origin, Vector2 uv)
         {
             var vertices = new List<Vector3>();
@@ -252,24 +283,32 @@ namespace RealisticRoads
                     var p = side[k - 1];
                     var q = side[k];
                     if (!p.Wall || !q.Wall) continue;
-                    Vector3 pBottom = p.Edge + Vector3.up * -Footing - origin, qBottom = q.Edge + Vector3.up * -Footing - origin;
-                    Vector3 pTop = new Vector3(p.Edge.x, p.Top, p.Edge.z) - origin, qTop = new Vector3(q.Edge.x, q.Top, q.Edge.z) - origin;
-                    Vector3 inward = -CurveMath.FlatNormal(p.Out + q.Out);
-                    Quad(vertices, normals, triangles, pBottom, qBottom, qTop, pTop, inward);
-                    Vector3 pBack = pTop + p.Out * Thickness, qBack = qTop + q.Out * Thickness;
-                    Quad(vertices, normals, triangles, pTop, qTop, qBack, pBack, Vector3.up);
-                    // The concrete top, out to where the ground is as high again.
-                    Vector3 pFar = pTop + p.Out * p.Reach, qFar = qTop + q.Out * q.Reach;
-                    Quad(vertices, normals, triangles, pBack, qBack, qFar, pFar, Vector3.up);
-                    // Where a run of wall starts or ends: its end closed.
+                    Vector3 pBottom, pTop, pFar, pFarBottom, qBottom, qTop, qFar, qFarBottom;
+                    Corners(p, origin, out pBottom, out pTop, out pFar, out pFarBottom);
+                    Corners(q, origin, out qBottom, out qTop, out qFar, out qFarBottom);
+                    Vector3 outward = CurveMath.FlatNormal(p.Out + q.Out);
+                    Quad(vertices, normals, triangles, pBottom, qBottom, qTop, pTop, -outward);
+                    Quad(vertices, normals, triangles, pTop, qTop, qFar, pFar, Vector3.up);
+                    Quad(vertices, normals, triangles, pFar, qFar, qFarBottom, pFarBottom, outward);
                     Vector3 along = CurveMath.FlatNormal(q.Edge - p.Edge);
                     if (k == 1 || !side[k - 2].Wall)
-                        Quad(vertices, normals, triangles, pBottom, pTop, pBack, pBottom + p.Out * Thickness, -along);
+                        Quad(vertices, normals, triangles, pBottom, pTop, pFar, pFarBottom, -along);
                     if (k == side.Length - 1 || !side[k + 1].Wall)
-                        Quad(vertices, normals, triangles, qBottom, qTop, qBack, qBottom + q.Out * Thickness, along);
+                        Quad(vertices, normals, triangles, qBottom, qTop, qFar, qFarBottom, along);
                 }
             if (vertices.Count == 0) return null;
             return DeckFrames.MakeMesh(vertices, normals, triangles, uv);
+        }
+
+        // A section's outline across the road (relative to 'origin'): the foot
+        // and top of the wall's face, and the far edge of its top and below it.
+        private static void Corners(Section s, Vector3 origin, out Vector3 bottom, out Vector3 top, out Vector3 far, out Vector3 farBottom)
+        {
+            bottom = s.Edge + Vector3.up * -Footing - origin;
+            top = new Vector3(s.Edge.x, s.Top, s.Edge.z) - origin;
+            Vector3 farEdge = s.Edge + s.Out * s.Reach;
+            far = new Vector3(farEdge.x, s.FarTop, farEdge.z) - origin;
+            farBottom = new Vector3(farEdge.x, s.Edge.y - Footing, farEdge.z) - origin;
         }
 
         // A face through four corners (in order round it), seen from 'normal'.

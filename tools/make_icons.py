@@ -254,9 +254,17 @@ d.rectangle(p(27, 10, 31, 34), fill=(200, 200, 205, 255))
 line(d, (13, 32, 27, 32), OURS, 4)
 save(im, "walls")
 
+# direction of the parallel line: two lanes, arrows opposite ways
+im, d = canvas()
+line(d, (13, 10, 13, 34), OURS, 3)
+d.polygon(p(7, 12, 19, 12, 13, 4), fill=OURS)
+line(d, (27, 6, 27, 30), DASH, 3)
+d.polygon(p(21, 28, 33, 28, 27, 36), fill=DASH)
+save(im, "direction")
+
 # preview sheet for checking by eye
 names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under",
-         "elevated", "auto", "reset", "parallel", "side", "beside", "upgrade", "walls"]
+         "elevated", "auto", "reset", "parallel", "side", "beside", "upgrade", "walls", "direction"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")

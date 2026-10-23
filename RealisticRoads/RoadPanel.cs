@@ -31,7 +31,8 @@ namespace RealisticRoads
         public float Gap;                         // metres between their edges
         public bool ParallelLeft;                 // it is on the left of the curve as drawn
         public string Beside = "";                // what it is
-        public bool BesideOther;                  // another road or track (not the same road the other way)
+        public bool BesideOther;                  // another road or track (or one being picked)
+        public bool ParallelReverse;              // it runs the other way
         public bool Upgrade;                      // changing an existing road instead of drawing one
         public bool Walls;                        // retaining walls along cuttings and lowered roads
     }
@@ -150,10 +151,10 @@ namespace RealisticRoads
         public Action ToggleSnap;
         public Action ToggleDeck, ToggleUnder;
         // The parallel line: on / off, the gap, which side, and what it is.
-        public Action ToggleParallel, FlipSide, PickBeside;
+        public Action ToggleParallel, FlipSide, PickBeside, FlipDirection;
         public Action<float> ChangeGap;
-        private UIButton parallelButton, sideButton, besideButton;
-        private UILabel gapLabel, besideLabel;
+        private UIButton parallelButton, sideButton, besideButton, directionButton;
+        private UILabel gapLabel;
         // Upgrade an existing road along a stretch; retaining walls on or off.
         public Action ToggleUpgrade, ToggleWalls;
         private UIButton upgradeButton, wallsButton;
@@ -291,13 +292,12 @@ namespace RealisticRoads
             float sx = gx + 64f + 2f * IconSize + 6f;
             sideButton = BarButton(Icons.Side, "<>", "Put the parallel road on the other side of the curve", sx, y,
                 () => { if (FlipSide != null) FlipSide(); });
-            besideButton = BarButton(Icons.Beside, "2", "What goes beside: pick a road or track in the game's menu, press this, " +
-                "then pick the curve's own road.\nPress again for the same road as the curve, running the other way", sx + IconSize + 3f, y,
+            besideButton = BarButton(Icons.Beside, "2", "Another road or track beside the curve: press this, then pick it in the game's menu " +
+                "(the curve keeps its own road).\nPress again to go back to the curve's own road", sx + IconSize + 3f, y,
                 () => { if (PickBeside != null) PickBeside(); });
-            besideLabel = BarLabel("", sx + 2f * IconSize + 6f, y + 2f, Width - Pad - (sx + 2f * IconSize + 6f));
-            besideLabel.wordWrap = true;
-            besideLabel.size = new Vector2(besideLabel.size.x, 28f);
-            besideLabel.textScale = 0.65f;
+            directionButton = BarButton(Icons.Direction, "Dir", "Which way the parallel line runs: the other way (a one-way pair, green) " +
+                "or the same way (a double track, a road and its tram or rail line)", sx + 2f * (IconSize + 3f), y,
+                () => { if (FlipDirection != null) FlipDirection(); });
 
             // Upgrade an existing road instead of drawing one; retaining walls.
             y += IconSize + 4f;
@@ -308,7 +308,10 @@ namespace RealisticRoads
             wallsButton = BarButton(Icons.Walls, "W", "Retaining walls along cuttings, tunnel ramps and the roads lowered for an " +
                 "overpass, up to the ground beside them (on: green)", Pad + IconSize + 3f, y,
                 () => { if (ToggleWalls != null) ToggleWalls(); });
-            toolsLabel = BarLabel("", Pad + 2f * IconSize + 10f, y + 8f, Width - 2f * Pad - 2f * IconSize - 10f);
+            toolsLabel = BarLabel("", Pad + 2f * IconSize + 10f, y + 1f, Width - 2f * Pad - 2f * IconSize - 10f);
+            toolsLabel.wordWrap = true;
+            toolsLabel.size = new Vector2(toolsLabel.size.x, 30f);
+            toolsLabel.textScale = 0.7f;
         }
 
         private UIButton BarButton(string icon, string letter, string tooltip, float x, float y, Action onClick)
@@ -406,7 +409,8 @@ namespace RealisticRoads
             Select(wallsButton, model.Walls);
             if (toolsLabel != null)
             {
-                string tools = (model.Upgrade ? "Upgrading a road" : "Drawing") + " · walls " + (model.Walls ? "on" : "off");
+                string tools = (model.Upgrade ? "Upgrading a road" : "Drawing") + " · walls " + (model.Walls ? "on" : "off") +
+                               (model.Parallel ? "\nParallel " + (model.ParallelLeft ? "left: " : "right: ") + model.Beside : "");
                 if (toolsLabel.text != tools) toolsLabel.text = tools;
             }
             if (gapLabel != null)
@@ -414,11 +418,7 @@ namespace RealisticRoads
                 string gap = model.Gap.ToString("0") + " m";
                 if (gapLabel.text != gap) gapLabel.text = gap;
             }
-            if (besideLabel != null)
-            {
-                string beside = model.Parallel ? (model.ParallelLeft ? "Left: " : "Right: ") + model.Beside : "Parallel off";
-                if (besideLabel.text != beside) besideLabel.text = beside;
-            }
+            Select(directionButton, model.Parallel && model.ParallelReverse);
             if (radiusLabel != null)
             {
                 string text = model.Radius < 0.5f ? "sharp" : model.Radius.ToString("0") + " m";
@@ -440,8 +440,8 @@ namespace RealisticRoads
             if (profileTexture != null) UnityEngine.Object.Destroy(profileTexture);
             panel = null;
             curveButton = straightButton = snapButton = deckButton = underButton = null;
-            parallelButton = sideButton = besideButton = null;
-            gapLabel = besideLabel = null;
+            parallelButton = sideButton = besideButton = directionButton = null;
+            gapLabel = null;
             upgradeButton = wallsButton = null;
             toolsLabel = null;
             radiusLabel = null;
