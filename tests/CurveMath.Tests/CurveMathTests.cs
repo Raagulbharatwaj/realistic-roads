@@ -662,4 +662,34 @@ public class CurveMathTests
         var d = CurveMath.Distances(new[] { V(0, 0), V(3, 4), V(3, 10) });
         Assert.Equal(new[] { 0f, 5f, 11f }, d);
     }
+
+    [Fact]
+    public void RoundCorners_JunctionCorner_IsSmoothAndKeepsEnds()
+    {
+        // Along one road east, then along a cross street north (a right angle at the junction).
+        var path = new List<Vector3>();
+        for (int x = 0; x <= 200; x += 4) path.Add(V(x, 0));
+        for (int z = 4; z <= 200; z += 4) path.Add(V(200, z));
+        var round = CurveMath.RoundCorners(path, 50f);
+        Assert.Equal(path[0], round[0]);
+        Assert.Equal(path[path.Count - 1], round[round.Count - 1]);
+        float sharpest = 0f;
+        for (int i = 1; i < round.Count - 1; i++)
+            sharpest = Math.Max(sharpest, CurveMath.BendAngle(round[i] - round[i - 1], round[i + 1] - round[i]));
+        Assert.True(sharpest < 8f, "sharpest turn " + sharpest);
+        // It cuts the corner: no point near the junction's middle.
+        foreach (var p in round) Assert.True(CurveMath.FlatDistance(p, V(200, 0)) > 10f);
+    }
+
+    [Fact]
+    public void RoundCorners_GentleCurve_StaysAsItIs()
+    {
+        var path = new List<Vector3>();
+        for (int i = 0; i <= 40; i++)
+        {
+            float a = i * 0.02f;
+            path.Add(V(200f * (float)Math.Sin(a), 200f * (1f - (float)Math.Cos(a))));
+        }
+        Assert.Equal(path, CurveMath.RoundCorners(path, 50f));
+    }
 }

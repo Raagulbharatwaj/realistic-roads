@@ -652,6 +652,83 @@ namespace RealisticRoads
             tangent = Vector3.zero;
         }
 
+        // A polyline with its sharp corners (where it turns minTurn degrees or
+        // more at one point, like a path along roads through a junction)
+        // rounded off: a curve tangent to both sides, as tight as 'radius' at
+        // most, shortened where corners or the ends are close. The ends stay.
+        public static List<Vector3> RoundCorners(IList<Vector3> polyline, float radius, float minTurn = 8f)
+        {
+            int n = polyline.Count;
+            var result = new List<Vector3>(polyline);
+            if (n < 3 || radius <= 0f) return result;
+            var along = new float[n];
+            for (int i = 1; i < n; i++) along[i] = along[i - 1] + FlatDistance(polyline[i - 1], polyline[i]);
+            float total = along[n - 1];
+
+            // The corners: runs of sharply turning points a few metres apart are one.
+            var apex = new List<int>();
+            var turnAt = new List<float>();
+            for (int i = 1; i < n - 1; i++)
+            {
+                Vector3 inDir = FlatNormal(polyline[i] - polyline[i - 1]), outDir = FlatNormal(polyline[i + 1] - polyline[i]);
+                if (inDir == Vector3.zero || outDir == Vector3.zero || BendAngle(inDir, outDir) < minTurn) continue;
+                int first = i, best = i;
+                float bestTurn = BendAngle(inDir, outDir);
+                while (i + 2 < n && along[i + 1] - along[i] < 6f)
+                {
+                    Vector3 nextOut = FlatNormal(polyline[i + 2] - polyline[i + 1]);
+                    float nextTurn = BendAngle(outDir, nextOut);
+                    if (nextOut == Vector3.zero || nextTurn < minTurn) break;
+                    i++;
+                    outDir = nextOut;
+                    if (nextTurn > bestTurn) { bestTurn = nextTurn; best = i; }
+                }
+                float turn = BendAngle(FlatNormal(polyline[first] - polyline[first - 1]), outDir);
+                if (turn < minTurn || turn > MaxRoundedTurn) continue;
+                apex.Add(best);
+                turnAt.Add(turn);
+            }
+            if (apex.Count == 0) return result;
+
+            // How far each rounding reaches either side: shared with the next corner, short of the ends.
+            var reach = new float[apex.Count];
+            for (int c = 0; c < apex.Count; c++)
+            {
+                float s = along[apex[c]];
+                float before = c > 0 ? (s - along[apex[c - 1]]) * 0.5f : s * 0.9f;
+                float after = c < apex.Count - 1 ? (along[apex[c + 1]] - s) * 0.5f : (total - s) * 0.9f;
+                reach[c] = Mathf.Min(radius * (float)Math.Tan(turnAt[c] * 0.5f / Rad2Deg), Mathf.Min(before, after));
+            }
+
+            result.Clear();
+            int corner = 0;
+            for (int i = 0; i < n; i++)
+            {
+                while (corner < apex.Count && reach[corner] < 0.5f) corner++;
+                if (corner < apex.Count && along[i] > along[apex[corner]] - reach[corner])
+                {
+                    float s = along[apex[corner]], d = reach[corner];
+                    Vector3 from, to, ignore;
+                    PointAt(polyline, s - d, out from, out ignore);
+                    PointAt(polyline, s + d, out to, out ignore);
+                    Vector3 control = polyline[apex[corner]];
+                    int steps = Math.Max(2, (int)Math.Ceiling(2f * d / ArcSampleSpacing));
+                    for (int k = 0; k <= steps; k++)
+                    {
+                        float t = k / (float)steps, u = 1f - t;
+                        Vector3 point = from * (u * u) + control * (2f * u * t) + to * (t * t);
+                        if (result.Count == 0 || FlatDistance(result[result.Count - 1], point) > 0.01f) result.Add(point);
+                    }
+                    // On past the rounding.
+                    while (i + 1 < n && along[i + 1] <= s + d) i++;
+                    corner++;
+                    continue;
+                }
+                result.Add(polyline[i]);
+            }
+            return result;
+        }
+
         // The part of a polyline between two distances along it.
         public static List<Vector3> Slice(IList<Vector3> polyline, float from, float to)
         {

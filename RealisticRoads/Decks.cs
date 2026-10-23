@@ -47,8 +47,9 @@ namespace RealisticRoads
         // none. 'ourHalfWidth': our deck's, for the props under it.
         // 'underground': for a deck under the road, the road at ground level
         // there (not one above it); one underground already is still returned,
-        // so the planner can refuse a second level.
-        public static DeckBelow Under(Vector3 p, float ourHalfWidth, bool underground = false)
+        // so the planner can refuse a second level. 'ignore': roads not looked
+        // at (our own deck where the new one joins it, not a road under it).
+        public static DeckBelow Under(Vector3 p, float ourHalfWidth, bool underground = false, ICollection<ushort> ignore = null)
         {
             var best = new DeckBelow();
             float bestHeight = float.MinValue;
@@ -56,6 +57,7 @@ namespace RealisticRoads
             var segments = NetManager.instance.m_segments.m_buffer;
             foreach (ushort segment in RoadPlanner.NearbySegments(p, Search))
             {
+                if (ignore != null && ignore.Contains(segment)) continue;
                 var info = segments[segment].Info;
                 if (info == null || info.m_class == null || !CrossingFinder.IsPhysical(info)) continue;
                 Vector3 onRoad;
