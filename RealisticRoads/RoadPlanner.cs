@@ -71,6 +71,8 @@ namespace RealisticRoads
         public ushort StartSegment, EndSegment;
         public float StartT, EndT;
         public bool Ok => Problems.Count == 0;
+        public bool GradeProblem;             // it doesn't fit at its grade (a steeper one may do)
+        public float Grade;                   // the grade it was planned at
     }
 
     // Main thread: works out heights and road versions for a curve.
@@ -80,7 +82,13 @@ namespace RealisticRoads
         // (trains can't climb road grades). Set by Make; one plan at a time per thread.
         public const float RoadGrade = 0.04f;
         public const float RailGrade = 0.035f;
+        // Where a road doesn't fit at its usual grade it may go up to this
+        // (any road, track or path, and a road or rail lowered for an
+        // overpass), with a warning. Rail steeper than RailWarnGrade is warned.
+        public const float SteepGrade = 0.045f;
+        public const float RailWarnGrade = 0.02f;
         [ThreadStatic] private static float maxGrade;
+        [ThreadStatic] private static bool steepGrades;
         public static float MaxGrade => maxGrade > 0f ? maxGrade : RoadGrade;
         private const float MaxDeckHeight = 60f;      // higher than this above the ground: warned
         private const float EmbankmentHeight = 3f;    // up to this a ramp stays the ground version on an embankment
@@ -112,6 +120,53 @@ namespace RealisticRoads
             List<KeyValuePair<Vector3, float>> lifts = null, List<Vector3> inTangents = null,
             bool[] onDeck = null, DeckBelow[] decks = null, bool[] underDeck = null,
             List<KeyValuePair<Vector3, float>> dragged = null, Forced[] forced = null)
+        {
+            // At the usual grades; if it only fails for want of room to ramp,
+            // again at up to SteepGrade.
+            steepGrades = false;
+            var plan = MakeAt(info, points, tangents, crossings, crossingIndex, waterRuns, startNode, endNode, startSegment, startT,
+                endSegment, endT, lifts, inTangents, onDeck, decks, underDeck, dragged, forced);
+            if (!plan.Ok && plan.GradeProblem)
+            {
+                steepGrades = true;
+                var steep = MakeAt(info, points, tangents, crossings, crossingIndex, waterRuns, startNode, endNode, startSegment, startT,
+                    endSegment, endT, lifts, inTangents, onDeck, decks, underDeck, dragged, forced);
+                steepGrades = false;
+                if (steep.Ok)
+                {
+                    steep.Warnings.Insert(0, "No room at the usual grades (roads " + Percent(RoadGrade) + ", rail " + Percent(RailGrade) +
+                                             ", rail lowered under it " + Percent(LoweredRailGrade) + "): ramps up to " + Percent(SteepGrade));
+                    plan = steep;
+                }
+            }
+            maxGrade = plan.Grade;
+            // Rail steeper than RailWarnGrade anywhere: said, so it's a choice.
+            if (IsRail(info) && plan.Points != null)
+            {
+                float steepest = 0f;
+                for (int i = 1; i < plan.Points.Count; i++)
+                {
+                    float run = CurveMath.FlatDistance(plan.Points[i - 1], plan.Points[i]);
+                    if (run > 1f) steepest = Mathf.Max(steepest, Mathf.Abs(plan.Points[i].y - plan.Points[i - 1].y) / run);
+                }
+                if (steepest > RailWarnGrade + 0.001f)
+                    plan.Warnings.Add("Rail steeper than " + Percent(RailWarnGrade) + " in places (up to " + Percent(steepest) +
+                                      "): heavy trains climb it slowly");
+            }
+            return plan;
+        }
+
+        private static string Percent(float grade)
+        {
+            return (grade * 100f).ToString("0.#") + " %";
+        }
+
+        private static Plan MakeAt(NetInfo info, List<Vector3> points, List<Vector3> tangents,
+            List<Crossing> crossings, List<int> crossingIndex, List<WaterRun> waterRuns, ushort startNode, ushort endNode,
+            ushort startSegment, float startT, ushort endSegment, float endT,
+            List<KeyValuePair<Vector3, float>> lifts, List<Vector3> inTangents,
+            bool[] onDeck, DeckBelow[] decks, bool[] underDeck,
+            List<KeyValuePair<Vector3, float>> dragged, Forced[] forced)
         {
             var plan = new Plan
             {
@@ -149,7 +204,8 @@ namespace RealisticRoads
             var forceBridge = new bool[n];  // deck over a lowered road (overpass)
             var underWater = new bool[n];   // in a water crossing chosen as a tunnel
 
-            maxGrade = GradeFor(info);
+            maxGrade = steepGrades ? SteepGrade : GradeFor(info);
+            plan.Grade = maxGrade;
             // Raised parts use the elevated version, else the bridge one (InfoFor).
             bool hasBridge = InfoFor(info, NodeKind.Bridge) != null && InfoFor(info, NodeKind.Bridge) != info;
             bool hasElevated = hasBridge;
@@ -381,8 +437,11 @@ namespace RealisticRoads
                 }
             }
             if (!solved)
+            {
+                plan.GradeProblem = true;
                 plan.Problems.Add(RampProblem(crossings, crossingIndex, distance, ground, minH, maxH) +
                                   (shaped ? ". Or ease what you set in the side view (right-click a held height to free it; Auto clears a stretch)" : ""));
+            }
 
             // Plain ground: small embankments and cuttings keep the road within its
             // own slope limit; what is still steeper is built anyway and marked.
@@ -745,7 +804,7 @@ namespace RealisticRoads
                 var lead = plan.Crossings[first];
                 var existing = NetManager.instance.m_segments.m_buffer[lead.Segment].Info;
                 bool rail = IsRail(existing);
-                float grade = rail ? LoweredRailGrade : RoadGrade;
+                float grade = steepGrades ? SteepGrade : rail ? LoweredRailGrade : RoadGrade;
                 float depth = CutDepth + (rail ? WireDepth : 0f);
                 float ramp = depth / grade + 10f;
 
@@ -779,10 +838,13 @@ namespace RealisticRoads
 
                 string problem;
                 if (!LowerGroup(plan, info, line, group, at, grade, depth, out problem))
+                {
+                    if (problem.StartsWith("Not enough room")) plan.GradeProblem = true;
                     plan.Problems.Add(problem.StartsWith("Not enough room")
                         ? problem + " (needs about " + ramp.ToString("F0") + " m of plain " + (rail ? "track" : "road") +
                           " each side at " + (grade * 100f).ToString("0.#") + " %)"
                         : problem);
+                }
             }
         }
 

@@ -133,6 +133,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      (~485 m of plain track each side) and 1.5 m deeper in the middle, so its wires clear the deck. The crossing
      gets one new node (none if one is already there). Several overpasses over the same line whose ramps would
      meet share one lowered stretch: the line stays down between them instead of rising and dipping again;
+   - **steeper where it must**: where a road, or the line it lowers, has no room to ramp at these grades, it is
+     planned again at up to 4.5 %, with a warning in the panel. Rail steeper than 2 % anywhere is always warned;
    - **underpass**: the existing road gets a short bridge, ours is dug 8 m down into an open cutting under it.
      The bridge adds as few nodes as possible: it runs on to a node just past its end, or a plain node nearby (up
      to 80 m away on rail, 30 m on a road) is slid along the line to the bridge's end. Only where neither works is a
