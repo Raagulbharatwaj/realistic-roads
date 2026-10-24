@@ -746,6 +746,14 @@ namespace RealisticRoads
             pointRoad.Add(deckMode ? aimRoad : (ushort)0);
             pointRoadT.Add(aimRoadT);
             choicesVersion++;
+            // A ramp's first point on a road: what the game lets us do with that road
+            // (for ramps in a road's middle, logged once).
+            if (rampMode && points.Count == 1 && (aimNode != 0 || aimSegment != 0))
+            {
+                var net = NetManager.instance;
+                var road = aimNode != 0 ? net.m_nodes.m_buffer[aimNode].Info : net.m_segments.m_buffer[aimSegment].Info;
+                SplitRoadProbe.Probe(road, SelectedNetwork);
+            }
             Mod.Log("Point " + points.Count + " at " + Format(aimPosition) + (straightMode ? " (straight)" : "") +
                     (deckMode ? (underMode ? " (under" : " (deck") + (aimRoad != 0 ? (underMode ? " #" : " over #") + aimRoad : "") + ")" : "") +
                     (aimNode != 0 ? " (on node #" + aimNode + ")" : ""));
