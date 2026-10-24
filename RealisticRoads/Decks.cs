@@ -636,8 +636,8 @@ namespace RealisticRoads
             return true;
         }
 
-        // Where on its texture a pillar's sides are: the u, v range of its
-        // upright faces (not its top or underside). A mesh that can't be read
+        // Where on its texture a pillar's side is: the u, v range of its largest
+        // upright face (not its top or underside). A mesh that can't be read
         // gives one spot (the frame is then one colour, as before).
         private static Vector4 SideTexture(Mesh mesh)
         {
@@ -649,18 +649,44 @@ namespace RealisticRoads
                 var vertices = mesh.vertices;
                 var triangles = mesh.triangles;
                 if (uvs == null || vertices == null || triangles == null || uvs.Length != vertices.Length || uvs.Length == 0) return fallback;
-                float minU = float.MaxValue, minV = float.MaxValue, maxU = float.MinValue, maxV = float.MinValue;
+                // The largest upright triangle: a patch of the pillar's side. Its
+                // texture part is the u, v range of it and the triangles facing the
+                // same way that share a corner with it (the other half of its face),
+                // not every side (a texture may hold several patches).
+                int largest = -1;
+                float largestArea = 0f;
+                Vector3 largestNormal = Vector3.zero;
                 for (int i = 0; i + 2 < triangles.Length; i += 3)
                 {
                     Vector3 a = vertices[triangles[i]], b = vertices[triangles[i + 1]], c = vertices[triangles[i + 2]];
                     Vector3 normal = Vector3.Cross(b - a, c - a);
-                    float length = normal.magnitude;
-                    if (length < 1e-6f || Mathf.Abs(normal.y / length) > 0.3f) continue;   // a top or an underside
-                    for (int k = 0; k < 3; k++)
+                    float area = normal.magnitude;
+                    if (area < 1e-6f || Mathf.Abs(normal.y / area) > 0.3f) continue;   // a top or an underside
+                    if (area <= largestArea) continue;
+                    largestArea = area;
+                    largest = i;
+                    largestNormal = normal / area;
+                }
+                float minU = float.MaxValue, minV = float.MaxValue, maxU = float.MinValue, maxV = float.MinValue;
+                if (largest >= 0)
+                {
+                    var corners = new HashSet<int> { triangles[largest], triangles[largest + 1], triangles[largest + 2] };
+                    for (int i = 0; i + 2 < triangles.Length; i += 3)
                     {
-                        Vector2 uv = uvs[triangles[i + k]];
-                        minU = Mathf.Min(minU, uv.x); maxU = Mathf.Max(maxU, uv.x);
-                        minV = Mathf.Min(minV, uv.y); maxV = Mathf.Max(maxV, uv.y);
+                        if (i != largest)
+                        {
+                            if (!corners.Contains(triangles[i]) && !corners.Contains(triangles[i + 1]) && !corners.Contains(triangles[i + 2])) continue;
+                            Vector3 a = vertices[triangles[i]], b = vertices[triangles[i + 1]], c = vertices[triangles[i + 2]];
+                            Vector3 normal = Vector3.Cross(b - a, c - a);
+                            float area = normal.magnitude;
+                            if (area < 1e-6f || Vector3.Dot(normal / area, largestNormal) < 0.99f) continue;
+                        }
+                        for (int k = 0; k < 3; k++)
+                        {
+                            Vector2 uv = uvs[triangles[i + k]];
+                            minU = Mathf.Min(minU, uv.x); maxU = Mathf.Max(maxU, uv.x);
+                            minV = Mathf.Min(minV, uv.y); maxV = Mathf.Max(maxV, uv.y);
+                        }
                     }
                 }
                 if (minU > maxU) return new Vector4(uvs[0].x, uvs[0].y, uvs[0].x, uvs[0].y);

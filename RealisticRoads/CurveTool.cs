@@ -1038,6 +1038,9 @@ namespace RealisticRoads
                 else if (e.keyCode == KeyCode.Escape)
                 {
                     e.Use();
+                    // Esc also stops waiting for a road for beside the curve (not
+                    // ClearPoints: picking it in the menu leaves and reopens the tool).
+                    pickingBeside = false;
                     if (points.Count > 0 || upgradePoints.Count > 0)
                     {
                         ClearPoints();
@@ -1569,6 +1572,7 @@ namespace RealisticRoads
         // them (in their traffic's direction), turned RampAngle off them.
         private bool rampMode;
         private const float RampAngle = 12f;
+        private const float MedianRampAngle = 25f;
         private readonly List<UpgradePoint> upgradePoints = new List<UpgradePoint>();
         private UpgradePlan upgradePlan;          // the preview
 
@@ -1585,9 +1589,16 @@ namespace RealisticRoads
         // road: the way the ramp heads), turned up to RampAngle towards the
         // ramp. False (with a note) where it can't: no road there, or a ramp
         // drawn against a one-way road's traffic.
-        private static bool RampDirection(ushort node, ushort segment, float t, Vector3 heading, out Vector3 direction, ref string note)
+        // A ramp heading along a two-way road (within MedianRampAngle) rises out
+        // of its middle ('median'): it leaves along the road's centre line, not
+        // turned off it; 'road' and 'roadT' are where on the road it starts.
+        private static bool RampDirection(ushort node, ushort segment, float t, Vector3 heading, out Vector3 direction, ref string note,
+            out bool median, out ushort road, out float roadT)
         {
             direction = Vector3.zero;
+            median = false;
+            road = 0;
+            roadT = t;
             heading = CurveMath.FlatNormal(heading);
             if (heading == Vector3.zero) return false;
             var net = NetManager.instance;
@@ -1609,6 +1620,7 @@ namespace RealisticRoads
                     best = dot;
                     segment = s;
                     along = atStart ? away : -away;
+                    roadT = atStart ? 0f : 1f;
                 }
             }
             else if (segment != 0)
@@ -1619,14 +1631,15 @@ namespace RealisticRoads
             }
             else return false;
             if (segment == 0 || along == Vector3.zero) return false;
+            road = segment;
 
-            Vector3 road;
+            Vector3 way;
             int traffic = TrafficWay(segment);
-            if (traffic == 0) road = Vector3.Dot(along, heading) >= 0f ? along : -along;
+            if (traffic == 0) way = Vector3.Dot(along, heading) >= 0f ? along : -along;
             else
             {
-                road = along * traffic;
-                if (Vector3.Dot(road, heading) < 0f)
+                way = along * traffic;
+                if (Vector3.Dot(way, heading) < 0f)
                 {
                     var info = segments[segment].Info;
                     note = "The ramp runs against the one-way traffic on the " + (info != null ? info.name : "road") +
@@ -1634,9 +1647,21 @@ namespace RealisticRoads
                     return false;
                 }
             }
-            float turn = Mathf.Clamp(CurveMath.SignedAngle(road, heading), -RampAngle, RampAngle);
-            direction = CurveMath.Rotate(road, turn);
+            if (traffic == 0 && Mathf.Abs(CurveMath.SignedAngle(way, heading)) <= MedianRampAngle)
+            {
+                median = true;
+                direction = way;
+                return true;
+            }
+            float turn = Mathf.Clamp(CurveMath.SignedAngle(way, heading), -RampAngle, RampAngle);
+            direction = CurveMath.Rotate(way, turn);
             return true;
+        }
+
+        // Vehicle lanes, both ways.
+        private static int VehicleLanes(NetInfo info)
+        {
+            return info == null ? 0 : info.m_forwardVehicleLaneCount + info.m_backwardVehicleLaneCount;
         }
 
         // Which way a road's traffic runs along it: 1 from its start node to its
@@ -2143,6 +2168,37 @@ namespace RealisticRoads
             // Span i (point i to i+1) is straight if point i+1 was placed in straight mode.
             var straight = new List<bool>();
             for (int i = 1; i <= n; i++) straight.Add(i < pointModes.Count && pointModes[i]);
+            // A ramp leaves and joins the roads at its ends along them; one rising
+            // out of a two-way road's middle follows its centre line, and has
+            // fewer lanes than it (it takes the middle ones).
+            string rampNote = null, rampProblem = null;
+            Vector3 rampStart = Vector3.zero, rampEnd = Vector3.zero;
+            if (rampMode)
+            {
+                roads = new List<ushort>(roads);
+                roadTs = new List<float>(roadTs);
+                for (int e = 0; e < 2; e++)
+                {
+                    int k = e == 0 ? 0 : n;
+                    Vector3 heading = e == 0 ? controls[1] - controls[0] : controls[n] - controls[n - 1];
+                    Vector3 along;
+                    bool median;
+                    ushort road;
+                    float roadT;
+                    if (!RampDirection(nodes[k], segments[k], ts[k], heading, out along, ref rampNote, out median, out road, out roadT)) continue;
+                    if (e == 0) rampStart = along; else rampEnd = along;
+                    if (!median) continue;
+                    roads[k] = road;
+                    roadTs[k] = roadT;
+                    var ground = NetManager.instance.m_segments.m_buffer[road].Info;
+                    if (VehicleLanes(SelectedNetwork) >= VehicleLanes(ground))
+                        rampProblem = "A ramp rising out of the middle of the " + (ground != null ? ground.name : "road") + " (" + VehicleLanes(ground) +
+                                      " lanes) takes its middle lanes: pick a road with fewer lanes for it" +
+                                      (VehicleLanes(ground) > 4 ? " (2 or 4)" : VehicleLanes(ground) > 2 ? " (2)" : "");
+                }
+                if ((nodes[0] == 0 && segments[0] == 0) || (nodes[n] == 0 && segments[n] == 0))
+                    rampNote = rampNote ?? "A ramp starts on the road it leaves and ends on the road it joins: snap both ends to roads";
+            }
             // Deck pieces; one between two deck points on roads follows those roads.
             var deck = new List<bool>();
             var below = new List<bool>();      // of those, the ones under the road
@@ -2168,16 +2224,8 @@ namespace RealisticRoads
             // A straight end piece meets the road there at its own angle; a curved one may continue it.
             Vector3 startDir = straight[0] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[0], controls[1] - controls[0], true);
             Vector3 endDir = straight[n - 1] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[n], controls[n] - controls[n - 1], false);
-            // A ramp leaves and joins the roads at its ends along them.
-            string rampNote = null;
-            if (rampMode)
-            {
-                Vector3 along;
-                if (RampDirection(nodes[0], segments[0], ts[0], controls[1] - controls[0], out along, ref rampNote)) startDir = along;
-                if (RampDirection(nodes[n], segments[n], ts[n], controls[n] - controls[n - 1], out along, ref rampNote)) endDir = along;
-                if ((nodes[0] == 0 && segments[0] == 0) || (nodes[n] == 0 && segments[n] == 0))
-                    rampNote = rampNote ?? "A ramp starts on the road it leaves and ends on the road it joins: snap both ends to roads";
-            }
+            if (rampStart != Vector3.zero) startDir = rampStart;
+            if (rampEnd != Vector3.zero) endDir = rampEnd;
 
             var division = DivideShaped(controls, startDir, endDir, nodes[0], nodes[n], lifts, straight, deck, below, paths, under);
             division.Continues = startDir != Vector3.zero || endDir != Vector3.zero;
@@ -2202,6 +2250,7 @@ namespace RealisticRoads
             division.Lifts = lifts;
             PlanDivision(division, nodes[0], nodes[n], startSegment, ts[0], endSegment, ts[n], raisedPoints);
             if (rampNote != null && division.Plan != null) division.Plan.Warnings.Insert(0, rampNote);
+            if (rampProblem != null && division.Plan != null) division.Plan.Problems.Insert(0, rampProblem);
             return division;
         }
 
