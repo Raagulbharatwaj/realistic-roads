@@ -100,6 +100,12 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      so it peels off and merges in like a real slip lane instead of meeting it at an angle. The heights between come
      from the two roads and are planned like any curve (crossings, the usual grades, up to 4.5 % where there is no
      room). Drawn against a one-way road's traffic, or with an end not on a road, the panel says so;
+     A ramp drawn along a two-way road from a point it goes on past (not its dead end) rises out of its **middle**,
+     VOP-style: it leaves along the centre line, takes the road's inner lanes (it must have fewer lanes than the road),
+     and the road under it becomes a **split** copy of itself (its inner lanes, median and median lights cut out,
+     made from the game's own road while a city loads, hidden from the menus) until the ramp is 5.5 m up. Where the
+     split road and the ramp leave a node together, both end square there. The game's own two-way roads with two
+     or more lanes each way have split copies; a city saved with them needs this mod to load them;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,
