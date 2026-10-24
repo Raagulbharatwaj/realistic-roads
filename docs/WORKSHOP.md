@@ -30,7 +30,7 @@ Draw a whole route in one go, see it planned from the side, choose how it crosse
 [*][b]See it before you build it:[/b] when you finish drawing, the road stays as a plan. Drag its points, check the side panel, and only then build. Ctrl+Z undoes the whole road.
 [*][b]Every crossing is listed and numbered[/b] in order along the road, on the map and in the panel, each with its choices: level junction, bridge, overpass, underpass or tunnel.
 [*][b]Side view:[/b] the road against the ground and water. Drag a point's height up or down, or make a stretch (or the whole road) Elevated or Tunnel; the road ramps to it at its grade.
-[*][b]Realistic grades and clearances:[/b] 4 % ramps for roads, gentle slopes for lowered rail, 9 m under flyovers, extra room over rail wires, and 20 m over ship routes.
+[*][b]Realistic grades and clearances:[/b] 4 % ramps for roads, gentle slopes for lowered rail (up to 4.5 % where there is no room, with a warning), 9 m under flyovers, extra room over rail wires, and 20 m over ship routes.
 [/list]
 
 [h2]Add layers to your city[/h2]
@@ -41,6 +41,7 @@ Draw a whole route in one go, see it planned from the side, choose how it crosse
 [*][b]Water:[/b] bridges over rivers and sea, raised for ship routes, or a tunnel under the water bed.
 [*][b]Double-decker roads:[/b] build a road on top of an existing one, on columns in its median or frames across it, clear of its street lights.
 [*][b]Underground deck:[/b] run a road or metro line one level under an existing street, like most real cities.
+[*][b]Slip ramps:[/b] draw an on or off ramp between two roads at any levels; it peels off and merges in along them, at a realistic grade.
 [/list]
 
 [h2]How to use[/h2]

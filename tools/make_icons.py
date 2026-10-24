@@ -245,6 +245,14 @@ d.polygon(p(28, 30, 38, 30, 33, 21), fill=DASH)
 line(d, (33, 29, 33, 37), DASH, 3)
 save(im, "upgrade")
 
+# ramp: a slip ramp leaving a road at a shallow angle and curving away
+im, d = canvas()
+line(d, (12, 4, 12, 38), EXIST, 6)
+line(d, (13, 34, 18, 22), OURS, 5)
+d.arc(p(18, 6, 50, 38), 180, 270, fill=OURS, width=int(5 * S))
+line(d, (34, 6, 38, 6), OURS, 5)
+save(im, "ramp")
+
 
 # direction of the parallel line: two lanes, arrows opposite ways
 im, d = canvas()
@@ -256,7 +264,7 @@ save(im, "direction")
 
 # preview sheet for checking by eye
 names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under",
-         "elevated", "auto", "reset", "parallel", "side", "beside", "upgrade", "direction"]
+         "elevated", "auto", "reset", "parallel", "side", "beside", "upgrade", "direction", "ramp"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")

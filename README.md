@@ -93,6 +93,13 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      many segments and metres change and the cost (the new road's price less the old one's); Enter or the check mark
      upgrades, one Ctrl+Z puts the old road back. Nodes between upgraded segments become the new road too (pillars
      follow); nodes at junctions with other roads are left to them;
+     A one-way or uneven road is built from the first point towards the second;
+   - **Ramp** (next to Upgrade): a slip ramp between two roads at any levels. Start on the road it leaves and end on
+     the road it joins (a node or the middle of a road), in the direction its traffic goes. At each end the ramp runs
+     along that road, the way its traffic goes (on a two-way road, the way the ramp heads), turned 12 degrees off it,
+     so it peels off and merges in like a real slip lane instead of meeting it at an angle. The heights between come
+     from the two roads and are planned like any curve (crossings, the usual grades, up to 4.5 % where there is no
+     room). Drawn against a one-way road's traffic, or with an end not on a road, the panel says so;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,
@@ -133,6 +140,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      (~485 m of plain track each side) and 1.5 m deeper in the middle, so its wires clear the deck. The crossing
      gets one new node (none if one is already there). Several overpasses over the same line whose ramps would
      meet share one lowered stretch: the line stays down between them instead of rising and dipping again;
+   - **steeper where it must**: where a road, or the line it lowers, has no room to ramp at these grades, it is
+     planned again at up to 4.5 %, with a warning in the panel. Rail steeper than 2 % anywhere is always warned;
    - **underpass**: the existing road gets a short bridge, ours is dug 8 m down into an open cutting under it.
      The bridge adds as few nodes as possible: it runs on to a node just past its end, or a plain node nearby (up
      to 80 m away on rail, 30 m on a road) is slid along the line to the bridge's end. Only where neither works is a
