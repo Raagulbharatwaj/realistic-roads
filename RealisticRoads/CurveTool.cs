@@ -746,14 +746,6 @@ namespace RealisticRoads
             pointRoad.Add(deckMode ? aimRoad : (ushort)0);
             pointRoadT.Add(aimRoadT);
             choicesVersion++;
-            // A ramp's first point on a road: what the game lets us do with that road
-            // (for ramps in a road's middle, logged once).
-            if (rampMode && points.Count == 1 && (aimNode != 0 || aimSegment != 0))
-            {
-                var net = NetManager.instance;
-                var road = aimNode != 0 ? net.m_nodes.m_buffer[aimNode].Info : net.m_segments.m_buffer[aimSegment].Info;
-                SplitRoadProbe.Probe(road, SelectedNetwork);
-            }
             Mod.Log("Point " + points.Count + " at " + Format(aimPosition) + (straightMode ? " (straight)" : "") +
                     (deckMode ? (underMode ? " (under" : " (deck") + (aimRoad != 0 ? (underMode ? " #" : " over #") + aimRoad : "") + ")" : "") +
                     (aimNode != 0 ? " (on node #" + aimNode + ")" : ""));
@@ -1604,10 +1596,14 @@ namespace RealisticRoads
             var net = NetManager.instance;
             var segments = net.m_segments.m_buffer;
             Vector3 along;   // the road's direction there, from its start node to its end node
+            // The road goes on both ahead of and behind the point, along the
+            // ramp: the ramp can rise out of (or land in) its middle. At a road's
+            // dead end (a deck's end) the ramp just continues it.
+            bool through = true;
             if (node != 0)
             {
                 // At a node: the road there that runs most nearly the ramp's way.
-                float best = -2f;
+                float best = -2f, behind = 2f;
                 along = Vector3.zero;
                 for (int i = 0; i < 8; i++)
                 {
@@ -1616,12 +1612,15 @@ namespace RealisticRoads
                     bool atStart = segments[s].m_startNode == node;
                     Vector3 away = CurveMath.FlatNormal(atStart ? segments[s].m_startDirection : segments[s].m_endDirection);
                     float dot = Vector3.Dot(away, heading);
+                    behind = Mathf.Min(behind, dot);
                     if (dot <= best) continue;
                     best = dot;
                     segment = s;
                     along = atStart ? away : -away;
                     roadT = atStart ? 0f : 1f;
                 }
+                float along25 = Mathf.Cos(MedianRampAngle * Mathf.Deg2Rad);
+                through = best >= along25 && behind <= -along25;
             }
             else if (segment != 0)
             {
@@ -1647,7 +1646,7 @@ namespace RealisticRoads
                     return false;
                 }
             }
-            if (traffic == 0 && Mathf.Abs(CurveMath.SignedAngle(way, heading)) <= MedianRampAngle)
+            if (traffic == 0 && through && Mathf.Abs(CurveMath.SignedAngle(way, heading)) <= MedianRampAngle)
             {
                 median = true;
                 direction = way;
@@ -2172,6 +2171,7 @@ namespace RealisticRoads
             // out of a two-way road's middle follows its centre line, and has
             // fewer lanes than it (it takes the middle ones).
             string rampNote = null, rampProblem = null;
+            NetInfo medianStart = null, medianEnd = null;   // the roads a ramp rises out of (or lands in) the middle of
             Vector3 rampStart = Vector3.zero, rampEnd = Vector3.zero;
             if (rampMode)
             {
@@ -2191,6 +2191,7 @@ namespace RealisticRoads
                     roads[k] = road;
                     roadTs[k] = roadT;
                     var ground = NetManager.instance.m_segments.m_buffer[road].Info;
+                    if (e == 0) medianStart = ground; else medianEnd = ground;
                     if (VehicleLanes(SelectedNetwork) >= VehicleLanes(ground))
                         rampProblem = "A ramp rising out of the middle of the " + (ground != null ? ground.name : "road") + " (" + VehicleLanes(ground) +
                                       " lanes) takes its middle lanes: pick a road with fewer lanes for it" +
@@ -2251,6 +2252,15 @@ namespace RealisticRoads
             PlanDivision(division, nodes[0], nodes[n], startSegment, ts[0], endSegment, ts[n], raisedPoints);
             if (rampNote != null && division.Plan != null) division.Plan.Warnings.Insert(0, rampNote);
             if (rampProblem != null && division.Plan != null) division.Plan.Problems.Insert(0, rampProblem);
+            if (division.Plan != null)
+            {
+                division.Plan.MedianStart = medianStart;
+                division.Plan.MedianEnd = medianEnd;
+                var split = SplitRoads.For(medianStart ?? medianEnd, SplitRoads.RampLanes(Net));
+                if ((medianStart != null || medianEnd != null) && split == null)
+                    division.Plan.Warnings.Add("The " + (medianStart ?? medianEnd).name + " has no split version (only the game's own two-way roads " +
+                                               "with two or more lanes each way do): the ramp rises out of the plain road");
+            }
             return division;
         }
 

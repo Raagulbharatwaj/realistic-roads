@@ -173,6 +173,89 @@ namespace RealisticRoads
             }
         }
 
+        // Simulation thread. The road the ramp rises out of (atStart) or lands in
+        // (the end), from the ramp's end node along under it, becomes its split
+        // copy (the middle cut out) as far as the ramp takes to climb
+        // SplitRoads.SplitClear: whole segments, then a cut in the last. Not
+        // past a junction. Undone with the build.
+        private static void SplitUnderRamp(List<Vector3> points, ushort[] nodeIds, bool atStart, NetInfo ramp, Build build)
+        {
+            const float MinPiece = 8f;
+            var net = NetManager.instance;
+            var segments = net.m_segments.m_buffer;
+            var nodes = net.m_nodes.m_buffer;
+            int last = points.Count - 1, k0 = atStart ? 0 : last, step = atStart ? 1 : -1;
+            if (last < 1) return;
+            ushort node = nodeIds[k0];
+            if (!NodeExists(node)) return;
+
+            // How far along the ramp it is SplitClear above where it leaves the road.
+            float baseY = points[k0].y, along = 0f, length = -1f;
+            for (int k = k0 + step; k >= 0 && k <= last; k += step)
+            {
+                float run = CurveMath.FlatDistance(points[k - step], points[k]);
+                float before = points[k - step].y - baseY, rise = points[k].y - baseY;
+                if (rise >= SplitRoads.SplitClear)
+                {
+                    float f = rise - before > 0.01f ? (SplitRoads.SplitClear - before) / (rise - before) : 1f;
+                    length = along + run * Mathf.Clamp01(f);
+                    break;
+                }
+                along += run;
+            }
+            if (length < 0f) length = along;   // never that high: under all of it
+            Vector3 heading = CurveMath.FlatNormal(points[k0 + step] - points[k0]);
+
+            float left = length, done = 0f;
+            int pieces = 0;
+            string roadName = null;
+            float ahead = Mathf.Cos(25f * Mathf.Deg2Rad);
+            for (int guard = 0; guard < 16 && left > MinPiece; guard++)
+            {
+                // The road going on from the node under the ramp (not the ramp itself).
+                ushort segment = 0;
+                float best = ahead;
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort s = nodes[node].GetSegment(i);
+                    if (s == 0 || build.Segments.Contains(s) || SplitRoads.For(segments[s].Info, SplitRoads.RampLanes(ramp)) == null) continue;
+                    Vector3 away = CurveMath.FlatNormal(segments[s].m_startNode == node ? segments[s].m_startDirection : segments[s].m_endDirection);
+                    float dot = Vector3.Dot(away, heading);
+                    if (dot <= best) continue;
+                    best = dot;
+                    segment = s;
+                }
+                if (segment == 0) break;
+                var road = segments[segment].Info;
+                var split = SplitRoads.For(road, SplitRoads.RampLanes(ramp));
+                roadName = road.name;
+                float length2 = Mathf.Max(segments[segment].m_averageLength, 1f);
+                bool fromStart = segments[segment].m_startNode == node;
+                ushort far = fromStart ? segments[segment].m_endNode : segments[segment].m_startNode;
+                if (left >= length2 - MinPiece)
+                {
+                    SplitSegment(segment, new float[0], new[] { split }, build);
+                    pieces++;
+                    left -= length2;
+                    done += length2;
+                    if (SegmentCount(far) != 2) break;   // a junction: the split stops there
+                    heading = CurveMath.FlatNormal(nodes[far].m_position - nodes[node].m_position);
+                    node = far;
+                    continue;
+                }
+                float t = fromStart ? left / length2 : 1f - left / length2;
+                SplitSegment(segment, new[] { t }, fromStart ? new[] { split, road } : new[] { road, split }, build);
+                pieces++;
+                done += left;
+                break;
+            }
+            if (pieces > 0)
+                Mod.Log("  Split " + roadName + " under the ramp: " + done.ToString("F0") + " m in " + pieces + " piece(s), " +
+                        "until the ramp is " + SplitRoads.SplitClear.ToString("F1") + " m up");
+            else
+                Mod.Log("  No road to split under the ramp (it rises out of the plain road)");
+        }
+
         private static void SetNodeInfo(ushort node, NetInfo info)
         {
             if (info == null) return;
@@ -447,6 +530,21 @@ namespace RealisticRoads
                     Mod.Log("  " + bridges + " bridge, " + elevated + " elevated, " + tunnels + " tunnel/slope segment(s)");
                 for (int c = 0; c < plan.Crossings.Count; c++)
                     Mod.Log("  Crossing " + (c + 1) + " with " + plan.Crossings[c].ExistingName + ": " + plan.Crossings[c].Describe());
+
+                // A ramp rising out of a road's middle: that road split under it until
+                // it is high enough. A split that fails never undoes the ramp.
+                foreach (bool atStart in new[] { true, false })
+                {
+                    if ((atStart ? plan.MedianStart : plan.MedianEnd) == null) continue;
+                    try
+                    {
+                        SplitUnderRamp(points, nodeIds, atStart, info, build);
+                    }
+                    catch (Exception e)
+                    {
+                        Mod.LogError("Splitting the road under the ramp failed; it rises out of the plain road", e);
+                    }
+                }
 
                 Keep(build);
                 Mod.Log("Built " + build.Segments.Count + " segment(s) of " + info.name +
