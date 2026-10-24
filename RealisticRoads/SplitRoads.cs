@@ -50,9 +50,11 @@ namespace RealisticRoads
             var prefabs = prefabsField != null ? prefabsField.GetValue(collection) as NetInfo[] : null;
             if (prefabs == null || prefabs.Length == 0) return;
             var made = new List<NetInfo>();
+            int candidates = 0;
             foreach (var road in prefabs)
             {
                 if (!CanSplit(road)) continue;
+                candidates++;
                 int perSide = Mathf.Min(VehicleLanes(road, -1), VehicleLanes(road, 1));
                 for (int inner = 1; inner < perSide && inner <= 2; inner++)
                 {
@@ -67,7 +69,12 @@ namespace RealisticRoads
                     }
                 }
             }
-            if (made.Count == 0) return;
+            string collectionName = ((Component)collection).gameObject.name;
+            if (made.Count == 0)
+            {
+                if (candidates > 0) Mod.Log("Split roads: " + candidates + " road(s) of " + collectionName + " could be split, but no copy was made");
+                return;
+            }
             var all = new NetInfo[prefabs.Length + made.Count];
             prefabs.CopyTo(all, 0);
             made.CopyTo(all, prefabs.Length);
@@ -82,13 +89,17 @@ namespace RealisticRoads
                 for (int i = replaced.Length; i < longer.Length; i++) longer[i] = string.Empty;
                 replacedField.SetValue(collection, longer);
             }
-            Mod.Log("Split roads: " + made.Count + " made from the roads of " + ((Component)collection).gameObject.name);
+            Mod.Log("Split roads: " + made.Count + " made from " + candidates + " road(s) of " + collectionName);
         }
 
         // A two-way ground road with at least two vehicle lanes each way.
         private static bool CanSplit(NetInfo road)
         {
-            if (road == null || road.m_netAI == null || road.m_netAI.GetType().Name != "RoadAI") return false;
+            if (road == null) return false;
+            // While its collection wakes the road isn't set up yet (m_netAI is
+            // filled in then): its AI is the component on it.
+            var ai = road.m_netAI != null ? road.m_netAI : road.GetComponent<NetAI>();
+            if (ai == null || ai.GetType().Name != "RoadAI") return false;
             if (road.name != null && road.name.StartsWith(Prefix)) return false;
             return VehicleLanes(road, -1) >= 2 && VehicleLanes(road, 1) >= 2 && road.m_segments != null && road.m_lanes != null;
         }
