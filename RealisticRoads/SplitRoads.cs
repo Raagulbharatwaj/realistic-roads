@@ -172,6 +172,7 @@ namespace RealisticRoads
                     if (lod != null) node.m_lodMesh = lod;
                 }
             HideFromMenus(copy);
+            Name(copy, road, inner);
             lock (variants)
             {
                 List<Variant> list;
@@ -181,6 +182,59 @@ namespace RealisticRoads
                 list.Sort((a, b) => a.Cut.CompareTo(b.Cut));
             }
             return copy;
+        }
+
+        private static bool namingFailed;
+
+        // The copy's name and description in the game's text tables (it looks
+        // them up for every road; without them it logs an error for each copy).
+        private static void Name(NetInfo copy, NetInfo road, int inner)
+        {
+            if (namingFailed) return;
+            try
+            {
+                var managerType = Type.GetType("ColossalFramework.Globalization.LocaleManager, ColossalManaged");
+                var manager = managerType.GetProperty("instance", BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy).GetValue(null, null);
+                var locale = managerType.GetField("m_Locale", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(manager);
+                var keyType = locale.GetType().GetNestedType("Key");
+                var add = locale.GetType().GetMethod("AddLocalizedString", new[] { keyType, typeof(string) });
+                string title;
+                try
+                {
+                    title = road.GetUncheckedLocalizedTitle();
+                }
+                catch
+                {
+                    title = null;
+                }
+                if (string.IsNullOrEmpty(title)) title = road.name;
+                var texts = new[]
+                {
+                    new KeyValuePair<string, string>("NET_TITLE", title + " (split, " + inner + " lane" + (inner > 1 ? "s" : "") + " each way)"),
+                    new KeyValuePair<string, string>("NET_DESC", "Built by Realistic Roads under a ramp rising out of the road's middle."),
+                };
+                foreach (var text in texts)
+                {
+                    object key = Activator.CreateInstance(keyType);
+                    keyType.GetField("m_Identifier").SetValue(key, text.Key);
+                    keyType.GetField("m_Key").SetValue(key, copy.name);
+                    keyType.GetField("m_Index").SetValue(key, 0);
+                    try
+                    {
+                        add.Invoke(locale, new[] { key, (object)text.Value });
+                    }
+                    catch
+                    {
+                        // Already there (a city loaded before).
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                namingFailed = true;
+                Mod.Log("Split roads: naming them in the game's text tables failed (" + e.GetType().Name + ": " + e.Message +
+                        "); the game logs a missing name for each, harmlessly");
+            }
         }
 
         private static void HideFromMenus(NetInfo info)
@@ -270,6 +324,17 @@ namespace RealisticRoads
                 foreach (var mesh in madeMeshes) if (mesh != null) UnityEngine.Object.Destroy(mesh);
                 madeMeshes.Clear();
             }
+        }
+
+        // The road a split copy was made from (the road itself if it is none).
+        public static NetInfo OriginalOf(NetInfo info)
+        {
+            if (!IsSplit(info)) return info;
+            lock (variants)
+                foreach (var pair in variants)
+                    foreach (var variant in pair.Value)
+                        if (variant.Info == info) return PrefabCollection<NetInfo>.FindLoaded(pair.Key) ?? info;
+            return info;
         }
 
         public static bool IsSplit(NetInfo info)

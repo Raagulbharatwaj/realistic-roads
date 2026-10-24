@@ -208,6 +208,8 @@ namespace RealisticRoads
             get { return selectedNetwork; }
             set
             {
+                // A split copy (picked from a road built with one) draws as its road.
+                if (SplitRoads.IsSplit(value)) value = SplitRoads.OriginalOf(value);
                 if (pickingBeside && value != null && selectedNetwork != null && value != selectedNetwork)
                 {
                     pickingBeside = false;
@@ -1659,6 +1661,29 @@ namespace RealisticRoads
             return true;
         }
 
+        // The segment of 'road' (or its split copy) under 'p', and where on it.
+        private static bool SameRoadAt(Vector3 p, NetInfo road, out ushort segment, out float t)
+        {
+            segment = 0;
+            t = 0f;
+            if (road == null) return false;
+            var segments = NetManager.instance.m_segments.m_buffer;
+            float best = float.MaxValue;
+            foreach (ushort s in RoadPlanner.NearbySegments(p, 40f))
+            {
+                var info = segments[s].Info;
+                if (info == null || (info != road && SplitRoads.OriginalOf(info) != road)) continue;
+                Vector3 onRoad;
+                float at = CrossingFinder.ClosestT(s, p, out onRoad);
+                float distance = CurveMath.FlatDistance(onRoad, p);
+                if (distance > info.m_halfWidth + 2f || distance >= best) continue;
+                best = distance;
+                segment = s;
+                t = at;
+            }
+            return segment != 0;
+        }
+
         // Vehicle lanes, both ways.
         private static int VehicleLanes(NetInfo info)
         {
@@ -2217,15 +2242,13 @@ namespace RealisticRoads
                 {
                     onDeck = true;
                     int other = i == 1 && medianStart != null ? i : i - 1;   // the piece's other point: over the road too
-                    if (roads[other] == 0)
+                    ushort alongRoad;
+                    float alongT;
+                    // The same road there (not a deck or another road over it).
+                    if (roads[other] == 0 && SameRoadAt(controls[other], i == 1 && medianStart != null ? medianStart : medianEnd, out alongRoad, out alongT))
                     {
-                        var road = Decks.Under(controls[other], Net != null ? Net.m_halfWidth : 8f);
-                        if (road.Segment != 0)
-                        {
-                            Vector3 onRoad;
-                            roads[other] = road.Segment;
-                            roadTs[other] = CrossingFinder.ClosestT(road.Segment, controls[other], out onRoad);
-                        }
+                        roads[other] = alongRoad;
+                        roadTs[other] = alongT;
                     }
                 }
                 deck.Add(onDeck);
@@ -2237,6 +2260,13 @@ namespace RealisticRoads
                 var followed = new HashSet<ushort>();
                 var path = onDeck && roads[i - 1] != 0 && roads[i] != 0
                     ? Decks.CachedRoadPath(roads[i - 1], roadTs[i - 1], roads[i], roadTs[i], followed) : null;
+                // A ramp's piece over the road it rises out of follows that road only
+                // straight along it, never round a detour through the network.
+                if (medianPiece && path != null && CurveMath.Length(path) > 1.5f * CurveMath.FlatDistance(controls[i - 1], controls[i]) + 40f)
+                {
+                    path = null;
+                    followed.Clear();
+                }
                 under.UnionWith(followed);
                 paths.Add(path != null
                     ? CurveMath.RoundCorners(path, RoadPlanner.IsRail(Net) ? RailDeckTurnRadius : DeckTurnRadius, 8f, InwardAllowed(followed))
