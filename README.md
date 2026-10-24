@@ -93,6 +93,13 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      many segments and metres change and the cost (the new road's price less the old one's); Enter or the check mark
      upgrades, one Ctrl+Z puts the old road back. Nodes between upgraded segments become the new road too (pillars
      follow); nodes at junctions with other roads are left to them;
+     A one-way or uneven road is built from the first point towards the second;
+   - **Ramp** (next to Upgrade): a slip ramp between two roads at any levels. Start on the road it leaves and end on
+     the road it joins (a node or the middle of a road), in the direction its traffic goes. At each end the ramp runs
+     along that road, the way its traffic goes (on a two-way road, the way the ramp heads), turned 12 degrees off it,
+     so it peels off and merges in like a real slip lane instead of meeting it at an angle. The heights between come
+     from the two roads and are planned like any curve (crossings, the usual grades, up to 4.5 % where there is no
+     room). Drawn against a one-way road's traffic, or with an end not on a road, the panel says so;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,

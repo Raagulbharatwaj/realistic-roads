@@ -41,6 +41,7 @@ Draw a whole route in one go, see it planned from the side, choose how it crosse
 [*][b]Water:[/b] bridges over rivers and sea, raised for ship routes, or a tunnel under the water bed.
 [*][b]Double-decker roads:[/b] build a road on top of an existing one, on columns in its median or frames across it, clear of its street lights.
 [*][b]Underground deck:[/b] run a road or metro line one level under an existing street, like most real cities.
+[*][b]Slip ramps:[/b] draw an on or off ramp between two roads at any levels; it peels off and merges in along them, at a realistic grade.
 [/list]
 
 [h2]How to use[/h2]

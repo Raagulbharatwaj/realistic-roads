@@ -1557,12 +1557,95 @@ namespace RealisticRoads
         }
 
         private bool upgradeMode;
+        // Drawing a slip ramp: its ends leave and join the roads there along
+        // them (in their traffic's direction), turned RampAngle off them.
+        private bool rampMode;
+        private const float RampAngle = 12f;
         private readonly List<UpgradePoint> upgradePoints = new List<UpgradePoint>();
         private UpgradePlan upgradePlan;          // the preview
+
+        private void ToggleRamp()
+        {
+            rampMode = !rampMode;
+            if (rampMode && upgradeMode) ToggleUpgrade();
+            choicesVersion++;
+            Mod.Log(rampMode ? "Ramp: start on the road it leaves, end on the road it joins" : "Ramp off");
+        }
+
+        // The direction a ramp leaves (or joins) the road at a node or a point
+        // on a segment: along that road, the way its traffic goes (a two-way
+        // road: the way the ramp heads), turned up to RampAngle towards the
+        // ramp. False (with a note) where it can't: no road there, or a ramp
+        // drawn against a one-way road's traffic.
+        private static bool RampDirection(ushort node, ushort segment, float t, Vector3 heading, out Vector3 direction, ref string note)
+        {
+            direction = Vector3.zero;
+            heading = CurveMath.FlatNormal(heading);
+            if (heading == Vector3.zero) return false;
+            var net = NetManager.instance;
+            var segments = net.m_segments.m_buffer;
+            Vector3 along;   // the road's direction there, from its start node to its end node
+            if (node != 0)
+            {
+                // At a node: the road there that runs most nearly the ramp's way.
+                float best = -2f;
+                along = Vector3.zero;
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
+                    if (s == 0) continue;
+                    bool atStart = segments[s].m_startNode == node;
+                    Vector3 away = CurveMath.FlatNormal(atStart ? segments[s].m_startDirection : segments[s].m_endDirection);
+                    float dot = Vector3.Dot(away, heading);
+                    if (dot <= best) continue;
+                    best = dot;
+                    segment = s;
+                    along = atStart ? away : -away;
+                }
+            }
+            else if (segment != 0)
+            {
+                Vector3 a, b, c, d;
+                CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+                along = CurveMath.FlatNormal(CurveMath.BezierDerivative(a, b, c, d, t));
+            }
+            else return false;
+            if (segment == 0 || along == Vector3.zero) return false;
+
+            Vector3 road;
+            int traffic = TrafficWay(segment);
+            if (traffic == 0) road = Vector3.Dot(along, heading) >= 0f ? along : -along;
+            else
+            {
+                road = along * traffic;
+                if (Vector3.Dot(road, heading) < 0f)
+                {
+                    var info = segments[segment].Info;
+                    note = "The ramp runs against the one-way traffic on the " + (info != null ? info.name : "road") +
+                           ": draw it the other way (from where the traffic comes)";
+                    return false;
+                }
+            }
+            float turn = Mathf.Clamp(CurveMath.SignedAngle(road, heading), -RampAngle, RampAngle);
+            direction = CurveMath.Rotate(road, turn);
+            return true;
+        }
+
+        // Which way a road's traffic runs along it: 1 from its start node to its
+        // end node, -1 the other way, 0 both ways.
+        private static int TrafficWay(ushort segment)
+        {
+            var s = NetManager.instance.m_segments.m_buffer[segment];
+            var info = s.Info;
+            if (info == null || info.m_hasForwardVehicleLanes == info.m_hasBackwardVehicleLanes) return 0;
+            int way = info.m_hasForwardVehicleLanes ? 1 : -1;
+            return (s.m_flags & NetSegment.Flags.Invert) != NetSegment.Flags.None ? -way : way;
+        }
 
         private void ToggleUpgrade()
         {
             upgradeMode = !upgradeMode;
+            if (upgradeMode) rampMode = false;
             pickingBeside = false;
             upgradePoints.Clear();
             upgradePlan = null;
@@ -2077,6 +2160,16 @@ namespace RealisticRoads
             // A straight end piece meets the road there at its own angle; a curved one may continue it.
             Vector3 startDir = straight[0] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[0], controls[1] - controls[0], true);
             Vector3 endDir = straight[n - 1] ? Vector3.zero : NetworkBuilder.ContinuationDirection(nodes[n], controls[n] - controls[n - 1], false);
+            // A ramp leaves and joins the roads at its ends along them.
+            string rampNote = null;
+            if (rampMode)
+            {
+                Vector3 along;
+                if (RampDirection(nodes[0], segments[0], ts[0], controls[1] - controls[0], out along, ref rampNote)) startDir = along;
+                if (RampDirection(nodes[n], segments[n], ts[n], controls[n] - controls[n - 1], out along, ref rampNote)) endDir = along;
+                if ((nodes[0] == 0 && segments[0] == 0) || (nodes[n] == 0 && segments[n] == 0))
+                    rampNote = rampNote ?? "A ramp starts on the road it leaves and ends on the road it joins: snap both ends to roads";
+            }
 
             var division = DivideShaped(controls, startDir, endDir, nodes[0], nodes[n], lifts, straight, deck, below, paths, under);
             division.Continues = startDir != Vector3.zero || endDir != Vector3.zero;
@@ -2100,6 +2193,7 @@ namespace RealisticRoads
                 if (Mathf.Abs(lifts[i]) > 0.01f) raisedPoints.Add(new KeyValuePair<Vector3, float>(controls[i], lifts[i]));
             division.Lifts = lifts;
             PlanDivision(division, nodes[0], nodes[n], startSegment, ts[0], endSegment, ts[n], raisedPoints);
+            if (rampNote != null && division.Plan != null) division.Plan.Warnings.Insert(0, rampNote);
             return division;
         }
 
@@ -2992,6 +3086,7 @@ namespace RealisticRoads
                 panel.PickBeside = PickBeside;
                 panel.FlipDirection = FlipDirection;
                 panel.ToggleUpgrade = ToggleUpgrade;
+                panel.ToggleRamp = ToggleRamp;
             }
             panel.Show(Model());
         }
@@ -3041,6 +3136,7 @@ namespace RealisticRoads
                 BesideOther = besideNetwork != null || pickingBeside,
                 ParallelReverse = parallelReverse,
                 Upgrade = upgradeMode,
+                Ramp = rampMode,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
                 Mode = planning
                     ? "PLANNING: drag the points to adjust; pick each crossing here or on the map. Check mark / Enter: build. Esc: scrap. Right-click: keep drawing."
