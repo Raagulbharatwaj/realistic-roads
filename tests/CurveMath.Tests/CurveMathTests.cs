@@ -692,4 +692,18 @@ public class CurveMathTests
         }
         Assert.Equal(path, CurveMath.RoundCorners(path, 50f));
     }
+
+    [Fact]
+    public void RoundCorners_StaysWithinTheRoadInsideTheCorner()
+    {
+        var path = new List<Vector3>();
+        for (int x = 0; x <= 200; x += 4) path.Add(V(x, 0));
+        for (int z = 4; z <= 200; z += 4) path.Add(V(200, z));
+        // A deck over a road 8 m wide each side: at most 7 m inside the junction's middle.
+        var round = CurveMath.RoundCorners(path, 50f, 8f, 7f);
+        float nearest = float.MaxValue;
+        foreach (var p in round) nearest = Math.Min(nearest, CurveMath.FlatDistance(p, V(200, 0)));
+        Assert.True(nearest <= 7.01f, "passes " + nearest + " m inside the corner");
+        Assert.True(nearest > 2f, "still rounded: " + nearest);
+    }
 }

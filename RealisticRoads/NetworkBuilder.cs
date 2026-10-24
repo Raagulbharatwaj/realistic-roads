@@ -81,7 +81,6 @@ namespace RealisticRoads
             public int Group;                        // builds with the same group (not 0) are undone together
             // Existing nodes we gave another road (an upgrade) and what they were.
             public readonly List<KeyValuePair<ushort, NetInfo>> NodeInfos = new List<KeyValuePair<ushort, NetInfo>>();
-            public readonly List<ushort> Walls = new List<ushort>();   // roads to get retaining walls (quays) at the end of the build
         }
 
         private struct Turned
@@ -151,7 +150,7 @@ namespace RealisticRoads
                     var s = net.m_segments.m_buffer[segment];
                     // Changed since it was planned: left alone.
                     if ((s.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || s.Info != plan.OldInfos[i]) continue;
-                    SplitSegment(segment, new float[0], new[] { plan.NewInfos[i] }, build);
+                    SplitSegment(segment, new float[0], new[] { plan.NewInfos[i] }, build, plan.Inverts != null ? plan.Inverts[i] : (bool?)null);
                     changed++;
                 }
                 foreach (var pair in plan.Nodes)
@@ -257,7 +256,6 @@ namespace RealisticRoads
                         // one is right there) dropped into the cutting, and its nodes on
                         // both sides moved down along the ramp.
                         var lowering = plan.Lowerings[c];
-                        var lowered = new List<ushort>();
                         if (lowering.SplitAt.Length > 0)
                         {
                             var split = SplitSegment(crossing.Segment, lowering.SplitAt, null, build);
@@ -267,7 +265,6 @@ namespace RealisticRoads
                                 position.y = lowering.SplitHeights[i];
                                 net.MoveNode(split.Nodes[i], position);
                                 RefreshDirections(split.Nodes[i]);
-                                lowered.Add(split.Nodes[i]);
                             }
                         }
                         for (int i = 0; i < lowering.Nodes.Count; i++)
@@ -279,16 +276,7 @@ namespace RealisticRoads
                             position.y = lowering.NodeHeights[i];
                             net.MoveNode(node, position);
                             RefreshDirections(node);
-                            lowered.Add(node);
                         }
-                        // Retaining walls along the lowered road, where it is below the ground.
-                        if (plan.Walls)
-                            foreach (ushort node in lowered)
-                                for (int k = 0; k < 8; k++)
-                                {
-                                    ushort road = net.m_nodes.m_buffer[node].GetSegment(k);
-                                    if (road != 0 && !build.Walls.Contains(road)) build.Walls.Add(road);
-                                }
                         continue;
                     }
 
@@ -349,16 +337,19 @@ namespace RealisticRoads
                 {
                     if (nodeIds[i] != 0) continue;
                     NodeKind kind = plan.Kinds[i];
+                    NetInfo nodeInfo = RoadPlanner.InfoFor(info, kind);
                     ushort node;
-                    if (!net.CreateNode(out node, ref sim.m_randomizer, RoadPlanner.InfoFor(info, kind), points[i], sim.m_currentBuildIndex))
+                    if (!net.CreateNode(out node, ref sim.m_randomizer, nodeInfo, points[i], sim.m_currentBuildIndex))
                         throw new Exception("CreateNode failed at point " + i + " " + points[i]);
                     sim.m_currentBuildIndex++;
                     // Height above (or depth below) the ground: the game uses it for pillars
-                    // and tunnels. Ground and cutting nodes keep 0 like vanilla ground roads.
+                    // and tunnels, and its upgrade tool picks the version by it (at least
+                    // 1 on a raised node, like its own tool). Ground and cutting
+                    // nodes keep 0 like vanilla ground roads.
                     if (kind == NodeKind.Elevated || kind == NodeKind.Bridge || kind == NodeKind.Tunnel || kind == NodeKind.Slope)
                     {
                         float elevation = points[i].y - TerrainManager.instance.SampleRawHeightSmooth(points[i]);
-                        net.m_nodes.m_buffer[node].m_elevation = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(elevation)), 0, 255);
+                        net.m_nodes.m_buffer[node].m_elevation = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(elevation)), 1, 255);
                     }
                     if (kind == NodeKind.Tunnel) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Underground;
                     // Like the vanilla tool: nodes on (or dug into) the ground follow the terrain.
@@ -415,8 +406,6 @@ namespace RealisticRoads
                     sim.m_currentBuildIndex++;
                     build.Segments.Add(segment);
                     build.Stamps.Segment(segment);
-                    // In a cutting (or the ramp into a tunnel): retaining walls along it.
-                    if (plan.Walls && (plan.Kinds[i - 1] == NodeKind.Cut || plan.Kinds[i] == NodeKind.Cut)) build.Walls.Add(segment);
                 }
 
                 // Pillars under our raised nodes. The vanilla tool adds them as its own
@@ -458,21 +447,6 @@ namespace RealisticRoads
                     Mod.Log("  " + bridges + " bridge, " + elevated + " elevated, " + tunnels + " tunnel/slope segment(s)");
                 for (int c = 0; c < plan.Crossings.Count; c++)
                     Mod.Log("  Crossing " + (c + 1) + " with " + plan.Crossings[c].ExistingName + ": " + plan.Crossings[c].Describe());
-
-                // Retaining walls (quays) along what is below the ground. A wall that
-                // can't be built never undoes the road.
-                if (build.Walls.Count > 0)
-                {
-                    Mod.Log("  Retaining walls along " + build.Walls.Count + " segment(s) below the ground");
-                    try
-                    {
-                        BuildWalls(build.Walls, build);
-                    }
-                    catch (Exception e)
-                    {
-                        Mod.LogError("Building the retaining walls failed; the road is built without them", e);
-                    }
-                }
 
                 Keep(build);
                 Mod.Log("Built " + build.Segments.Count + " segment(s) of " + info.name +
@@ -1012,7 +986,7 @@ namespace RealisticRoads
         // Safe order: the new nodes are made first (a failure there leaves the
         // road untouched), and the split is in 'build' before the original is
         // removed, so a failure after that is undone by rebuilding it.
-        private static Split SplitSegment(ushort segment, float[] at, NetInfo[] pieceInfos, Build build)
+        private static Split SplitSegment(ushort segment, float[] at, NetInfo[] pieceInfos, Build build, bool? invert = null)
         {
             var net = NetManager.instance;
             var sim = SimulationManager.instance;
@@ -1035,6 +1009,7 @@ namespace RealisticRoads
             CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
             var nodes = net.m_nodes.m_buffer;
             bool onGround = (nodes[split.StartNode].m_flags & nodes[split.EndNode].m_flags & NetNode.Flags.OnGround) != NetNode.Flags.None;
+            byte startElevation = nodes[split.StartNode].m_elevation, endElevation = nodes[split.EndNode].m_elevation;
 
             var chain = new List<ushort> { split.StartNode };
             var directions = new List<Vector3> { split.StartDirection };
@@ -1050,8 +1025,14 @@ namespace RealisticRoads
                     throw new Exception("could not add a node to " + split.Info.name + " (it is left as it was)");
                 }
                 sim.m_currentBuildIndex++;
-                // A cut in a road on the ground stays on the ground.
+                // A cut in a road on the ground stays on the ground; one in a raised
+                // road (or a tunnel) keeps its height over the ground, as the game's
+                // own nodes there have it (its upgrade tool reads it).
                 if (onGround) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.OnGround;
+                if (startElevation != 0 || endElevation != 0)
+                    net.m_nodes.m_buffer[node].m_elevation = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(startElevation, endElevation, t)), 1, 255);
+                if ((nodes[split.StartNode].m_flags & nodes[split.EndNode].m_flags & NetNode.Flags.Underground) != NetNode.Flags.None)
+                    net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Underground;
                 split.Nodes.Add(node);
                 split.Stamps.Node(node);
                 chain.Add(node);
@@ -1070,22 +1051,24 @@ namespace RealisticRoads
                 NetInfo pieceInfo = pieceInfos != null ? pieceInfos[i - 1] : split.Info;
                 ushort piece;
                 if (!net.CreateSegment(out piece, ref sim.m_randomizer, pieceInfo, chain[i - 1], chain[i],
-                        startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex, split.Invert))
+                        startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex, invert ?? split.Invert))
                     throw new Exception("could not rebuild " + split.Info.name);
                 sim.m_currentBuildIndex++;
                 CalculateSegmentDirections(piece);
                 // The pieces keep the road's name, and its yield signs at its own ends.
                 var yield = (i == 1 ? split.Yield & NetSegment.Flags.YieldStart : NetSegment.Flags.None) |
                             (i == chain.Count - 1 ? split.Yield & NetSegment.Flags.YieldEnd : NetSegment.Flags.None);
-                KeepName(piece, split, yield);
+                KeepName(piece, split, yield, false);
                 split.Segments.Add(piece);
                 split.Stamps.Segment(piece);
             }
+            // Named once all the pieces are there and joined.
+            if (split.CustomName != null) foreach (ushort piece in split.Segments) KeepCustomName(piece, split.CustomName);
             return split;
         }
 
         // A segment's name and yield signs, as 'split''s road had them.
-        private static void KeepName(ushort segment, Split split, NetSegment.Flags yield)
+        private static void KeepName(ushort segment, Split split, NetSegment.Flags yield, bool rename = true)
         {
             var net = NetManager.instance;
             net.m_segments.m_buffer[segment].m_nameSeed = split.NameSeed;
@@ -1094,14 +1077,18 @@ namespace RealisticRoads
                 net.m_segments.m_buffer[segment].m_flags |= yield;
                 net.UpdateSegment(segment);
             }
-            if (split.CustomName == null) return;
+            if (rename && split.CustomName != null) KeepCustomName(segment, split.CustomName);
+        }
+
+        private static void KeepCustomName(ushort segment, string name)
+        {
             try
             {
-                Rename(segment, split.CustomName);
+                Rename(segment, name);
             }
             catch (Exception e)
             {
-                Mod.LogError("Keeping the name '" + split.CustomName + "' failed", e);
+                Mod.LogError("Keeping the name '" + name + "' failed", e);
             }
         }
 

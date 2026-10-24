@@ -34,7 +34,6 @@ namespace RealisticRoads
         public bool BesideOther;                  // another road or track (or one being picked)
         public bool ParallelReverse;              // it runs the other way
         public bool Upgrade;                      // changing an existing road instead of drawing one
-        public bool Walls;                        // retaining walls along cuttings and lowered roads
     }
 
     // How a stretch of the curve is built: the colours of the preview and the profile.
@@ -155,9 +154,9 @@ namespace RealisticRoads
         public Action<float> ChangeGap;
         private UIButton parallelButton, sideButton, besideButton, directionButton;
         private UILabel gapLabel;
-        // Upgrade an existing road along a stretch; retaining walls on or off.
-        public Action ToggleUpgrade, ToggleWalls;
-        private UIButton upgradeButton, wallsButton;
+        // Upgrade an existing road along a stretch.
+        public Action ToggleUpgrade;
+        private UIButton upgradeButton;
         private UILabel toolsLabel;
         public Action<string, string> Typed;
         public Action TypedSubmit;
@@ -299,16 +298,13 @@ namespace RealisticRoads
                 "or the same way (a double track, a road and its tram or rail line)", sx + 2f * (IconSize + 3f), y,
                 () => { if (FlipDirection != null) FlipDirection(); });
 
-            // Upgrade an existing road instead of drawing one; retaining walls.
+            // Upgrade an existing road instead of drawing one.
             y += IconSize + 4f;
             upgradeButton = BarButton(Icons.Upgrade, "Up", "Upgrade along a curve: click a road where it starts, then where it ends;\n" +
                 "every road between becomes the road picked in the game's menu, on the same nodes (shape and junctions kept),\n" +
                 "each in its own version (elevated, tunnel...). One Ctrl+Z puts the old road back", Pad, y,
                 () => { if (ToggleUpgrade != null) ToggleUpgrade(); });
-            wallsButton = BarButton(Icons.Walls, "W", "Retaining walls (the game's quays) along cuttings, tunnel ramps and the roads " +
-                "lowered for an overpass, holding the ground up beside them (on: green)", Pad + IconSize + 3f, y,
-                () => { if (ToggleWalls != null) ToggleWalls(); });
-            toolsLabel = BarLabel("", Pad + 2f * IconSize + 10f, y + 1f, Width - 2f * Pad - 2f * IconSize - 10f);
+            toolsLabel = BarLabel("", Pad + IconSize + 7f, y + 1f, Width - 2f * Pad - IconSize - 7f);
             toolsLabel.wordWrap = true;
             toolsLabel.size = new Vector2(toolsLabel.size.x, 30f);
             toolsLabel.textScale = 0.7f;
@@ -406,10 +402,9 @@ namespace RealisticRoads
             Select(sideButton, model.Parallel && !model.ParallelLeft);
             Select(besideButton, model.Parallel && model.BesideOther);
             Select(upgradeButton, model.Upgrade);
-            Select(wallsButton, model.Walls);
             if (toolsLabel != null)
             {
-                string tools = (model.Upgrade ? "Upgrading a road" : "Drawing") + " · walls " + (model.Walls ? "on" : "off") +
+                string tools = (model.Upgrade ? "Upgrading a road" : "Drawing") +
                                (model.Parallel ? "\nParallel " + (model.ParallelLeft ? "left: " : "right: ") + model.Beside : "");
                 if (toolsLabel.text != tools) toolsLabel.text = tools;
             }
@@ -442,7 +437,7 @@ namespace RealisticRoads
             curveButton = straightButton = snapButton = deckButton = underButton = null;
             parallelButton = sideButton = besideButton = directionButton = null;
             gapLabel = null;
-            upgradeButton = wallsButton = null;
+            upgradeButton = null;
             toolsLabel = null;
             radiusLabel = null;
             lengthField = turnField = null;

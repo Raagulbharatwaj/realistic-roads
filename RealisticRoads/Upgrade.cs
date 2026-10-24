@@ -13,6 +13,9 @@ namespace RealisticRoads
         public readonly List<ushort> Segments = new List<ushort>();    // in no particular order
         public readonly List<NetInfo> OldInfos = new List<NetInfo>();
         public readonly List<NetInfo> NewInfos = new List<NetInfo>();
+        // For a one-way or uneven road: each segment built from the first
+        // point towards the second (null: each keeps the way it was drawn).
+        public List<bool> Inverts;
         // Nodes with only upgraded segments: they become the new road too.
         public readonly List<KeyValuePair<ushort, NetInfo>> Nodes = new List<KeyValuePair<ushort, NetInfo>>();
         public List<Vector3> Path;                                      // the way along the roads, for the preview
@@ -51,7 +54,13 @@ namespace RealisticRoads
                 return plan;
             }
             var used = new HashSet<ushort>();
-            plan.Path = Decks.RoadPath(segA, tA, segB, tB, used, kind);
+            var along = new Dictionary<ushort, bool>();
+            plan.Path = Decks.RoadPath(segA, tA, segB, tB, used, kind, along);
+            // A one-way road, or one with more lanes one way: it runs from the
+            // first point to the second, whichever way each old segment was drawn.
+            bool directed = info.m_hasForwardVehicleLanes != info.m_hasBackwardVehicleLanes ||
+                            info.m_forwardVehicleLaneCount != info.m_backwardVehicleLaneCount;
+            if (directed) plan.Inverts = new List<bool>();
             if (plan.Path == null)
             {
                 plan.Problems.Add("No way along the roads between the two points");
@@ -84,7 +93,14 @@ namespace RealisticRoads
                     missing[VersionNames[version]] = count + 1;
                     continue;
                 }
-                if (target == old)
+                bool wantInvert = false;
+                if (plan.Inverts != null)
+                {
+                    bool forward;
+                    wantInvert = along.TryGetValue(segment, out forward) ? !forward : (s.m_flags & NetSegment.Flags.Invert) != NetSegment.Flags.None;
+                }
+                // Already the new road (and, one-way, already the right way round).
+                if (target == old && (plan.Inverts == null || wantInvert == ((s.m_flags & NetSegment.Flags.Invert) != NetSegment.Flags.None)))
                 {
                     plan.Unchanged++;
                     continue;
@@ -92,6 +108,7 @@ namespace RealisticRoads
                 plan.Segments.Add(segment);
                 plan.OldInfos.Add(old);
                 plan.NewInfos.Add(target);
+                if (plan.Inverts != null) plan.Inverts.Add(wantInvert);
                 plan.Length += s.m_averageLength;
                 if (target.m_halfWidth > old.m_halfWidth + 0.5f) wider = true;
                 Vector3 a = nodes[s.m_startNode].m_position, b = nodes[s.m_endNode].m_position;
