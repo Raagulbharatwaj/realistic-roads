@@ -253,6 +253,15 @@ namespace RealisticRoads
             // Each node's floor is the highest of its own and its deck neighbours':
             // a node just off the middle of the deck below (or past its end) would
             // otherwise measure from the road under that, and the deck would dip and rise.
+            // Applied below, once the held heights are known: near a held end (a
+            // deck starting on the road it rises from) it ramps at the grade.
+            var deckFloor = new float[n];
+            var deckCeiling = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                deckFloor[i] = float.MinValue;
+                deckCeiling[i] = float.MaxValue;
+            }
             if (onDeck != null && decks != null)
             {
                 Func<int, bool> isUnder = i => underDeck != null && i < underDeck.Length && underDeck[i];
@@ -267,8 +276,7 @@ namespace RealisticRoads
                     {
                         // Under the road: at least one level (a tunnel's depth) below it;
                         // the heights stay as shallow as that and the grade allow.
-                        float ceiling = Decks.Ceiling(points[i], decks[i]);
-                        maxH[i] = Mathf.Min(maxH[i], ceiling);
+                        deckCeiling[i] = Decks.Ceiling(points[i], decks[i]);
                         if (decks[i].Segment != 0 && !decks[i].OnGround) tooDeep = true;
                         continue;
                     }
@@ -276,7 +284,7 @@ namespace RealisticRoads
                     float level = floor[i];
                     if (isAbove(i - 1)) level = Mathf.Max(level, floor[i - 1]);
                     if (isAbove(i + 1)) level = Mathf.Max(level, floor[i + 1]);
-                    minH[i] = Mathf.Max(minH[i], level);
+                    deckFloor[i] = level;
                 }
                 if (tooDeep)
                     plan.Problems.Add("Under a road there is one level only: this road is already underground (or a deck goes under it). " +
@@ -382,6 +390,22 @@ namespace RealisticRoads
                         Limit(distance, k, window, crossing.Point.y - (underElevated ? UnderClearance : TunnelDepth), false, maxH, true);
                         break;
                 }
+            }
+
+            // The deck's levels, as far as the grade reaches from the held heights.
+            for (int i = 0; i < n; i++)
+            {
+                if (isFixed[i] || (deckFloor[i] == float.MinValue && deckCeiling[i] == float.MaxValue)) continue;
+                float reachUp = Unlimited, reachDown = -Unlimited;
+                for (int j = 0; j < n; j++)
+                {
+                    if (!isFixed[j]) continue;
+                    float d = Mathf.Abs(distance[i] - distance[j]) * MaxGrade;
+                    reachUp = Mathf.Min(reachUp, minH[j] + d);
+                    reachDown = Mathf.Max(reachDown, maxH[j] - d);
+                }
+                if (deckFloor[i] != float.MinValue) minH[i] = Mathf.Max(minH[i], Mathf.Min(deckFloor[i], reachUp));
+                if (deckCeiling[i] != float.MaxValue) maxH[i] = Mathf.Min(maxH[i], Mathf.Max(deckCeiling[i], reachDown));
             }
 
             // Stretches marked Elevated or Tunnel in the side view: held up at a

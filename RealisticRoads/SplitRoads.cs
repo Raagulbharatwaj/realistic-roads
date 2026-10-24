@@ -108,6 +108,24 @@ namespace RealisticRoads
                     made = "made";
                     UnityEngine.Object.Destroy(copy);
                 }
+                // Where across the road its vertices are (to the 0.1 m): a model with
+                // few columns (a carriageway in one piece) is cut along a line,
+                // not by dropping triangles.
+                var columns = new SortedDictionary<float, int>();
+                foreach (var v in vertices)
+                {
+                    float x = Mathf.Round(v.x * 10f) / 10f;
+                    int count;
+                    columns.TryGetValue(x, out count);
+                    columns[x] = count + 1;
+                }
+                var listed = new List<string>();
+                foreach (var column in columns)
+                {
+                    if (listed.Count >= 40) { listed.Add("..."); break; }
+                    listed.Add(column.Key.ToString("F1"));
+                }
+                Mod.Log(what + " '" + mesh.name + "' columns across (x): " + string.Join(" ", listed.ToArray()));
                 Mod.Log(what + " '" + mesh.name + "': " + vertices.Length + " vertices, " + triangles.Length / 3 + " triangles, x " +
                         minX.ToString("F1") + " to " + maxX.ToString("F1") + ", y " + minY.ToString("F1") + " to " + maxY.ToString("F1") +
                         "; " + middle + " triangle(s) in the middle; cut model " + made);
