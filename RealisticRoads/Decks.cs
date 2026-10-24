@@ -401,7 +401,9 @@ namespace RealisticRoads
         }
 
         private static readonly Dictionary<ushort, Frame> frames = new Dictionary<ushort, Frame>();
-        private static readonly Dictionary<string, KeyValuePair<Material, Vector2>> materials = new Dictionary<string, KeyValuePair<Material, Vector2>>();
+        // Each pillar's material, and the part of its texture its sides use
+        // (x, y: lowest u, v; z, w: highest), which our frames' faces are mapped across.
+        private static readonly Dictionary<string, KeyValuePair<Material, Vector4>> materials = new Dictionary<string, KeyValuePair<Material, Vector4>>();
         private static readonly HashSet<string> missing = new HashSet<string>();
         private static MaterialPropertyBlock block;
         private static readonly HashSet<ushort> failedFrames = new HashSet<ushort>();   // drawing threw: skipped (logged once)
@@ -516,7 +518,7 @@ namespace RealisticRoads
                         continue;
                     }
                     if (CurveMath.FlatDistance(n.m_position, cameraInfo.m_position) > DrawDistance) continue;
-                    KeyValuePair<Material, Vector2> material;
+                    KeyValuePair<Material, Vector4> material;
                     if (!MaterialFor(frame.Pillar, out material)) continue;
                     if (frame.Mesh == null || Mathf.Abs(frame.MeshHeight - n.m_position.y) > 0.05f)
                     {
@@ -549,22 +551,20 @@ namespace RealisticRoads
             Graphics.DrawMesh(mesh, position, Quaternion.identity, material, layer, null, 0, block);
         }
 
-        // A mesh from faces, every vertex on the material's concrete ('uv').
-        internal static Mesh MakeMesh(List<Vector3> vertices, List<Vector3> normals, List<int> triangles, Vector2 uv)
+        // A mesh from faces, textured as Face mapped them.
+        internal static Mesh MakeMesh(List<Vector3> vertices, List<Vector3> normals, List<Vector2> uvs, List<int> triangles)
         {
             var mesh = new Mesh();
             mesh.vertices = vertices.ToArray();
             mesh.normals = normals.ToArray();
-            var uvs = new Vector2[vertices.Count];
             var colors = new Color[vertices.Count];
             var tangents = new Vector4[vertices.Count];
-            for (int i = 0; i < uvs.Length; i++)
+            for (int i = 0; i < colors.Length; i++)
             {
-                uvs[i] = uv;
                 colors[i] = new Color(1f, 1f, 1f, 1f);
                 tangents[i] = new Vector4(1f, 0f, 0f, -1f);
             }
-            mesh.uv = uvs;
+            mesh.uv = uvs.ToArray();
             mesh.colors = colors;
             mesh.tangents = tangents;
             mesh.triangles = triangles.ToArray();
@@ -614,9 +614,9 @@ namespace RealisticRoads
             }
         }
 
-        // The pillar's material, and a spot on its texture (where one of its
-        // own vertices maps: its concrete) to colour the whole frame with.
-        internal static bool MaterialFor(string pillarName, out KeyValuePair<Material, Vector2> material)
+        // The pillar's material, and the part of its texture its sides use
+        // (its concrete), to texture the frames with.
+        internal static bool MaterialFor(string pillarName, out KeyValuePair<Material, Vector4> material)
         {
             if (materials.TryGetValue(pillarName ?? "", out material)) return true;
             if (missing.Contains(pillarName ?? "")) return false;
@@ -627,22 +627,54 @@ namespace RealisticRoads
                 Mod.Log("Deck frames: no pillar material for '" + pillarName + "'; those frames are not drawn");
                 return false;
             }
-            Vector2 uv = new Vector2(0.5f, 0.5f);
-            try
-            {
-                var uvs = pillar.m_mesh != null ? pillar.m_mesh.uv : null;
-                if (uvs != null && uvs.Length > 0) uv = uvs[0];
-            }
-            catch { }
-            material = new KeyValuePair<Material, Vector2>(pillar.m_material, uv);
+            var rect = SideTexture(pillar.m_mesh);
+            material = new KeyValuePair<Material, Vector4>(pillar.m_material, rect);
             materials[pillarName] = material;
-            Mod.Log("Deck frames: using the material of " + pillarName);
+            bool textured = rect.z - rect.x > 0.001f && rect.w - rect.y > 0.001f;
+            Mod.Log("Deck frames: using the material of " + pillarName +
+                    (textured ? ", textured like its sides" : ", in one colour (its mesh can't be read)"));
             return true;
         }
 
+        // Where on its texture a pillar's sides are: the u, v range of its
+        // upright faces (not its top or underside). A mesh that can't be read
+        // gives one spot (the frame is then one colour, as before).
+        private static Vector4 SideTexture(Mesh mesh)
+        {
+            var fallback = new Vector4(0.5f, 0.5f, 0.5f, 0.5f);
+            try
+            {
+                if (mesh == null) return fallback;
+                var uvs = mesh.uv;
+                var vertices = mesh.vertices;
+                var triangles = mesh.triangles;
+                if (uvs == null || vertices == null || triangles == null || uvs.Length != vertices.Length || uvs.Length == 0) return fallback;
+                float minU = float.MaxValue, minV = float.MaxValue, maxU = float.MinValue, maxV = float.MinValue;
+                for (int i = 0; i + 2 < triangles.Length; i += 3)
+                {
+                    Vector3 a = vertices[triangles[i]], b = vertices[triangles[i + 1]], c = vertices[triangles[i + 2]];
+                    Vector3 normal = Vector3.Cross(b - a, c - a);
+                    float length = normal.magnitude;
+                    if (length < 1e-6f || Mathf.Abs(normal.y / length) > 0.3f) continue;   // a top or an underside
+                    for (int k = 0; k < 3; k++)
+                    {
+                        Vector2 uv = uvs[triangles[i + k]];
+                        minU = Mathf.Min(minU, uv.x); maxU = Mathf.Max(maxU, uv.x);
+                        minV = Mathf.Min(minV, uv.y); maxV = Mathf.Max(maxV, uv.y);
+                    }
+                }
+                if (minU > maxU) return new Vector4(uvs[0].x, uvs[0].y, uvs[0].x, uvs[0].y);
+                return new Vector4(minU, minV, maxU, maxV);
+            }
+            catch
+            {
+                return fallback;
+            }
+        }
+
         // Two columns from the ground to the beam, and the beam across under
-        // the deck, relative to the node.
-        private static Mesh MakeMesh(Frame frame, Vector3 node, Vector2 uv)
+        // the deck, relative to the node; every face mapped across 'texture'.
+        private static Mesh MakeMesh(Frame frame, Vector3 node, Vector4 texture)
         {
             var terrain = TerrainManager.instance;
             float top = node.y - DeckUnderside;
@@ -652,12 +684,13 @@ namespace RealisticRoads
             Vector3 along = CurveMath.Rotate(across, 90f);
             var vertices = new List<Vector3>();
             var normals = new List<Vector3>();
+            var uvs = new List<Vector2>();
             var triangles = new List<int>();
             if (frame.Median)
             {
                 // One column from the median (just into the road's surface) up to the cap.
                 float bottom = Mathf.Min(frame.Foot.y - 0.5f, beamBottom - MinColumn);
-                Box(vertices, normals, triangles, new Vector3(frame.Foot.x, (bottom + beamBottom) * 0.5f, frame.Foot.z) - node,
+                Box(vertices, normals, uvs, triangles, texture, new Vector3(frame.Foot.x, (bottom + beamBottom) * 0.5f, frame.Foot.z) - node,
                     across, along, frame.Width, beamBottom - bottom, frame.Width);
             }
             else
@@ -666,32 +699,34 @@ namespace RealisticRoads
                     // From just under the ground up to the beam; never upside down (the
                     // ground beside an elevated road below can be higher than the beam).
                     float ground = Mathf.Min(terrain.SampleRawHeightSmooth(foot) - 1f, beamBottom - MinColumn);
-                    Box(vertices, normals, triangles, new Vector3(foot.x, (ground + beamBottom) * 0.5f, foot.z) - node,
+                    Box(vertices, normals, uvs, triangles, texture, new Vector3(foot.x, (ground + beamBottom) * 0.5f, foot.z) - node,
                         across, along, frame.Width, beamBottom - ground, frame.Width);
                 }
             Vector3 middle = (a + b) * 0.5f;
             float span = CurveMath.FlatDistance(a, b) + (frame.Median ? 0f : frame.Width);
-            Box(vertices, normals, triangles, new Vector3(middle.x, (beamBottom + top) * 0.5f, middle.z) - node,
+            Box(vertices, normals, uvs, triangles, texture, new Vector3(middle.x, (beamBottom + top) * 0.5f, middle.z) - node,
                 across, along, span, BeamHeight, BeamDepth);
-            return MakeMesh(vertices, normals, triangles, uv);
+            return MakeMesh(vertices, normals, uvs, triangles);
         }
 
         // A box at 'center': 'width' across, 'height' up, 'depth' along.
-        private static void Box(List<Vector3> vertices, List<Vector3> normals, List<int> triangles, Vector3 center,
-            Vector3 across, Vector3 along, float width, float height, float depth)
+        private static void Box(List<Vector3> vertices, List<Vector3> normals, List<Vector2> uvs, List<int> triangles, Vector4 texture,
+            Vector3 center, Vector3 across, Vector3 along, float width, float height, float depth)
         {
             Vector3 x = across * (width * 0.5f), y = Vector3.up * (height * 0.5f), z = along * (depth * 0.5f);
-            Face(vertices, normals, triangles, center + x, y, z, across);
-            Face(vertices, normals, triangles, center - x, y, z, -across);
-            Face(vertices, normals, triangles, center + z, y, x, along);
-            Face(vertices, normals, triangles, center - z, y, x, -along);
-            Face(vertices, normals, triangles, center + y, x, z, Vector3.up);
-            Face(vertices, normals, triangles, center - y, x, z, -Vector3.up);
+            Face(vertices, normals, uvs, triangles, texture, center + x, y, z, across);
+            Face(vertices, normals, uvs, triangles, texture, center - x, y, z, -across);
+            Face(vertices, normals, uvs, triangles, texture, center + z, y, x, along);
+            Face(vertices, normals, uvs, triangles, texture, center - z, y, x, -along);
+            Face(vertices, normals, uvs, triangles, texture, center + y, x, z, Vector3.up);
+            Face(vertices, normals, uvs, triangles, texture, center - y, x, z, -Vector3.up);
         }
 
-        // One face: centred at 'c', spanning ±u and ±v, facing 'normal'.
-        internal static void Face(List<Vector3> vertices, List<Vector3> normals, List<int> triangles, Vector3 c,
-            Vector3 u, Vector3 v, Vector3 normal)
+        // One face: centred at 'c', spanning ±u and ±v, facing 'normal'. The
+        // texture part is laid across it once, its v (up a pillar) along the
+        // face's longer side: up a column, along a beam (a pillar lying down).
+        internal static void Face(List<Vector3> vertices, List<Vector3> normals, List<Vector2> uvs, List<int> triangles, Vector4 texture,
+            Vector3 c, Vector3 u, Vector3 v, Vector3 normal)
         {
             int first = vertices.Count;
             vertices.Add(c - u - v);
@@ -699,6 +734,13 @@ namespace RealisticRoads
             vertices.Add(c + u + v);
             vertices.Add(c - u + v);
             for (int i = 0; i < 4; i++) normals.Add(normal);
+            bool vUp = v.sqrMagnitude >= u.sqrMagnitude;
+            float[] su = { -1f, 1f, 1f, -1f }, sv = { -1f, -1f, 1f, 1f };
+            for (int i = 0; i < 4; i++)
+            {
+                float across = (vUp ? su[i] : sv[i]) * 0.5f + 0.5f, up = (vUp ? sv[i] : su[i]) * 0.5f + 0.5f;
+                uvs.Add(new Vector2(Mathf.Lerp(texture.x, texture.z, across), Mathf.Lerp(texture.y, texture.w, up)));
+            }
             // Wound so the face is seen from outside (from 'normal').
             Vector3 cross = Vector3.Cross(u, v);
             bool flip = Vector3.Dot(cross, normal) < 0f;

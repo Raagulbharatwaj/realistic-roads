@@ -2203,6 +2203,7 @@ namespace RealisticRoads
             ushort endSegment, float endT, List<KeyValuePair<Vector3, float>> raisedPoints)
         {
             var joined = JoinedRoads(startNode, endNode, startSegment, endSegment);
+            RoadPlanner.Ramp = rampMode;
             FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
             division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
                 division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
@@ -2218,6 +2219,7 @@ namespace RealisticRoads
                     startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
                     division.Heights, division.Forced);
             }
+            RoadPlanner.Ramp = false;
             DropNodesOverCrossings(division);
             division.NodeAlong = NodeDistances(division);
             division.Cost = NetworkBuilder.Cost(Net, division.Plan);
