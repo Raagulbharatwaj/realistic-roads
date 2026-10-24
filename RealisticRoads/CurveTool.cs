@@ -536,7 +536,9 @@ namespace RealisticRoads
                 return;
             }
             // A deck point on a road sits over its centre line: no junction with it.
-            if (deckMode && onMap && !typed && RoadAt(hoverNode, hoverSegment, hoverT, out aimRoad, out aimRoadT))
+            // Not a ramp's first point: that one starts on the road (and rises off it).
+            if (deckMode && onMap && !typed && !(rampMode && points.Count == 0) &&
+                RoadAt(hoverNode, hoverSegment, hoverT, out aimRoad, out aimRoadT))
             {
                 aimNode = 0;
                 aimSegment = 0;
@@ -2208,6 +2210,24 @@ namespace RealisticRoads
             for (int i = 1; i <= n; i++)
             {
                 bool onDeck = i < deckModes.Count && deckModes[i];
+                // A ramp's piece rising out of (or landing in) a road's middle is a
+                // deck over that road, following it, whether Deck is on or not.
+                bool medianPiece = (i == 1 && medianStart != null) || (i == n && medianEnd != null);
+                if (medianPiece)
+                {
+                    onDeck = true;
+                    int other = i == 1 && medianStart != null ? i : i - 1;   // the piece's other point: over the road too
+                    if (roads[other] == 0)
+                    {
+                        var road = Decks.Under(controls[other], Net != null ? Net.m_halfWidth : 8f);
+                        if (road.Segment != 0)
+                        {
+                            Vector3 onRoad;
+                            roads[other] = road.Segment;
+                            roadTs[other] = CrossingFinder.ClosestT(road.Segment, controls[other], out onRoad);
+                        }
+                    }
+                }
                 deck.Add(onDeck);
                 below.Add(onDeck && i < underModes.Count && underModes[i]);
                 // Rounded where it turns at a junction (the roads meet at an angle
@@ -3487,7 +3507,7 @@ namespace RealisticRoads
                 pointRoad[dragIndex] = road;
                 pointRoadT[dragIndex] = roadT;
             }
-            else if (pointDeck[dragIndex] && RoadAt(hoverNode, hoverSegment, hoverT, out road, out roadT))
+            else if (pointDeck[dragIndex] && !(rampMode && dragIndex == 0) && RoadAt(hoverNode, hoverSegment, hoverT, out road, out roadT))
             {
                 // A deck point stays over the road, not joined to it.
                 pointNodes[dragIndex] = 0;

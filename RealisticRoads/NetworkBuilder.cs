@@ -208,6 +208,7 @@ namespace RealisticRoads
 
             float left = length, done = 0f;
             int pieces = 0;
+            var passed = new List<ushort>();   // nodes the split went on through
             string roadName = null;
             float ahead = Mathf.Cos(25f * Mathf.Deg2Rad);
             for (int guard = 0; guard < 16 && left > MinPiece; guard++)
@@ -240,6 +241,7 @@ namespace RealisticRoads
                     done += length2;
                     if (SegmentCount(far) != 2) break;   // a junction: the split stops there
                     heading = CurveMath.FlatNormal(nodes[far].m_position - nodes[node].m_position);
+                    passed.Add(far);
                     node = far;
                     continue;
                 }
@@ -248,6 +250,23 @@ namespace RealisticRoads
                 pieces++;
                 done += left;
                 break;
+            }
+            // A node with split roads on both sides is drawn as one too (its middle
+            // flat, no median end or crossing there).
+            foreach (ushort through in passed)
+            {
+                NetInfo both = null;
+                bool all = true;
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort s = nodes[through].GetSegment(i);
+                    if (s == 0) continue;
+                    if (!SplitRoads.IsSplit(segments[s].Info)) all = false;
+                    else both = segments[s].Info;
+                }
+                if (!all || both == null || nodes[through].Info == both) continue;
+                build.NodeInfos.Add(new KeyValuePair<ushort, NetInfo>(through, nodes[through].Info));
+                SetNodeInfo(through, both);
             }
             if (pieces > 0)
                 Mod.Log("  Split " + roadName + " under the ramp: " + done.ToString("F0") + " m in " + pieces + " piece(s), " +
