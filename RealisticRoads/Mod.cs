@@ -196,6 +196,7 @@ namespace RealisticRoads
             // Nothing of this city kept (its roads, meshes) once it is gone.
             RoadUpgrade.Forget();
             DeckFrames.Clear();
+            SplitRoads.Clear();
         }
     }
 

@@ -7,13 +7,15 @@ using UnityEngine;
 namespace RealisticRoads
 {
     // Split roads, VOP-style: a copy of a wide two-way road with its middle
-    // (its inner lanes on both sides, and the median between them) cut out,
+    // (its inner lanes on both sides, and the median between them) taken out,
     // built under a ramp rising out of the road's middle until the ramp is
-    // high enough to drive under. The ramp sits in the gap: no traffic, street
-    // lights or median under it, and no more width than the road.
+    // high enough to drive under. The ramp sits in the middle: no traffic,
+    // street lights or raised median under it, and no more width than the road.
+    // The middle stays paved (the median flattened into the road's surface),
+    // so no ground shows under the ramp's raised part or beside a narrow ramp.
     //
     // The copies are made from the game's own roads (their lanes and 3D
-    // models, cut along a line) while a city loads, before its roads are read,
+    // models) while a city loads, before its roads are read,
     // so cities saved with them load them again. They are hidden from the menus.
     // A city saved with them needs this mod to load them.
     public static class SplitRoads
@@ -32,6 +34,7 @@ namespace RealisticRoads
         // By the road each was made from.
         private static readonly Dictionary<string, List<Variant>> variants = new Dictionary<string, List<Variant>>();
         private static readonly HashSet<NetInfo> splitInfos = new HashSet<NetInfo>();
+        private static readonly List<Mesh> madeMeshes = new List<Mesh>();   // freed when the city unloads
         private static volatile bool active;
 
         public static bool Active => active;
@@ -136,15 +139,26 @@ namespace RealisticRoads
             foreach (var lane in copy.m_lanes)
                 if (lane != null && Mathf.Abs(lane.m_position) >= cut - 0.01f) lanes.Add(lane);
             copy.m_lanes = lanes.ToArray();
-            // Its models with the gap cut out.
+            // Its models (segments, and nodes: the ends of the split stretch) with
+            // the middle flattened into the road's surface.
+            float surface = road.m_surfaceLevel;
             if (copy.m_segments != null)
                 foreach (var segment in copy.m_segments)
                 {
                     if (segment == null) continue;
-                    var mesh = CutMesh(segment.m_mesh, cut);
+                    var mesh = FlattenMiddle(segment.m_mesh, cut, surface);
                     if (mesh != null) segment.m_mesh = mesh;
-                    var lod = CutMesh(segment.m_lodMesh, cut);
+                    var lod = FlattenMiddle(segment.m_lodMesh, cut, surface);
                     if (lod != null) segment.m_lodMesh = lod;
+                }
+            if (copy.m_nodes != null)
+                foreach (var node in copy.m_nodes)
+                {
+                    if (node == null) continue;
+                    var mesh = FlattenMiddle(node.m_mesh, cut, surface);
+                    if (mesh != null) node.m_mesh = mesh;
+                    var lod = FlattenMiddle(node.m_lodMesh, cut, surface);
+                    if (lod != null) node.m_lodMesh = lod;
                 }
             HideFromMenus(copy);
             lock (variants)
@@ -171,110 +185,42 @@ namespace RealisticRoads
             }
         }
 
-        // --- cutting a model along two lines -------------------------------------
+        // --- flattening a model's middle -----------------------------------------
 
-        private struct Vert
-        {
-            public Vector3 P, N;
-            public Vector4 T;
-            public Vector2 A, B;
-            public Color C;
-        }
-
-        // The model with everything closer than 'cut' to its centre line (x)
-        // removed; triangles across the line are clipped to it. Null if it
-        // can't be read.
-        internal static Mesh CutMesh(Mesh mesh, float cut)
+        // The model with everything closer than 'cut' to its centre line (x) and
+        // above the road's surface (a raised median, its kerbs) brought down to
+        // the surface: the middle stays paved, only flat. Null if it can't be read.
+        internal static Mesh FlattenMiddle(Mesh mesh, float cut, float surface)
         {
             if (mesh == null) return null;
-            var p = mesh.vertices;
-            var tris = mesh.triangles;
-            if (p == null || p.Length == 0 || tris == null || tris.Length == 0) return null;
-            var n = mesh.normals;
-            var t = mesh.tangents;
-            var a = mesh.uv;
-            var b = mesh.uv2;
-            var c = mesh.colors;
-            bool hasN = n != null && n.Length == p.Length, hasT = t != null && t.Length == p.Length, hasA = a != null && a.Length == p.Length,
-                 hasB = b != null && b.Length == p.Length, hasC = c != null && c.Length == p.Length;
-            var verts = new List<Vert>(p.Length);
-            for (int i = 0; i < p.Length; i++)
-                verts.Add(new Vert
-                {
-                    P = p[i], N = hasN ? n[i] : Vector3.up, T = hasT ? t[i] : new Vector4(1f, 0f, 0f, -1f),
-                    A = hasA ? a[i] : Vector2.zero, B = hasB ? b[i] : Vector2.zero, C = hasC ? c[i] : new Color(1f, 1f, 1f, 1f),
-                });
-            var outTris = new List<int>(tris.Length);
-            int original = verts.Count;
-            for (int i = 0; i + 2 < tris.Length; i += 3)
+            var vertices = mesh.vertices;
+            var triangles = mesh.triangles;
+            if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length == 0) return null;
+            int moved = 0;
+            for (int i = 0; i < vertices.Length; i++)
             {
-                int i0 = tris[i], i1 = tris[i + 1], i2 = tris[i + 2];
-                foreach (float side in new[] { -1f, 1f })
-                {
-                    bool k0 = p[i0].x * side >= cut, k1 = p[i1].x * side >= cut, k2 = p[i2].x * side >= cut;
-                    if (k0 && k1 && k2)
-                    {
-                        outTris.Add(i0); outTris.Add(i1); outTris.Add(i2);
-                        continue;
-                    }
-                    if (!k0 && !k1 && !k2) continue;
-                    // Clip the triangle to this side of the line (it keeps its winding).
-                    var poly = new List<Vert> { verts[i0], verts[i1], verts[i2] };
-                    var clipped = new List<Vert>();
-                    for (int e = 0; e < 3; e++)
-                    {
-                        Vert from = poly[e], to = poly[(e + 1) % 3];
-                        bool inFrom = from.P.x * side >= cut, inTo = to.P.x * side >= cut;
-                        if (inFrom) clipped.Add(from);
-                        if (inFrom != inTo)
-                        {
-                            float f = (side * cut - from.P.x) / (to.P.x - from.P.x);
-                            clipped.Add(Lerp(from, to, f));
-                        }
-                    }
-                    if (clipped.Count < 3) continue;
-                    int first = verts.Count;
-                    verts.AddRange(clipped);
-                    for (int k = 1; k + 1 < clipped.Count; k++)
-                    {
-                        outTris.Add(first); outTris.Add(first + k); outTris.Add(first + k + 1);
-                    }
-                }
+                if (Mathf.Abs(vertices[i].x) >= cut - 0.01f || vertices[i].y <= surface) continue;
+                vertices[i] = new Vector3(vertices[i].x, surface, vertices[i].z);
+                moved++;
             }
+            if (moved == 0) return null;   // nothing raised in the middle: the model as it is
             var result = new Mesh();
             result.name = mesh.name + " (split)";
-            var vp = new Vector3[verts.Count];
-            var vn = new Vector3[verts.Count];
-            var vt = new Vector4[verts.Count];
-            var va = new Vector2[verts.Count];
-            var vb = new Vector2[verts.Count];
-            var vc = new Color[verts.Count];
-            for (int i = 0; i < verts.Count; i++)
-            {
-                vp[i] = verts[i].P; vn[i] = verts[i].N; vt[i] = verts[i].T; va[i] = verts[i].A; vb[i] = verts[i].B; vc[i] = verts[i].C;
-            }
-            result.vertices = vp;
-            if (hasN) result.normals = vn;
-            if (hasT) result.tangents = vt;
-            if (hasA) result.uv = va;
-            if (hasB) result.uv2 = vb;
-            if (hasC) result.colors = vc;
-            result.triangles = outTris.ToArray();
+            result.vertices = vertices;
+            var normals = mesh.normals;
+            if (normals != null && normals.Length == vertices.Length) result.normals = normals;
+            var tangents = mesh.tangents;
+            if (tangents != null && tangents.Length == vertices.Length) result.tangents = tangents;
+            var uv = mesh.uv;
+            if (uv != null && uv.Length == vertices.Length) result.uv = uv;
+            var uv2 = mesh.uv2;
+            if (uv2 != null && uv2.Length == vertices.Length) result.uv2 = uv2;
+            var colors = mesh.colors;
+            if (colors != null && colors.Length == vertices.Length) result.colors = colors;
+            result.triangles = triangles;
             result.bounds = mesh.bounds;   // the game bends the model along the road: its bounds stay the road's
+            lock (madeMeshes) madeMeshes.Add(result);
             return result;
-        }
-
-        private static Vert Lerp(Vert x, Vert y, float f)
-        {
-            return new Vert
-            {
-                P = x.P + (y.P - x.P) * f,
-                N = (x.N + (y.N - x.N) * f).normalized,
-                T = new Vector4(x.T.x + (y.T.x - x.T.x) * f, x.T.y + (y.T.y - x.T.y) * f, x.T.z + (y.T.z - x.T.z) * f, x.T.w),
-                A = x.A + (y.A - x.A) * f,
-                B = x.B + (y.B - x.B) * f,
-                C = new Color(x.C.r + (y.C.r - x.C.r) * f, x.C.g + (y.C.g - x.C.g) * f, x.C.b + (y.C.b - x.C.b) * f, x.C.a + (y.C.a - x.C.a) * f),
-            };
         }
 
         // --- using them --------------------------------------------------------
@@ -297,6 +243,22 @@ namespace RealisticRoads
             }
             active = found > 0;
             if (variants.Count > 0) Mod.Log("Split roads: " + found + " ready");
+        }
+
+        // Main thread, the city unloading: its copies go (made again for the next).
+        public static void Clear()
+        {
+            active = false;
+            lock (variants)
+            {
+                splitInfos.Clear();
+                foreach (var list in variants.Values) foreach (var variant in list) variant.Info = null;
+            }
+            lock (madeMeshes)
+            {
+                foreach (var mesh in madeMeshes) if (mesh != null) UnityEngine.Object.Destroy(mesh);
+                madeMeshes.Clear();
+            }
         }
 
         public static bool IsSplit(NetInfo info)
@@ -333,26 +295,40 @@ namespace RealisticRoads
         }
 
         // Where a split road and another road leave a node in the same
-        // direction (within 10 degrees: a ramp rising out of its gap), both
-        // end square there, instead of being mitred against each other (the
-        // game stretches a corner between two roads that close far out).
-        internal static bool SquareEnd(ushort segment, ushort node, Vector3 direction, NetInfo info)
+        // direction (within 10 degrees: a ramp rising out of its middle), they
+        // and the road coming in the other way end square there, instead of
+        // being mitred against each other (the game stretches or pinches a
+        // corner between roads whose edges meet far out, or never).
+        internal static bool SquareEnd(ushort segment, ushort node, Vector3 direction)
         {
             if (!active || node == 0) return false;
-            var net = NetManager.instance;
-            bool ownSplit = IsSplit(info);
             Vector3 dir = CurveMath.FlatNormal(direction);
             if (dir == Vector3.zero) return false;
+            var net = NetManager.instance;
             float limit = Mathf.Cos(10f * Mathf.Deg2Rad);
+            var away = new Vector3[8];
+            var split = new bool[8];
+            var ids = new ushort[8];
+            int count = 0;
             for (int i = 0; i < 8; i++)
             {
-                ushort other = net.m_nodes.m_buffer[node].GetSegment(i);
-                if (other == 0 || other == segment) continue;
-                var s = net.m_segments.m_buffer[other];
-                if (!ownSplit && !IsSplit(s.Info)) continue;
-                Vector3 away = CurveMath.FlatNormal(s.m_startNode == node ? s.m_startDirection : s.m_endDirection);
-                if (Vector3.Dot(away, dir) > limit) return true;
+                ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
+                if (s == 0) continue;
+                var seg = net.m_segments.m_buffer[s];
+                ids[count] = s;
+                away[count] = CurveMath.FlatNormal(seg.m_startNode == node ? seg.m_startDirection : seg.m_endDirection);
+                split[count] = IsSplit(seg.Info);
+                count++;
             }
+            // A split road and another one leaving together: their line.
+            for (int a = 0; a < count; a++)
+                for (int b = a + 1; b < count; b++)
+                {
+                    if (!split[a] && !split[b]) continue;
+                    if (Vector3.Dot(away[a], away[b]) <= limit) continue;
+                    // This segment along that line, either way.
+                    return Mathf.Abs(Vector3.Dot(dir, away[a])) > limit;
+                }
             return false;
         }
     }
@@ -395,7 +371,7 @@ namespace RealisticRoads
             return null;
         }
 
-        public static void Postfix(ref NetSegment __instance, ushort __0, bool __2, ref Vector3 __4, ref Vector3 __5, ref bool __6)
+        public static void Postfix(ref NetSegment __instance, ushort __0, bool __2, bool __3, ref Vector3 __4, ref Vector3 __5, ref bool __6)
         {
             try
             {
@@ -404,12 +380,14 @@ namespace RealisticRoads
                 ushort node = start ? __instance.m_startNode : __instance.m_endNode;
                 Vector3 dir = start ? __instance.m_startDirection : __instance.m_endDirection;
                 var info = __instance.Info;
-                if (info == null || !SplitRoads.SquareEnd(__0, node, dir, info)) return;
+                if (info == null || !SplitRoads.SquareEnd(__0, node, dir)) return;
                 Vector3 centre = NetManager.instance.m_nodes.m_buffer[node].m_position;
                 Vector3 flat = CurveMath.FlatNormal(dir);
                 Vector3 right = new Vector3(flat.z, 0f, -flat.x);
-                // The side the game put this corner on, at the road's half width, square across.
-                float side = Vector3.Dot(__4 - centre, right) >= 0f ? 1f : -1f;
+                // Square across at the road's half width. Left and right are the
+                // segment's own (from its start node to its end node); 'dir' points
+                // into it, so at its end node they are the other way round.
+                float side = start != __3 ? 1f : -1f;
                 __4 = new Vector3(centre.x + right.x * side * info.m_halfWidth, __4.y, centre.z + right.z * side * info.m_halfWidth);
                 __5 = dir;
                 __6 = true;
