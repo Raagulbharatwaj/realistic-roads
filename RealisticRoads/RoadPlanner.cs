@@ -87,6 +87,12 @@ namespace RealisticRoads
         // overpass), with a warning. Rail steeper than RailWarnGrade is warned.
         public const float SteepGrade = 0.045f;
         public const float RailWarnGrade = 0.02f;
+        // A slip ramp (Ramp mode, roads only): cars take it slowly, so it may be
+        // steeper, and shorter.
+        public const float RampGrade = 0.065f;
+        public const float RampSteepGrade = 0.07f;
+        // Set by the tool (main thread) while it plans a ramp.
+        [ThreadStatic] public static bool Ramp;
         [ThreadStatic] private static float maxGrade;
         [ThreadStatic] private static bool steepGrades;
         public static float MaxGrade => maxGrade > 0f ? maxGrade : RoadGrade;
@@ -134,8 +140,10 @@ namespace RealisticRoads
                 steepGrades = false;
                 if (steep.Ok)
                 {
-                    steep.Warnings.Insert(0, "No room at the usual grades (roads " + Percent(RoadGrade) + ", rail " + Percent(RailGrade) +
-                                             ", rail lowered under it " + Percent(LoweredRailGrade) + "): ramps up to " + Percent(SteepGrade));
+                    steep.Warnings.Insert(0, Ramp && !IsRail(info)
+                        ? "No room for the ramp at " + Percent(RampGrade) + ": up to " + Percent(RampSteepGrade)
+                        : "No room at the usual grades (roads " + Percent(RoadGrade) + ", rail " + Percent(RailGrade) +
+                          ", rail lowered under it " + Percent(LoweredRailGrade) + "): ramps up to " + Percent(SteepGrade));
                     plan = steep;
                 }
             }
@@ -204,7 +212,8 @@ namespace RealisticRoads
             var forceBridge = new bool[n];  // deck over a lowered road (overpass)
             var underWater = new bool[n];   // in a water crossing chosen as a tunnel
 
-            maxGrade = steepGrades ? SteepGrade : GradeFor(info);
+            bool ramp = Ramp && !IsRail(info);
+            maxGrade = ramp ? (steepGrades ? RampSteepGrade : RampGrade) : steepGrades ? SteepGrade : GradeFor(info);
             plan.Grade = maxGrade;
             // Raised parts use the elevated version, else the bridge one (InfoFor).
             bool hasBridge = InfoFor(info, NodeKind.Bridge) != null && InfoFor(info, NodeKind.Bridge) != info;
