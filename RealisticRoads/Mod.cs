@@ -15,7 +15,7 @@ namespace RealisticRoads
     {
         // Which source this build is from, in the log, to tell an old or second
         // copy of the mod from the current one. Changed with each tested feature.
-        public const string SourceTag = "median-ramps-3-choices-profile-down";
+        public const string SourceTag = "median-ramps-ground-joins-road-not-ramp";
 
         public string Name => "Realistic Roads (beta)";
         public string Description => "Plan your roads and add layers to your city: draw a whole route, choose how it crosses everything, stack decks over and under streets.";

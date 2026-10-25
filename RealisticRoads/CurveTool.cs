@@ -1771,6 +1771,22 @@ namespace RealisticRoads
             return true;
         }
 
+        // A node on the ground with a road of 'road's kind (or its split copy)
+        // at it, not a median ramp road.
+        private static bool EndsOnGroundRoad(ushort node, NetInfo road)
+        {
+            if (node == 0 || road == null) return false;
+            var net = NetManager.instance;
+            for (int i = 0; i < 8; i++)
+            {
+                ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
+                if (s == 0) continue;
+                var info = net.m_segments.m_buffer[s].Info;
+                if (info != null && !SplitRoads.IsRamp(info) && SplitRoads.OriginalOf(info) == road) return true;
+            }
+            return false;
+        }
+
         // The segment of 'road' (or its split copy) under 'p', and where on it.
         private static bool SameRoadAt(Vector3 p, NetInfo road, out ushort segment, out float t)
         {
@@ -2138,7 +2154,7 @@ namespace RealisticRoads
             Vector3 first = ramp.Polyline[0];
             ushort firstNode, firstSegment;
             float firstT;
-            EndOn(ref first, split, EndSnap, out firstNode, out firstSegment, out firstT);
+            EndOn(ref first, split, EndSnap, out firstNode, out firstSegment, out firstT, true);
             // Going down, the ground lanes run from the last junction before the
             // landing to it; going up, from the start to the first junction.
             bool down = ramp.Plan != null && ramp.Plan.MedianDown;
@@ -2146,7 +2162,7 @@ namespace RealisticRoads
             Vector3 last = ramp.Polyline[ramp.Polyline.Count - 1];
             ushort lastNode, lastSegment;
             float lastT;
-            EndOn(ref last, split, EndSnap, out lastNode, out lastSegment, out lastT);
+            EndOn(ref last, split, EndSnap, out lastNode, out lastSegment, out lastT, true);
             foreach (var crossing in CrossingFinder.Find(ramp.Polyline, split, down ? (ushort)0 : firstNode, down ? lastNode : (ushort)0))
             {
                 if (!crossing.ExistingAtGround || !crossing.CanConnect || SplitRoads.IsRamp(segments[crossing.Segment].Info)) continue;
@@ -2159,8 +2175,8 @@ namespace RealisticRoads
             ushort startNode, endNode, startSegment, endSegment;
             float startT, endT;
             Vector3 start = polyline[0], end = polyline[polyline.Count - 1];
-            EndOn(ref start, split, EndSnap, out startNode, out startSegment, out startT);
-            EndOn(ref end, split, EndSnap, out endNode, out endSegment, out endT);
+            EndOn(ref start, split, EndSnap, out startNode, out startSegment, out startT, true);
+            EndOn(ref end, split, EndSnap, out endNode, out endSegment, out endT, true);
             polyline[0] = start;
             polyline[polyline.Count - 1] = end;
             var lifts = new List<float> { 0f, 0f };
@@ -2193,8 +2209,9 @@ namespace RealisticRoads
         }
 
         // A parallel end on a node, or on the middle of a road, of its own
-        // kind joins it there ('at' moves onto it).
-        private static void EndOn(ref Vector3 at, NetInfo info, float reach, out ushort node, out ushort segment, out float t)
+        // kind joins it there ('at' moves onto it). 'skipRamps': not onto a
+        // median ramp road (a ground road beside one never joins the ramp).
+        private static void EndOn(ref Vector3 at, NetInfo info, float reach, out ushort node, out ushort segment, out float t, bool skipRamps = false)
         {
             node = segment = 0;
             t = 0f;
@@ -2204,7 +2221,8 @@ namespace RealisticRoads
             foreach (ushort s in near)
             {
                 var seg = net.m_segments.m_buffer[s];
-                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !RoadPlanner.SameKind(seg.Info, info)) continue;
+                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !RoadPlanner.SameKind(seg.Info, info) ||
+                    (skipRamps && SplitRoads.IsRamp(seg.Info))) continue;
                 foreach (ushort end in new[] { seg.m_startNode, seg.m_endNode })
                 {
                     float d = CurveMath.FlatDistance(net.m_nodes.m_buffer[end].m_position, at);
@@ -2221,7 +2239,8 @@ namespace RealisticRoads
             foreach (ushort s in near)
             {
                 var seg = net.m_segments.m_buffer[s];
-                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !RoadPlanner.SameKind(seg.Info, info)) continue;
+                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !RoadPlanner.SameKind(seg.Info, info) ||
+                    (skipRamps && SplitRoads.IsRamp(seg.Info))) continue;
                 Vector3 on;
                 float onT = CrossingFinder.ClosestT(s, at, out on);
                 if (CurveMath.FlatDistance(on, at) > seg.Info.m_halfWidth) continue;
@@ -2553,6 +2572,18 @@ namespace RealisticRoads
                 if ((medianStart != null || medianEnd != null) && split == null)
                     division.Plan.Warnings.Add("The " + (medianStart ?? medianEnd).name + " has no split version (only the game's own two-way roads " +
                                                "with two or more lanes each way do): the ramp rises out of the plain road");
+                // Not along a road: the ramp and its new ground road leave (or
+                // join) together at the end of a road of the choice's kind, which
+                // feeds both. On open ground both would just start there, side by
+                // side, with no lanes coming in.
+                int joinAt = down ? n : 0;
+                if (medianRamp != 0 && medianStart == null && medianEnd == null && !EndsOnGroundRoad(nodes[joinAt], MedianGroundRoad))
+                    division.Plan.Problems.Insert(0, (down ? "Land" : "Start") + " the " + MedianRampNames[medianRamp] + " on the end of a " +
+                                                     Title(MedianGroundRoad) + " (or draw it along one): its middle lanes " +
+                                                     (down ? "come from the ramp and its outer lanes from the road beside it there"
+                                                           : "go up the ramp and its outer lanes on along the road beside it") +
+                                                     ". On open ground the lanes would " + (down ? "end" : "start") + " there with no road " +
+                                                     (down ? "to go on to" : "to come from"));
             }
             return division;
         }
