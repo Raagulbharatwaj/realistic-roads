@@ -631,35 +631,66 @@ namespace RealisticRoads
         // corner between roads whose edges meet far out, or never).
         internal static bool SquareEnd(ushort segment, ushort node, Vector3 direction)
         {
+            Vector3 dir = CurveMath.FlatNormal(direction), line;
+            if (dir == Vector3.zero || !SplitLine(node, out line)) return false;
+            // This segment along that line, either way.
+            return Mathf.Abs(Vector3.Dot(dir, line)) > Mathf.Cos(LineAngle * Mathf.Deg2Rad);
+        }
+
+        private const float LineAngle = 10f;
+
+        // A split road and another road leaving 'node' together: the direction
+        // they leave in ('line').
+        private static bool SplitLine(ushort node, out Vector3 line)
+        {
+            line = Vector3.zero;
             if (!active || node == 0) return false;
-            Vector3 dir = CurveMath.FlatNormal(direction);
-            if (dir == Vector3.zero) return false;
             var net = NetManager.instance;
-            float limit = Mathf.Cos(10f * Mathf.Deg2Rad);
+            float limit = Mathf.Cos(LineAngle * Mathf.Deg2Rad);
             var away = new Vector3[8];
             var split = new bool[8];
-            var ids = new ushort[8];
             int count = 0;
             for (int i = 0; i < 8; i++)
             {
                 ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
                 if (s == 0) continue;
                 var seg = net.m_segments.m_buffer[s];
-                ids[count] = s;
                 away[count] = CurveMath.FlatNormal(seg.m_startNode == node ? seg.m_startDirection : seg.m_endDirection);
                 split[count] = IsSplit(seg.Info);
                 count++;
             }
-            // A split road and another one leaving together: their line.
             for (int a = 0; a < count; a++)
                 for (int b = a + 1; b < count; b++)
                 {
                     if (!split[a] && !split[b]) continue;
                     if (Vector3.Dot(away[a], away[b]) <= limit) continue;
-                    // This segment along that line, either way.
-                    return Mathf.Abs(Vector3.Dot(dir, away[a])) > limit;
+                    line = away[a];
+                    return true;
                 }
             return false;
+        }
+
+        // Where a ramp rises out of a road's middle (or lands in it): a node
+        // where a split road and the ramp leave together and every road at it
+        // runs along their line (the road coming in included; no side road).
+        // The roads there end square at its centre and meet edge to edge, so
+        // the node itself is drawn as nothing: no junction, crosswalks or
+        // kerbs across the road, as if the ramp rose out of it without one.
+        internal static bool HiddenNode(ushort node)
+        {
+            Vector3 line;
+            if (!SplitLine(node, out line)) return false;
+            var net = NetManager.instance;
+            float limit = Mathf.Cos(LineAngle * Mathf.Deg2Rad);
+            for (int i = 0; i < 8; i++)
+            {
+                ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
+                if (s == 0) continue;
+                var seg = net.m_segments.m_buffer[s];
+                Vector3 away = CurveMath.FlatNormal(seg.m_startNode == node ? seg.m_startDirection : seg.m_endDirection);
+                if (Mathf.Abs(Vector3.Dot(away, line)) <= limit) return false;
+            }
+            return true;
         }
     }
 
@@ -725,6 +756,109 @@ namespace RealisticRoads
             catch
             {
                 // The game's corner stays.
+            }
+        }
+    }
+
+    // The node where a ramp rises out of a road's middle is not drawn (see
+    // SplitRoads.HiddenNode): neither up close (RenderInstance) nor from afar
+    // (the batched group meshes). Each method's node id is its first ushort.
+    [HarmonyPatch]
+    public static class HiddenNodeRenderPatch
+    {
+        private static readonly Dictionary<MethodBase, int> nodeArg = new Dictionary<MethodBase, int>();
+
+        public static IEnumerable<MethodBase> TargetMethods()
+        {
+            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+            {
+                if (method.Name != "RenderInstance" && method.Name != "PopulateGroupData") continue;
+                if (method.ReturnType != typeof(void) || NodeArg(method) < 0) continue;
+                yield return method;
+            }
+        }
+
+        internal static int NodeArg(MethodBase method)
+        {
+            lock (nodeArg)
+            {
+                int index;
+                if (nodeArg.TryGetValue(method, out index)) return index;
+                index = -1;
+                var p = method.GetParameters();
+                for (int i = 0; i < p.Length; i++)
+                    if (p[i].ParameterType == typeof(ushort)) { index = i; break; }
+                nodeArg[method] = index;
+                return index;
+            }
+        }
+
+        public static bool Prefix(MethodBase __originalMethod, object[] __args)
+        {
+            try
+            {
+                int i = NodeArg(__originalMethod);
+                return i < 0 || !SplitRoads.HiddenNode((ushort)__args[i]);
+            }
+            catch
+            {
+                return true;
+            }
+        }
+    }
+
+    // The same for the count of what a node adds to its group's mesh.
+    [HarmonyPatch]
+    public static class HiddenNodeGroupPatch
+    {
+        public static IEnumerable<MethodBase> TargetMethods()
+        {
+            foreach (var method in typeof(NetNode).GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                if (method.Name == "CalculateGroupData" && method.ReturnType == typeof(bool) && HiddenNodeRenderPatch.NodeArg(method) >= 0)
+                    yield return method;
+        }
+
+        public static bool Prefix(MethodBase __originalMethod, object[] __args, ref bool __result)
+        {
+            try
+            {
+                int i = HiddenNodeRenderPatch.NodeArg(__originalMethod);
+                if (i < 0 || !SplitRoads.HiddenNode((ushort)__args[i])) return true;
+                __result = false;
+                return false;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+    }
+
+    // No traffic lights where a ramp rises out of a road's middle: traffic
+    // there only splits or merges, nothing crosses.
+    [HarmonyPatch]
+    public static class HiddenNodeLightsPatch
+    {
+        public static IEnumerable<MethodBase> TargetMethods()
+        {
+            foreach (var type in typeof(NetAI).Assembly.GetTypes())
+            {
+                if (type != typeof(RoadBaseAI) && !type.IsSubclassOf(typeof(RoadBaseAI))) continue;
+                var method = type.GetMethod("UpdateNodeFlags", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+                if (method != null && method.GetParameters().Length == 2) yield return method;
+            }
+        }
+
+        public static void Postfix(ushort __0, ref NetNode __1)
+        {
+            try
+            {
+                if (!SplitRoads.HiddenNode(__0)) return;
+                __1.m_flags = (__1.m_flags & ~NetNode.Flags.TrafficLights) | NetNode.Flags.CustomTrafficLights;
+            }
+            catch
+            {
+                // The game's flags stay.
             }
         }
     }
