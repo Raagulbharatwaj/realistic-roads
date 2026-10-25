@@ -102,16 +102,17 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      room). Drawn against a one-way road's traffic, or with an end not on a road, the panel says so;
    - **Median ramp roads** (three buttons next to Ramp: **six-lane road + 2-lane ramp**, **six-lane + 4-lane ramp**,
      **four-lane + 2-lane ramp**; pressed again: off): a road with a ramp rising out of its middle, VOP-style, built
-     from one line you draw. **Up**: start on the ground (on the road and along it, or anywhere); the ramp climbs at
+     from one line you draw. **Up**: start on the road and along it, or on the end of a road of the choice's kind (Six-Lane or
+     Four-Lane Road; not open ground, where no lanes would come in); the ramp climbs at
      exactly 8 % from there to its target (the deck you end it on, else the first deck level: the height RR's own deck
      has over the road where it starts) and stays level at it however far you draw, flying over the next junction.
      **Down**: start on a deck's end; it stays at the deck's height and comes down at exactly 8 % into the middle of the
-     road (or ground) where you end it. If the line is too short to climb or come down at 8 %, or the profile doesn't
+     road where you end it (along it, or on the end of a road of the choice's kind). If the line is too short to climb or come down at 8 %, or the profile doesn't
      clear something it crosses, the panel says so and nothing is built. On the ground, the road's outer lanes run
      beside the ramp as a **split** copy of the road (its inner lanes, median and median lights taken out, the middle
      kept paved and flat): along the existing road (to the next junction, or where the ramp turns off it), or as a new
-     road along the ramp's line to the first road it meets (going up) or from the last one behind the landing (going
-     down), joined there. Ramp and ground road are one build: one Ctrl+Z removes both, and if the ground road can't be
+     road from the road end it starts on along the ramp's line to the first road it meets (going up), or from the last
+     one behind the landing to the road end it lands on (going down), joined there; it never joins the ramp itself. Ramp and ground road are one build: one Ctrl+Z removes both, and if the ground road can't be
      built the ramp is removed again. The ramp is a narrow road made from the game's Two-Lane or Four-Lane Road (no
      sidewalks, a parapet each side, on the highway ramp's slim pillar). The split and ramp roads are made from the
      game's own roads while a city loads and are hidden from the menus; a city saved with them needs this mod to load
