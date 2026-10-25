@@ -100,14 +100,17 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      so it peels off and merges in like a real slip lane instead of meeting it at an angle. The heights between come
      from the two roads and are planned like any curve (crossings, the usual grades, up to 4.5 % where there is no
      room). Drawn against a one-way road's traffic, or with an end not on a road, the panel says so;
-     A ramp drawn along a two-way road from a point it goes on past (not its dead end) rises out of its **middle**,
-     VOP-style: it leaves along the centre line, takes the road's inner lanes (it must have fewer lanes than the road),
-     and the road under it becomes a **split** copy of itself (its inner lanes, median and median lights taken out,
-     the middle kept paved and flat; made from the game's own road while a city loads, hidden from the menus) until
-     the ramp is 5.5 m up. The ramp's piece over the road is a deck following it, Deck on or off (with Deck on, the
-     ramp's first point still starts on the road). Where the split road and the ramp leave a node together, they and
-     the road coming in end square there. The game's own two-way roads with two or more lanes each way have split
-     copies; a city saved with them needs this mod to load them;
+   - **Median ramp** (next to Ramp; press again for the next, then off): a road with a ramp rising out of its middle,
+     VOP-style, in three versions: **six-lane road + 2-lane ramp**, **six-lane + 4-lane ramp**, **four-lane + 2-lane
+     ramp**. Draw the ramp's line: it starts on the ground (on an existing road, or anywhere), rises at 8 % to the
+     first deck level (a deck's clearance over what is below) and stays there as far as you draw, flying over the next
+     junction like any deck. On the ground, the road's outer lanes go on beside it as a **split** copy of the road (its
+     inner lanes, median and median lights taken out, the middle kept paved and flat) to the next junction, where they
+     join it: along the existing road you started on (to where the ramp turns off it), or as a new road along the
+     ramp's line. The ramp is a narrow road made from the game's Two-Lane or Four-Lane Road (no sidewalks, a parapet
+     each side) as wide as the gap. The split and ramp roads are made from the game's own roads while a city loads and
+     are hidden from the menus; a city saved with them needs this mod to load them. Where a split road and the ramp
+     leave a node together, they and the road coming in end square there;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,

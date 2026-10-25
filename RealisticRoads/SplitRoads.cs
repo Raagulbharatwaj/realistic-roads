@@ -21,7 +21,6 @@ namespace RealisticRoads
     public static class SplitRoads
     {
         public const string Prefix = "RR Split ";
-        public const float SplitClear = 5.5f;     // the split road runs on until the ramp is this high above it
 
         private class Variant
         {
@@ -70,6 +69,15 @@ namespace RealisticRoads
                 }
             }
             string collectionName = ((Component)collection).gameObject.name;
+            int splits = made.Count;
+            try
+            {
+                MakeRamps(prefabs, made);
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Making the median ramp roads failed", e);
+            }
             if (made.Count == 0)
             {
                 if (candidates > 0) Mod.Log("Split roads: " + candidates + " road(s) of " + collectionName + " could be split, but no copy was made");
@@ -89,7 +97,7 @@ namespace RealisticRoads
                 for (int i = replaced.Length; i < longer.Length; i++) longer[i] = string.Empty;
                 replacedField.SetValue(collection, longer);
             }
-            Mod.Log("Split roads: " + made.Count + " made from " + candidates + " road(s) of " + collectionName);
+            Mod.Log("Split roads: " + splits + " made from " + candidates + " road(s) of " + collectionName);
         }
 
         // A two-way ground road with at least two vehicle lanes each way.
@@ -172,7 +180,8 @@ namespace RealisticRoads
                     if (lod != null) node.m_lodMesh = lod;
                 }
             HideFromMenus(copy);
-            Name(copy, road, inner);
+            Name(copy, Title(road) + " (split, " + inner + " lane" + (inner > 1 ? "s" : "") + " each way)",
+                "Built by Realistic Roads under a ramp rising out of the road's middle.");
             lock (variants)
             {
                 List<Variant> list;
@@ -186,9 +195,23 @@ namespace RealisticRoads
 
         private static bool namingFailed;
 
+        private static string Title(NetInfo road)
+        {
+            string title;
+            try
+            {
+                title = road.GetUncheckedLocalizedTitle();
+            }
+            catch
+            {
+                title = null;
+            }
+            return string.IsNullOrEmpty(title) ? road.name : title;
+        }
+
         // The copy's name and description in the game's text tables (it looks
         // them up for every road; without them it logs an error for each copy).
-        private static void Name(NetInfo copy, NetInfo road, int inner)
+        private static void Name(NetInfo copy, string title, string description)
         {
             if (namingFailed) return;
             try
@@ -198,20 +221,10 @@ namespace RealisticRoads
                 var locale = managerType.GetField("m_Locale", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(manager);
                 var keyType = locale.GetType().GetNestedType("Key");
                 var add = locale.GetType().GetMethod("AddLocalizedString", new[] { keyType, typeof(string) });
-                string title;
-                try
-                {
-                    title = road.GetUncheckedLocalizedTitle();
-                }
-                catch
-                {
-                    title = null;
-                }
-                if (string.IsNullOrEmpty(title)) title = road.name;
                 var texts = new[]
                 {
-                    new KeyValuePair<string, string>("NET_TITLE", title + " (split, " + inner + " lane" + (inner > 1 ? "s" : "") + " each way)"),
-                    new KeyValuePair<string, string>("NET_DESC", "Built by Realistic Roads under a ramp rising out of the road's middle."),
+                    new KeyValuePair<string, string>("NET_TITLE", title),
+                    new KeyValuePair<string, string>("NET_DESC", description),
                 };
                 foreach (var text in texts)
                 {
@@ -250,6 +263,172 @@ namespace RealisticRoads
             }
         }
 
+        // --- narrow ramp roads (for median ramps) ---------------------------------
+
+        public const string RampPrefix = "RR Ramp ";
+        private const float RampBarrier = 0.6f;    // the parapet each side of a ramp road
+        private static readonly Dictionary<int, string> rampNames = new Dictionary<int, string>();   // by its lanes (2, 4)
+        private static readonly Dictionary<int, NetInfo> ramps = new Dictionary<int, NetInfo>();
+
+        // A two-lane and a four-lane ramp road (a ground and an elevated
+        // version each), from the game's Two-Lane and Four-Lane Road, as wide as
+        // the gap in the split Six-Lane Road they rise out of (its inner one or
+        // two lanes each way): no sidewalks or parking, the lanes a little
+        // narrower, a parapet at each edge.
+        private static void MakeRamps(NetInfo[] prefabs, List<NetInfo> made)
+        {
+            NetInfo basic = null, medium = null, large = null;
+            foreach (var prefab in prefabs)
+            {
+                if (prefab == null) continue;
+                if (prefab.name == "Basic Road") basic = prefab;
+                else if (prefab.name == "Medium Road") medium = prefab;
+                else if (prefab.name == "Large Road") large = prefab;
+            }
+            if (basic != null) MakeRamp(basic, 2, large != null ? CutFor(large, 1) : 3f, made);
+            if (medium != null) MakeRamp(medium, 4, large != null ? CutFor(large, 2) : 6f, made);
+        }
+
+        private static void MakeRamp(NetInfo road, int lanes, float half, List<NetInfo> made)
+        {
+            if (half <= 1f) return;
+            var ai = road.m_netAI != null ? road.m_netAI : road.GetComponent<NetAI>();
+            var elevatedField = ai != null ? ai.GetType().GetField("m_elevatedInfo", BindingFlags.Public | BindingFlags.Instance) : null;
+            var elevated = elevatedField != null ? elevatedField.GetValue(ai) as NetInfo : null;
+            if (elevated == null) return;
+            var narrowElevated = Narrow(elevated, RampPrefix + lanes + " Elevated", half);
+            var narrow = Narrow(road, RampPrefix + lanes, half);
+            if (narrow == null || narrowElevated == null) return;
+            // The ground version's raised versions: the narrow elevated one (no bridge
+            // trusses, no slope or tunnel: a ramp never goes below the ground).
+            var narrowAi = narrow.GetComponent<NetAI>();
+            foreach (var field in new[] { "m_elevatedInfo", "m_bridgeInfo", "m_slopeInfo", "m_tunnelInfo" })
+            {
+                var f = narrowAi != null ? narrowAi.GetType().GetField(field, BindingFlags.Public | BindingFlags.Instance) : null;
+                if (f != null && f.FieldType == typeof(NetInfo)) f.SetValue(narrowAi, field == "m_elevatedInfo" || field == "m_bridgeInfo" ? narrowElevated : null);
+            }
+            string title = lanes + "-lane median ramp";
+            Name(narrow, title, "A ramp rising out of a road's middle, built by Realistic Roads.");
+            Name(narrowElevated, title + " (elevated)", "A ramp rising out of a road's middle, built by Realistic Roads.");
+            made.Add(narrowElevated);
+            made.Add(narrow);
+            lock (variants) rampNames[lanes] = narrow.name;
+            Mod.Log("Median ramps: " + narrow.name + " made from " + road.name + ", " + (2f * half).ToString("F1") + " m wide");
+        }
+
+        // A copy of 'road' 'half' either side of its centre: its vehicle lanes
+        // (closer together if need be), its models squeezed to match: the
+        // carriageway scaled, the sidewalks and parking gone, the outer edge (the
+        // parapet or kerb) kept and moved in.
+        private static NetInfo Narrow(NetInfo road, string name, float half)
+        {
+            float keep = 0f;
+            foreach (var lane in road.m_lanes)
+                if (lane != null && (lane.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None)
+                    keep = Mathf.Max(keep, Mathf.Abs(lane.m_position) + lane.m_width * 0.5f);
+            if (keep <= 0f) return null;
+            float inner = Mathf.Max(half - RampBarrier, keep * 0.6f);
+            float scale = Mathf.Min(1f, inner / keep);
+            inner = keep * scale;
+            var go = UnityEngine.Object.Instantiate(road.gameObject);
+            go.name = name;
+            if (road.transform != null && go.transform != null) go.transform.parent = road.transform.parent;
+            var copy = go.GetComponent<NetInfo>();
+            if (copy == null)
+            {
+                UnityEngine.Object.Destroy(go);
+                return null;
+            }
+            var lanes = new List<NetInfo.Lane>();
+            foreach (var lane in copy.m_lanes)
+            {
+                if (lane == null || (lane.m_laneType & NetInfo.LaneType.Vehicle) == NetInfo.LaneType.None) continue;
+                lane.m_position *= scale;
+                lane.m_width *= scale;
+                lanes.Add(lane);
+            }
+            copy.m_lanes = lanes.ToArray();
+            copy.m_halfWidth = inner + RampBarrier;
+            copy.m_pavementWidth = RampBarrier;
+            if (copy.m_segments != null)
+                foreach (var segment in copy.m_segments)
+                {
+                    if (segment == null) continue;
+                    var mesh = Squeeze(segment.m_mesh, keep, scale, inner);
+                    if (mesh != null) segment.m_mesh = mesh;
+                    var lod = Squeeze(segment.m_lodMesh, keep, scale, inner);
+                    if (lod != null) segment.m_lodMesh = lod;
+                }
+            if (copy.m_nodes != null)
+                foreach (var node in copy.m_nodes)
+                {
+                    if (node == null) continue;
+                    var mesh = Squeeze(node.m_mesh, keep, scale, inner);
+                    if (mesh != null) node.m_mesh = mesh;
+                    var lod = Squeeze(node.m_lodMesh, keep, scale, inner);
+                    if (lod != null) node.m_lodMesh = lod;
+                }
+            HideFromMenus(copy);
+            return copy;
+        }
+
+        // A model squeezed across: within 'keep' of the centre scaled by 'scale'
+        // (to 'inner'); from there to RampBarrier short of its edge collapsed
+        // onto 'inner'; its edge (the parapet) moved in unchanged.
+        internal static Mesh Squeeze(Mesh mesh, float keep, float scale, float inner)
+        {
+            if (mesh == null) return null;
+            var vertices = mesh.vertices;
+            var triangles = mesh.triangles;
+            if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length == 0) return null;
+            float edge = 0f;
+            foreach (var v in vertices) edge = Mathf.Max(edge, Mathf.Abs(v.x));
+            float edgeStart = Mathf.Max(keep, edge - RampBarrier);
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                float a = Mathf.Abs(vertices[i].x), squeezed;
+                if (a <= keep) squeezed = a * scale;
+                else if (a < edgeStart) squeezed = inner;
+                else squeezed = inner + (a - edgeStart);
+                vertices[i] = new Vector3(vertices[i].x < 0f ? -squeezed : squeezed, vertices[i].y, vertices[i].z);
+            }
+            return CopyWith(mesh, vertices, triangles, " (ramp)");
+        }
+
+        private static Mesh CopyWith(Mesh mesh, Vector3[] vertices, int[] triangles, string suffix)
+        {
+            var result = new Mesh();
+            result.name = mesh.name + suffix;
+            result.vertices = vertices;
+            var normals = mesh.normals;
+            if (normals != null && normals.Length == vertices.Length) result.normals = normals;
+            var tangents = mesh.tangents;
+            if (tangents != null && tangents.Length == vertices.Length) result.tangents = tangents;
+            var uv = mesh.uv;
+            if (uv != null && uv.Length == vertices.Length) result.uv = uv;
+            var uv2 = mesh.uv2;
+            if (uv2 != null && uv2.Length == vertices.Length) result.uv2 = uv2;
+            var colors = mesh.colors;
+            if (colors != null && colors.Length == vertices.Length) result.colors = colors;
+            result.triangles = triangles;
+            result.bounds = mesh.bounds;   // the game bends the model along the road: its bounds stay the road's
+            lock (madeMeshes) madeMeshes.Add(result);
+            return result;
+        }
+
+        // One of the ramp roads (either version).
+        public static bool IsRamp(NetInfo info)
+        {
+            return info != null && info.name != null && info.name.StartsWith(RampPrefix);
+        }
+
+        // The ramp road with 'lanes' lanes (2 or 4), once the city is loaded; null if none.
+        public static NetInfo RampRoad(int lanes)
+        {
+            NetInfo info;
+            lock (variants) return ramps.TryGetValue(lanes, out info) ? info : null;
+        }
+
         // --- flattening a model's middle -----------------------------------------
 
         // The model with everything closer than 'cut' to its centre line (x) and
@@ -269,23 +448,7 @@ namespace RealisticRoads
                 moved++;
             }
             if (moved == 0) return null;   // nothing raised in the middle: the model as it is
-            var result = new Mesh();
-            result.name = mesh.name + " (split)";
-            result.vertices = vertices;
-            var normals = mesh.normals;
-            if (normals != null && normals.Length == vertices.Length) result.normals = normals;
-            var tangents = mesh.tangents;
-            if (tangents != null && tangents.Length == vertices.Length) result.tangents = tangents;
-            var uv = mesh.uv;
-            if (uv != null && uv.Length == vertices.Length) result.uv = uv;
-            var uv2 = mesh.uv2;
-            if (uv2 != null && uv2.Length == vertices.Length) result.uv2 = uv2;
-            var colors = mesh.colors;
-            if (colors != null && colors.Length == vertices.Length) result.colors = colors;
-            result.triangles = triangles;
-            result.bounds = mesh.bounds;   // the game bends the model along the road: its bounds stay the road's
-            lock (madeMeshes) madeMeshes.Add(result);
-            return result;
+            return CopyWith(mesh, vertices, triangles, " (split)");
         }
 
         // --- using them --------------------------------------------------------
@@ -306,8 +469,17 @@ namespace RealisticRoads
                         found++;
                     }
             }
+            lock (variants)
+            {
+                ramps.Clear();
+                foreach (var pair in rampNames)
+                {
+                    var info = PrefabCollection<NetInfo>.FindLoaded(pair.Value);
+                    if (info != null) ramps[pair.Key] = info;
+                }
+            }
             active = found > 0;
-            if (variants.Count > 0) Mod.Log("Split roads: " + found + " ready");
+            if (variants.Count > 0) Mod.Log("Split roads: " + found + " ready; median ramp roads: " + ramps.Count);
         }
 
         // Main thread, the city unloading: its copies go (made again for the next).
@@ -317,6 +489,7 @@ namespace RealisticRoads
             lock (variants)
             {
                 splitInfos.Clear();
+                ramps.Clear();
                 foreach (var list in variants.Values) foreach (var variant in list) variant.Info = null;
             }
             lock (madeMeshes)

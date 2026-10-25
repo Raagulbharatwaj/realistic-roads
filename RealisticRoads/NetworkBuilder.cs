@@ -173,14 +173,13 @@ namespace RealisticRoads
             }
         }
 
-        // Simulation thread. The road the ramp rises out of (atStart) or lands in
-        // (the end), from the ramp's end node along under it, becomes its split
-        // copy (the middle cut out) as far as the ramp takes to climb
-        // SplitRoads.SplitClear: whole segments, then a cut in the last. Not
-        // past a junction. Undone with the build.
+        // Simulation thread. The road a median ramp rises out of (atStart) or
+        // lands in (the end), from the ramp's end node along under it, becomes
+        // its split copy (the middle taken out): whole segments, to the next
+        // junction (which the ramp flies over), or to where the ramp turns off
+        // it. Undone with the build.
         private static void SplitUnderRamp(List<Vector3> points, ushort[] nodeIds, bool atStart, NetInfo ramp, Build build)
         {
-            const float MinPiece = 8f;
             var net = NetManager.instance;
             var segments = net.m_segments.m_buffer;
             var nodes = net.m_nodes.m_buffer;
@@ -189,29 +188,14 @@ namespace RealisticRoads
             ushort node = nodeIds[k0];
             if (!NodeExists(node)) return;
 
-            // How far along the ramp it is SplitClear above where it leaves the road.
-            float baseY = points[k0].y, along = 0f, length = -1f;
-            for (int k = k0 + step; k >= 0 && k <= last; k += step)
-            {
-                float run = CurveMath.FlatDistance(points[k - step], points[k]);
-                float before = points[k - step].y - baseY, rise = points[k].y - baseY;
-                if (rise >= SplitRoads.SplitClear)
-                {
-                    float f = rise - before > 0.01f ? (SplitRoads.SplitClear - before) / (rise - before) : 1f;
-                    length = along + run * Mathf.Clamp01(f);
-                    break;
-                }
-                along += run;
-            }
-            if (length < 0f) length = along;   // never that high: under all of it
             Vector3 heading = CurveMath.FlatNormal(points[k0 + step] - points[k0]);
 
-            float left = length, done = 0f;
+            float done = 0f;
             int pieces = 0;
             var passed = new List<ushort>();   // nodes the split went on through
             string roadName = null;
             float ahead = Mathf.Cos(25f * Mathf.Deg2Rad);
-            for (int guard = 0; guard < 16 && left > MinPiece; guard++)
+            for (int guard = 0; guard < 64; guard++)
             {
                 // The road going on from the node under the ramp (not the ramp itself).
                 ushort segment = 0;
@@ -233,23 +217,18 @@ namespace RealisticRoads
                 float length2 = Mathf.Max(segments[segment].m_averageLength, 1f);
                 bool fromStart = segments[segment].m_startNode == node;
                 ushort far = fromStart ? segments[segment].m_endNode : segments[segment].m_startNode;
-                if (left >= length2 - MinPiece)
-                {
-                    SplitSegment(segment, new float[0], new[] { split }, build);
-                    pieces++;
-                    left -= length2;
-                    done += length2;
-                    if (SegmentCount(far) != 2) break;   // a junction: the split stops there
-                    heading = CurveMath.FlatNormal(nodes[far].m_position - nodes[node].m_position);
-                    passed.Add(far);
-                    node = far;
-                    continue;
-                }
-                float t = fromStart ? left / length2 : 1f - left / length2;
-                SplitSegment(segment, new[] { t }, fromStart ? new[] { split, road } : new[] { road, split }, build);
+                // Only while the ramp is over it: where the ramp turns off the road
+                // (before its far end), the road stays whole from there.
+                Vector3 a, b, c, d;
+                CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+                if (!NearLine(points, CurveMath.Bezier(a, b, c, d, 0.5f), MedianCover) || !NearLine(points, nodes[far].m_position, MedianCover)) break;
+                SplitSegment(segment, new float[0], new[] { split }, build);
                 pieces++;
-                done += left;
-                break;
+                done += length2;
+                if (SegmentCount(far) != 2) break;   // a junction: the split stops there (the ramp flies over it)
+                heading = CurveMath.FlatNormal(nodes[far].m_position - nodes[node].m_position);
+                passed.Add(far);
+                node = far;
             }
             // A node with split roads on both sides is drawn as one too (its middle
             // flat, no median end or crossing there).
@@ -269,10 +248,26 @@ namespace RealisticRoads
                 SetNodeInfo(through, both);
             }
             if (pieces > 0)
-                Mod.Log("  Split " + roadName + " under the ramp: " + done.ToString("F0") + " m in " + pieces + " piece(s), " +
-                        "until the ramp is " + SplitRoads.SplitClear.ToString("F1") + " m up");
+                Mod.Log("  Split " + roadName + " beside the ramp: " + done.ToString("F0") + " m in " + pieces + " segment(s), " +
+                        "to the next junction (or where the ramp leaves it)");
             else
                 Mod.Log("  No road to split under the ramp (it rises out of the plain road)");
+        }
+
+        private const float MedianCover = 4f;   // a road this close to a median ramp's line runs under it
+
+        // Whether 'p' is within 'reach' (flat) of the line through 'points'.
+        private static bool NearLine(List<Vector3> points, Vector3 p, float reach)
+        {
+            for (int i = 1; i < points.Count; i++)
+            {
+                Vector3 a = points[i - 1], b = points[i];
+                float dx = b.x - a.x, dz = b.z - a.z, len = dx * dx + dz * dz;
+                float t = len > 1e-4f ? Mathf.Clamp01(((p.x - a.x) * dx + (p.z - a.z) * dz) / len) : 0f;
+                float ex = a.x + dx * t - p.x, ez = a.z + dz * t - p.z;
+                if (ex * ex + ez * ez <= reach * reach) return true;
+            }
+            return false;
         }
 
         private static void SetNodeInfo(ushort node, NetInfo info)
