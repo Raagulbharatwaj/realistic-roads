@@ -13,6 +13,10 @@ namespace RealisticRoads
     // Its Name/Description show up in Content Manager > Mods.
     public class Mod : IUserMod
     {
+        // Which source this build is from, in the log, to tell an old or second
+        // copy of the mod from the current one. Changed with each tested feature.
+        public const string SourceTag = "median-ramps-3-choices-profile-down";
+
         public string Name => "Realistic Roads (beta)";
         public string Description => "Plan your roads and add layers to your city: draw a whole route, choose how it crosses everything, stack decks over and under streets.";
 
@@ -105,7 +109,7 @@ namespace RealisticRoads
         {
             mainThread = Thread.CurrentThread;
             LoadSettings();
-            Log("Enabled, version " + typeof(Mod).Assembly.GetName().Version);
+            Log("Enabled, version " + typeof(Mod).Assembly.GetName().Version + " (source: " + SourceTag + ")");
             HarmonyHelper.DoOnHarmonyReady(Patcher.PatchAll);
         }
 

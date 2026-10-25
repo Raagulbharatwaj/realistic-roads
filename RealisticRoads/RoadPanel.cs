@@ -36,6 +36,7 @@ namespace RealisticRoads
         public bool Upgrade;                      // changing an existing road instead of drawing one
         public bool Ramp;                         // drawing a slip ramp between two roads
         public string MedianRamp;                 // the median ramp road being drawn (null: none)
+        public int MedianChoice;                  // which of the three (1..3; 0: none)
     }
 
     // How a stretch of the curve is built: the colours of the preview and the profile.
@@ -157,8 +158,10 @@ namespace RealisticRoads
         private UIButton parallelButton, sideButton, besideButton, directionButton;
         private UILabel gapLabel;
         // Upgrade an existing road along a stretch; draw a slip ramp.
-        public Action ToggleUpgrade, ToggleRamp, ToggleMedianRamp;
-        private UIButton upgradeButton, rampButton, medianButton;
+        public Action ToggleUpgrade, ToggleRamp;
+        public Action<int> PickMedianRamp;
+        private UIButton upgradeButton, rampButton;
+        private readonly UIButton[] medianButtons = new UIButton[4];
         private UILabel toolsLabel;
         public Action<string, string> Typed;
         public Action TypedSubmit;
@@ -310,11 +313,21 @@ namespace RealisticRoads
                 "It leaves and joins them along them, the way their traffic goes; the heights between are worked out\n" +
                 "at the usual grades (up to 4.5 % where there is no room). Draw it the way its traffic goes", Pad + IconSize + 3f, y,
                 () => { if (ToggleRamp != null) ToggleRamp(); });
-            medianButton = BarButton(Icons.Median, "M", "Median ramp road, pressed again for the next: six-lane road + 2-lane ramp, six-lane + 4-lane, " +
-                "four-lane + 2-lane, off.\nThe ramp rises out of the road's middle at 8 % to deck level and stays there; the road's outer lanes " +
-                "go on beside it on the ground to the next junction,\nwhich the ramp flies over. Start on an existing road (along it) or anywhere",
-                Pad + 2f * (IconSize + 3f), y, () => { if (ToggleMedianRamp != null) ToggleMedianRamp(); });
-            toolsLabel = BarLabel("", Pad + 3f * IconSize + 13f, y + 1f, Width - 2f * Pad - 3f * IconSize - 13f);
+            // The three median ramp roads (pressed again: off).
+            const string how = "\nUp: start on the ground (on the road, along it, or anywhere); the ramp rises out of the road's middle at 8 % " +
+                               "to the first deck level (or the deck you end on) and stays level as far as you draw.\nDown: start on a deck's end; " +
+                               "it comes down at 8 % into the road's middle. The road's outer lanes run beside it on the ground to the next junction, " +
+                               "which the ramp flies over";
+            string[] icons = { null, Icons.Median62, Icons.Median64, Icons.Median42 };
+            string[] titles = { null, "Six-lane road + 2-lane median ramp", "Six-lane road + 4-lane median ramp", "Four-lane road + 2-lane median ramp" };
+            string[] letters = { null, "6+2", "6+4", "4+2" };
+            for (int choice = 1; choice <= 3; choice++)
+            {
+                int picked = choice;
+                medianButtons[choice] = BarButton(icons[choice], letters[choice], titles[choice] + how,
+                    Pad + (choice + 1) * (IconSize + 3f), y, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
+            }
+            toolsLabel = BarLabel("", Pad + 5f * (IconSize + 3f) + 4f, y + 1f, Width - 2f * Pad - 5f * (IconSize + 3f) - 4f);
             toolsLabel.wordWrap = true;
             toolsLabel.size = new Vector2(toolsLabel.size.x, 30f);
             toolsLabel.textScale = 0.7f;
@@ -413,7 +426,7 @@ namespace RealisticRoads
             Select(besideButton, model.Parallel && model.BesideOther);
             Select(upgradeButton, model.Upgrade);
             Select(rampButton, model.Ramp);
-            Select(medianButton, model.MedianRamp != null);
+            for (int choice = 1; choice <= 3; choice++) Select(medianButtons[choice], model.MedianChoice == choice);
             if (toolsLabel != null)
             {
                 string tools = (model.Upgrade ? "Upgrading a road" : model.Ramp ? "Drawing a ramp"
@@ -450,7 +463,8 @@ namespace RealisticRoads
             curveButton = straightButton = snapButton = deckButton = underButton = null;
             parallelButton = sideButton = besideButton = directionButton = null;
             gapLabel = null;
-            upgradeButton = rampButton = medianButton = null;
+            upgradeButton = rampButton = null;
+            for (int choice = 0; choice < medianButtons.Length; choice++) medianButtons[choice] = null;
             toolsLabel = null;
             radiusLabel = null;
             lengthField = turnField = null;

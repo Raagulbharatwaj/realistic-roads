@@ -75,6 +75,7 @@ namespace RealisticRoads
         // A ramp rising out of (or landing in) the middle of these roads at its
         // start (end): the road under it is split until it is high enough.
         public NetInfo MedianStart, MedianEnd;
+        public bool MedianDown;               // a median ramp coming down from a deck (else going up)
         public float Grade;                   // the grade it was planned at
     }
 
@@ -101,6 +102,10 @@ namespace RealisticRoads
         public const float MedianRampGrade = 0.08f;
         [ThreadStatic] public static bool MedianRamp;
         [ThreadStatic] public static bool HoldStart;
+        // A median ramp's height at each distance along it (given its length):
+        // set, every node is held at it and the plan only checks it against
+        // what each node must clear (the planner works out nothing itself).
+        [ThreadStatic] public static Func<float, float, float> Profile;
         [ThreadStatic] private static float maxGrade;
         [ThreadStatic] private static bool steepGrades;
         public static float MaxGrade => maxGrade > 0f ? maxGrade : RoadGrade;
@@ -221,7 +226,7 @@ namespace RealisticRoads
             var underWater = new bool[n];   // in a water crossing chosen as a tunnel
 
             bool ramp = Ramp && !IsRail(info);
-            maxGrade = MedianRamp && !IsRail(info) ? MedianRampGrade
+            maxGrade = MedianRamp && !IsRail(info) ? MedianRampGrade + (Profile != null ? 0.0005f : 0f)
                 : ramp ? (steepGrades ? RampSteepGrade : RampGrade) : steepGrades ? SteepGrade : GradeFor(info);
             plan.Grade = maxGrade;
             // Raised parts use the elevated version, else the bridge one (InfoFor).
@@ -403,8 +408,30 @@ namespace RealisticRoads
                 }
             }
 
-            // The deck's levels, as far as the grade reaches from the held heights.
-            for (int i = 0; i < n; i++)
+            // A median ramp's own profile: each node held at it, after checking it
+            // against what the node must clear or stay under (its crossings).
+            if (Profile != null)
+            {
+                float total = distance[n - 1];
+                string clash = null;
+                for (int i = 0; i < n; i++)
+                {
+                    float h = Profile(distance[i], total);
+                    if (clash == null && h < minH[i] - 0.25f)
+                        clash = "At " + distance[i].ToString("N0") + " m the ramp is at " + (h - ground[i]).ToString("F1") + " m above the ground but must be " +
+                                "at least " + (minH[i] - ground[i]).ToString("F1") + " m up there (to clear what it crosses): start it further away";
+                    else if (clash == null && h > maxH[i] + 0.25f)
+                        clash = "At " + distance[i].ToString("N0") + " m the ramp is at " + (h - ground[i]).ToString("F1") + " m above the ground but must stay " +
+                                "under " + (maxH[i] - ground[i]).ToString("F1") + " m there (a road or deck over it)";
+                    else if (clash == null && h < ground[i] - 0.5f)
+                        clash = "At " + distance[i].ToString("N0") + " m the ground rises above the level ramp: draw it where the ground stays below it";
+                    Fix(i, h, minH, maxH, isFixed);
+                }
+                if (clash != null) plan.Problems.Add(clash);
+            }
+            // The deck's levels, as far as the grade reaches from the held heights
+            // (not a median ramp's: its profile says where it is).
+            for (int i = 0; i < n && Profile == null; i++)
             {
                 if (isFixed[i] || (deckFloor[i] == float.MinValue && deckCeiling[i] == float.MaxValue)) continue;
                 float reachUp = Unlimited, reachDown = -Unlimited;
