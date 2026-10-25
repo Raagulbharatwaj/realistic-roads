@@ -153,6 +153,7 @@ namespace RealisticRoads
                 UnityEngine.Object.Destroy(go);
                 return null;
             }
+            OwnItems(copy);
             // Its lanes outside the gap (the median's street lights and trees go with it).
             var lanes = new List<NetInfo.Lane>();
             foreach (var lane in copy.m_lanes)
@@ -250,6 +251,27 @@ namespace RealisticRoads
             }
         }
 
+        private static readonly MethodInfo memberwiseClone =
+            typeof(object).GetMethod("MemberwiseClone", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        private static T Copy<T>(T item) where T : class
+        {
+            return item == null ? null : (T)memberwiseClone.Invoke(item, null);
+        }
+
+        // The copy's own lanes and model entries, so changing them never changes
+        // the road it was copied from (Unity's copy should already make new
+        // ones; this makes sure).
+        private static void OwnItems(NetInfo copy)
+        {
+            if (copy.m_lanes != null)
+                for (int i = 0; i < copy.m_lanes.Length; i++) copy.m_lanes[i] = Copy(copy.m_lanes[i]);
+            if (copy.m_segments != null)
+                for (int i = 0; i < copy.m_segments.Length; i++) copy.m_segments[i] = Copy(copy.m_segments[i]);
+            if (copy.m_nodes != null)
+                for (int i = 0; i < copy.m_nodes.Length; i++) copy.m_nodes[i] = Copy(copy.m_nodes[i]);
+        }
+
         private static void HideFromMenus(NetInfo info)
         {
             try
@@ -322,14 +344,23 @@ namespace RealisticRoads
         // parapet or kerb) kept and moved in.
         private static NetInfo Narrow(NetInfo road, string name, float half)
         {
-            float keep = 0f;
+            // The carriageway: from the median's edge (0 without one) to the outer
+            // vehicle lane's edge. A median is closed up (a ramp has none).
+            float keep = 0f, median = float.MaxValue;
             foreach (var lane in road.m_lanes)
                 if (lane != null && (lane.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None)
+                {
                     keep = Mathf.Max(keep, Mathf.Abs(lane.m_position) + lane.m_width * 0.5f);
-            if (keep <= 0f) return null;
-            float inner = Mathf.Max(half - RampBarrier, keep * 0.6f);
-            float scale = Mathf.Min(1f, inner / keep);
-            inner = keep * scale;
+                    median = Mathf.Min(median, Mathf.Abs(lane.m_position) - lane.m_width * 0.5f);
+                }
+            median = Mathf.Max(0f, median == float.MaxValue ? 0f : median);
+            float drive = keep - median;
+            if (drive <= 0f) return null;
+            // Lanes no narrower than 85 % of the road's (a car still fits).
+            float inner = Mathf.Max(half - RampBarrier, drive * 0.85f);
+            float scale = Mathf.Min(1f, inner / drive);
+            inner = drive * scale;
+            float roadHalf = road.m_halfWidth;
             var go = UnityEngine.Object.Instantiate(road.gameObject);
             go.name = name;
             if (road.transform != null && go.transform != null) go.transform.parent = road.transform.parent;
@@ -339,60 +370,95 @@ namespace RealisticRoads
                 UnityEngine.Object.Destroy(go);
                 return null;
             }
+            OwnItems(copy);
             var lanes = new List<NetInfo.Lane>();
             foreach (var lane in copy.m_lanes)
             {
                 if (lane == null || (lane.m_laneType & NetInfo.LaneType.Vehicle) == NetInfo.LaneType.None) continue;
-                lane.m_position *= scale;
+                float side = lane.m_position < 0f ? -1f : 1f;
+                lane.m_position = side * Mathf.Max(0f, Mathf.Abs(lane.m_position) - median) * scale;
                 lane.m_width *= scale;
                 lanes.Add(lane);
             }
             copy.m_lanes = lanes.ToArray();
             copy.m_halfWidth = inner + RampBarrier;
             copy.m_pavementWidth = RampBarrier;
+            float surface = road.m_surfaceLevel;
             if (copy.m_segments != null)
+            {
+                var kept = new List<NetInfo.Segment>();
                 foreach (var segment in copy.m_segments)
                 {
                     if (segment == null) continue;
-                    var mesh = Squeeze(segment.m_mesh, keep, scale, inner);
+                    // A model of the median alone (an elevated road's median strip) goes.
+                    if (median > 0.5f && MaxX(segment.m_mesh) <= median + 0.5f) continue;
+                    var mesh = Squeeze(segment.m_mesh, roadHalf, median, keep, scale, inner, surface);
                     if (mesh != null) segment.m_mesh = mesh;
-                    var lod = Squeeze(segment.m_lodMesh, keep, scale, inner);
+                    var lod = Squeeze(segment.m_lodMesh, roadHalf, median, keep, scale, inner, surface);
                     if (lod != null) segment.m_lodMesh = lod;
+                    kept.Add(segment);
                 }
+                copy.m_segments = kept.ToArray();
+            }
             if (copy.m_nodes != null)
                 foreach (var node in copy.m_nodes)
                 {
                     if (node == null) continue;
-                    var mesh = Squeeze(node.m_mesh, keep, scale, inner);
+                    var mesh = Squeeze(node.m_mesh, roadHalf, median, keep, scale, inner, surface);
                     if (mesh != null) node.m_mesh = mesh;
-                    var lod = Squeeze(node.m_lodMesh, keep, scale, inner);
+                    var lod = Squeeze(node.m_lodMesh, roadHalf, median, keep, scale, inner, surface);
                     if (lod != null) node.m_lodMesh = lod;
                 }
             HideFromMenus(copy);
             return copy;
         }
 
-        // A model squeezed across: within 'keep' of the centre scaled by 'scale'
-        // (to 'inner'); from there to RampBarrier short of its edge collapsed
-        // onto 'inner'; its edge (the parapet) moved in unchanged.
-        internal static Mesh Squeeze(Mesh mesh, float keep, float scale, float inner)
+        // A model squeezed across, measured from the road's half width (a ground
+        // road's model reaches past it into the terrain): a median (within
+        // 'median' of the centre) closed up and flattened; the carriageway
+        // (to 'keep') scaled to 'inner'; the sidewalk and parking collapsed onto
+        // 'inner'; the last RampBarrier of the road (its kerb or parapet) and
+        // anything past its half width (the parapet's outside, the skirt into
+        // the ground) moved in unchanged.
+        internal static Mesh Squeeze(Mesh mesh, float roadHalf, float median, float keep, float scale, float inner, float surface)
         {
             if (mesh == null) return null;
             var vertices = mesh.vertices;
             var triangles = mesh.triangles;
             if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length == 0) return null;
-            float edge = 0f;
-            foreach (var v in vertices) edge = Mathf.Max(edge, Mathf.Abs(v.x));
-            float edgeStart = Mathf.Max(keep, edge - RampBarrier);
+            float edgeStart = Mathf.Max(keep, roadHalf - RampBarrier);
+            float shift = edgeStart - inner;   // how far the edge moves in
             for (int i = 0; i < vertices.Length; i++)
             {
-                float a = Mathf.Abs(vertices[i].x), squeezed;
-                if (a <= keep) squeezed = a * scale;
+                float a = Mathf.Abs(vertices[i].x), y = vertices[i].y, squeezed;
+                if (a <= median)
+                {
+                    squeezed = 0f;
+                    y = Mathf.Min(y, surface);
+                }
+                else if (a <= keep) squeezed = (a - median) * scale;
                 else if (a < edgeStart) squeezed = inner;
-                else squeezed = inner + (a - edgeStart);
-                vertices[i] = new Vector3(vertices[i].x < 0f ? -squeezed : squeezed, vertices[i].y, vertices[i].z);
+                else squeezed = a - shift;
+                vertices[i] = new Vector3(vertices[i].x < 0f ? -squeezed : squeezed, y, vertices[i].z);
             }
             return CopyWith(mesh, vertices, triangles, " (ramp)");
+        }
+
+        private static float MaxX(Mesh mesh)
+        {
+            if (mesh == null) return float.MaxValue;
+            try
+            {
+                var vertices = mesh.vertices;
+                if (vertices == null || vertices.Length == 0) return float.MaxValue;
+                float max = 0f;
+                foreach (var v in vertices) max = Mathf.Max(max, Mathf.Abs(v.x));
+                return max;
+            }
+            catch
+            {
+                return float.MaxValue;
+            }
         }
 
         private static Mesh CopyWith(Mesh mesh, Vector3[] vertices, int[] triangles, string suffix)
@@ -478,6 +544,21 @@ namespace RealisticRoads
                     if (info != null) ramps[pair.Key] = info;
                 }
             }
+            // The ramps' elevated versions on the highway ramp's slim pillar (the
+            // road's own is made for its full width).
+            var pillar = PrefabCollection<BuildingInfo>.FindLoaded("HighwayRampPillar");
+            if (pillar != null)
+                foreach (var ramp in ramps.Values)
+                {
+                    var elevated = RoadPlanner.Variant(ramp, "m_elevatedInfo");
+                    var ai = elevated != null ? elevated.m_netAI : null;
+                    if (ai == null) continue;
+                    foreach (var field in new[] { "m_bridgePillarInfo", "m_middlePillarInfo" })
+                    {
+                        var f = ai.GetType().GetField(field, BindingFlags.Public | BindingFlags.Instance);
+                        if (f != null && f.FieldType == typeof(BuildingInfo) && f.GetValue(ai) != null) f.SetValue(ai, pillar);
+                    }
+                }
             active = found > 0;
             if (variants.Count > 0) Mod.Log("Split roads: " + found + " ready; median ramp roads: " + ramps.Count);
         }

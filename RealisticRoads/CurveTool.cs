@@ -2064,7 +2064,12 @@ namespace RealisticRoads
             if (ramp == null || split == null || ramp.Polyline == null || ramp.Polyline.Count < 2 || ramp.Length < 1f) return null;
             float until = ramp.Length;
             var segments = NetManager.instance.m_segments.m_buffer;
-            foreach (var crossing in CrossingFinder.Find(ramp.Polyline, split, 0, 0))
+            // Not the roads at the node it starts from (it joins them there).
+            Vector3 first = ramp.Polyline[0];
+            ushort firstNode, firstSegment;
+            float firstT;
+            EndOn(ref first, split, EndSnap, out firstNode, out firstSegment, out firstT);
+            foreach (var crossing in CrossingFinder.Find(ramp.Polyline, split, firstNode, 0))
                 if (crossing.Distance > MinSpacing && crossing.ExistingAtGround && crossing.CanConnect && crossing.Distance < until &&
                     !SplitRoads.IsRamp(segments[crossing.Segment].Info))
                     until = crossing.Distance;
@@ -2229,7 +2234,7 @@ namespace RealisticRoads
                 BuildUpgrade();
                 return;
             }
-            if (SelectedNetwork == null)
+            if (DrawNetwork == null)
             {
                 Mod.Log("Pick a road in the vanilla Roads menu first, then open the curve tool again");
                 return;
@@ -2350,7 +2355,13 @@ namespace RealisticRoads
                     roadTs[k] = roadT;
                     var ground = NetManager.instance.m_segments.m_buffer[road].Info;
                     if (e == 0) medianStart = ground; else medianEnd = ground;
-                    if (VehicleLanes(Net) >= VehicleLanes(ground))
+                    // The median ramp road picked is for a six- or a four-lane road.
+                    int wanted = medianRamp == 3 ? 4 : 6;
+                    if (medianRamp != 0 && VehicleLanes(SplitRoads.OriginalOf(ground)) != wanted)
+                        rampProblem = "The road here is the " + Title(ground) + " (" + VehicleLanes(SplitRoads.OriginalOf(ground)) + " lanes); the " +
+                                      MedianRampNames[medianRamp] + " rises out of a " + wanted + "-lane road: pick the median ramp road for " +
+                                      VehicleLanes(SplitRoads.OriginalOf(ground)) + " lanes (Median ramp button), or start it elsewhere";
+                    else if (VehicleLanes(Net) >= VehicleLanes(ground))
                         rampProblem = "A ramp rising out of the middle of the " + (ground != null ? ground.name : "road") + " (" + VehicleLanes(ground) +
                                       " lanes) takes its middle lanes: pick a road with fewer lanes for it" +
                                       (VehicleLanes(ground) > 4 ? " (2 or 4)" : VehicleLanes(ground) > 2 ? " (2)" : "");
@@ -3401,7 +3412,8 @@ namespace RealisticRoads
         {
             var model = new PanelModel
             {
-                Road = SelectedNetwork != null ? Title(SelectedNetwork) : "No road picked: choose one in the game's Roads menu, then open RR",
+                Road = medianRamp != 0 ? char.ToUpper(MedianRampNames[medianRamp][0]) + MedianRampNames[medianRamp].Substring(1)
+                     : SelectedNetwork != null ? Title(SelectedNetwork) : "No road picked: choose one in the game's Roads menu, then open RR",
                 HasPoints = points.Count > 0,
                 Straight = straightMode,
                 Radius = cornerRadius,
@@ -3488,7 +3500,7 @@ namespace RealisticRoads
             }
             model.Problems.AddRange(plan.Problems);
             model.Warnings.AddRange(plan.Warnings);
-            model.CanBuild = SelectedNetwork != null && division.Ok && plan.Ok;
+            model.CanBuild = DrawNetwork != null && division.Ok && plan.Ok;
             if (parallelMode)
             {
                 string why = ParallelBlocked(pointDeck) ?? (deckMode && !planning && points.Count > 0 ? ParallelBlocked(new List<bool> { true }) : null);

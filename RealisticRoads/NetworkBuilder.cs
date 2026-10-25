@@ -178,7 +178,7 @@ namespace RealisticRoads
         // its split copy (the middle taken out): whole segments, to the next
         // junction (which the ramp flies over), or to where the ramp turns off
         // it. Undone with the build.
-        private static void SplitUnderRamp(List<Vector3> points, ushort[] nodeIds, bool atStart, NetInfo ramp, Build build)
+        private static void SplitUnderRamp(Plan plan, List<Vector3> points, ushort[] nodeIds, bool atStart, NetInfo ramp, Build build)
         {
             var net = NetManager.instance;
             var segments = net.m_segments.m_buffer;
@@ -188,7 +188,12 @@ namespace RealisticRoads
             ushort node = nodeIds[k0];
             if (!NodeExists(node)) return;
 
-            Vector3 heading = CurveMath.FlatNormal(points[k0 + step] - points[k0]);
+            // The way the ramp leaves its end node (its own direction there, not the
+            // chord to its next node, which on a curve points off the road).
+            Vector3 heading = CurveMath.FlatNormal(atStart ? plan.Tangents[0] : -plan.InTangent(last));
+            if (heading == Vector3.zero) heading = CurveMath.FlatNormal(points[k0 + step] - points[k0]);
+            // The ramp as built: its segments (for whether a road is under it).
+            var rampSegments = new List<ushort>(build.Segments);
 
             float done = 0f;
             int pieces = 0;
@@ -221,7 +226,7 @@ namespace RealisticRoads
                 // (before its far end), the road stays whole from there.
                 Vector3 a, b, c, d;
                 CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
-                if (!NearLine(points, CurveMath.Bezier(a, b, c, d, 0.5f), MedianCover) || !NearLine(points, nodes[far].m_position, MedianCover)) break;
+                if (!UnderRamp(rampSegments, CurveMath.Bezier(a, b, c, d, 0.5f)) || !UnderRamp(rampSegments, nodes[far].m_position)) break;
                 SplitSegment(segment, new float[0], new[] { split }, build);
                 pieces++;
                 done += length2;
@@ -254,18 +259,17 @@ namespace RealisticRoads
                 Mod.Log("  No road to split under the ramp (it rises out of the plain road)");
         }
 
-        private const float MedianCover = 4f;   // a road this close to a median ramp's line runs under it
+        private const float MedianCover = 4f;   // a road this close to a median ramp (as built) runs under it
 
-        // Whether 'p' is within 'reach' (flat) of the line through 'points'.
-        private static bool NearLine(List<Vector3> points, Vector3 p, float reach)
+        // Whether 'p' is within MedianCover (flat) of one of the ramp's segments.
+        private static bool UnderRamp(List<ushort> rampSegments, Vector3 p)
         {
-            for (int i = 1; i < points.Count; i++)
+            foreach (ushort segment in rampSegments)
             {
-                Vector3 a = points[i - 1], b = points[i];
-                float dx = b.x - a.x, dz = b.z - a.z, len = dx * dx + dz * dz;
-                float t = len > 1e-4f ? Mathf.Clamp01(((p.x - a.x) * dx + (p.z - a.z) * dz) / len) : 0f;
-                float ex = a.x + dx * t - p.x, ez = a.z + dz * t - p.z;
-                if (ex * ex + ez * ez <= reach * reach) return true;
+                if ((NetManager.instance.m_segments.m_buffer[segment].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
+                Vector3 onRamp;
+                CrossingFinder.ClosestT(segment, p, out onRamp);
+                if (CurveMath.FlatDistance(onRamp, p) <= MedianCover) return true;
             }
             return false;
         }
@@ -552,7 +556,7 @@ namespace RealisticRoads
                     if ((atStart ? plan.MedianStart : plan.MedianEnd) == null) continue;
                     try
                     {
-                        SplitUnderRamp(points, nodeIds, atStart, info, build);
+                        SplitUnderRamp(plan, points, nodeIds, atStart, info, build);
                     }
                     catch (Exception e)
                     {
