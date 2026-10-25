@@ -116,7 +116,9 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      built the ramp is removed again. The ramp is a narrow road made from the game's Two-Lane or Four-Lane Road (no
      sidewalks, a parapet each side, on the highway ramp's slim pillar). The split and ramp roads are made from the
      game's own roads while a city loads and are hidden from the menus; a city saved with them needs this mod to load
-     them. Where a split road and the ramp leave a node together, they and the road coming in end square there;
+     them. Where a split road and the ramp leave a node together, they and the road coming in end square there, edge to
+     edge, and the node itself is not drawn (no junction, crosswalks or kerbs across the road) and gets no traffic
+     lights, so the ramp rises out of the road as if there were no node;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,
