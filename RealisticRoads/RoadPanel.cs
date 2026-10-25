@@ -35,6 +35,7 @@ namespace RealisticRoads
         public bool ParallelReverse;              // it runs the other way
         public bool Upgrade;                      // changing an existing road instead of drawing one
         public bool Ramp;                         // drawing a slip ramp between two roads
+        public string MedianRamp;                 // the median ramp road being drawn (null: none)
     }
 
     // How a stretch of the curve is built: the colours of the preview and the profile.
@@ -156,8 +157,8 @@ namespace RealisticRoads
         private UIButton parallelButton, sideButton, besideButton, directionButton;
         private UILabel gapLabel;
         // Upgrade an existing road along a stretch; draw a slip ramp.
-        public Action ToggleUpgrade, ToggleRamp;
-        private UIButton upgradeButton, rampButton;
+        public Action ToggleUpgrade, ToggleRamp, ToggleMedianRamp;
+        private UIButton upgradeButton, rampButton, medianButton;
         private UILabel toolsLabel;
         public Action<string, string> Typed;
         public Action TypedSubmit;
@@ -309,7 +310,11 @@ namespace RealisticRoads
                 "It leaves and joins them along them, the way their traffic goes; the heights between are worked out\n" +
                 "at the usual grades (up to 4.5 % where there is no room). Draw it the way its traffic goes", Pad + IconSize + 3f, y,
                 () => { if (ToggleRamp != null) ToggleRamp(); });
-            toolsLabel = BarLabel("", Pad + 2f * IconSize + 10f, y + 1f, Width - 2f * Pad - 2f * IconSize - 10f);
+            medianButton = BarButton(Icons.Median, "M", "Median ramp road, pressed again for the next: six-lane road + 2-lane ramp, six-lane + 4-lane, " +
+                "four-lane + 2-lane, off.\nThe ramp rises out of the road's middle at 8 % to deck level and stays there; the road's outer lanes " +
+                "go on beside it on the ground to the next junction,\nwhich the ramp flies over. Start on an existing road (along it) or anywhere",
+                Pad + 2f * (IconSize + 3f), y, () => { if (ToggleMedianRamp != null) ToggleMedianRamp(); });
+            toolsLabel = BarLabel("", Pad + 3f * IconSize + 13f, y + 1f, Width - 2f * Pad - 3f * IconSize - 13f);
             toolsLabel.wordWrap = true;
             toolsLabel.size = new Vector2(toolsLabel.size.x, 30f);
             toolsLabel.textScale = 0.7f;
@@ -408,9 +413,11 @@ namespace RealisticRoads
             Select(besideButton, model.Parallel && model.BesideOther);
             Select(upgradeButton, model.Upgrade);
             Select(rampButton, model.Ramp);
+            Select(medianButton, model.MedianRamp != null);
             if (toolsLabel != null)
             {
-                string tools = (model.Upgrade ? "Upgrading a road" : model.Ramp ? "Drawing a ramp" : "Drawing") +
+                string tools = (model.Upgrade ? "Upgrading a road" : model.Ramp ? "Drawing a ramp"
+                                   : model.MedianRamp != null ? "Drawing a " + model.MedianRamp : "Drawing") +
                                (model.Parallel ? "\nParallel " + (model.ParallelLeft ? "left: " : "right: ") + model.Beside : "");
                 if (toolsLabel.text != tools) toolsLabel.text = tools;
             }
@@ -443,7 +450,7 @@ namespace RealisticRoads
             curveButton = straightButton = snapButton = deckButton = underButton = null;
             parallelButton = sideButton = besideButton = directionButton = null;
             gapLabel = null;
-            upgradeButton = rampButton = null;
+            upgradeButton = rampButton = medianButton = null;
             toolsLabel = null;
             radiusLabel = null;
             lengthField = turnField = null;

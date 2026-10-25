@@ -96,6 +96,11 @@ namespace RealisticRoads
         public const float RampSteepGrade = 0.07f;
         // Set by the tool (main thread) while it plans a ramp.
         [ThreadStatic] public static bool Ramp;
+        // A median ramp (rising out of a road's middle to deck level): 8 %, and
+        // its start held at the ground where it isn't on a road.
+        public const float MedianRampGrade = 0.08f;
+        [ThreadStatic] public static bool MedianRamp;
+        [ThreadStatic] public static bool HoldStart;
         [ThreadStatic] private static float maxGrade;
         [ThreadStatic] private static bool steepGrades;
         public static float MaxGrade => maxGrade > 0f ? maxGrade : RoadGrade;
@@ -216,7 +221,8 @@ namespace RealisticRoads
             var underWater = new bool[n];   // in a water crossing chosen as a tunnel
 
             bool ramp = Ramp && !IsRail(info);
-            maxGrade = ramp ? (steepGrades ? RampSteepGrade : RampGrade) : steepGrades ? SteepGrade : GradeFor(info);
+            maxGrade = MedianRamp && !IsRail(info) ? MedianRampGrade
+                : ramp ? (steepGrades ? RampSteepGrade : RampGrade) : steepGrades ? SteepGrade : GradeFor(info);
             plan.Grade = maxGrade;
             // Raised parts use the elevated version, else the bridge one (InfoFor).
             bool hasBridge = InfoFor(info, NodeKind.Bridge) != null && InfoFor(info, NodeKind.Bridge) != info;
@@ -300,6 +306,8 @@ namespace RealisticRoads
             // Ends on the middle of a road join it at its height.
             if (startSegment != 0) Fix(0, points[0].y, minH, maxH, isFixed);
             if (endSegment != 0) Fix(n - 1, points[n - 1].y, minH, maxH, isFixed);
+            // A median ramp drawn from open ground starts on it.
+            if (HoldStart && !isFixed[0]) Fix(0, ground[0], minH, maxH, isFixed);
             // The ends (and below, junctions and overpasses) are held where they
             // are: the side view shows them as not draggable.
             plan.Held = (bool[])isFixed.Clone();
