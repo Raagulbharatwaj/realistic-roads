@@ -253,14 +253,22 @@ d.arc(p(18, 6, 50, 38), 180, 270, fill=OURS, width=int(5 * S))
 line(d, (34, 6, 38, 6), OURS, 5)
 save(im, "ramp")
 
-# median ramp: a wide road, its middle rising as a ramp between two ground lanes
-im, d = canvas()
-line(d, (8, 38, 8, 4), EXIST, 5)
-line(d, (32, 38, 32, 4), EXIST, 5)
-d.polygon(p(15, 38, 25, 38, 25, 6, 15, 6), fill=OURS)
-line(d, (20, 34, 20, 26), DASH, 2)
-line(d, (20, 18, 20, 10), DASH, 2)
-save(im, "median")
+# median ramp roads: ground lanes either side (one bar each) and the ramp in the middle
+def median_icon(sides, ramp_width, name):
+    im, d = canvas()
+    for k in range(sides):
+        x = 5 + k * 5
+        line(d, (x, 38, x, 4), EXIST, 3)
+        line(d, (40 - x, 38, 40 - x, 4), EXIST, 3)
+    half = ramp_width / 2
+    d.polygon(p(20 - half, 38, 20 + half, 38, 20 + half, 6, 20 - half, 6), fill=OURS)
+    line(d, (20, 34, 20, 26), DASH, 2)
+    line(d, (20, 18, 20, 10), DASH, 2)
+    save(im, name)
+
+median_icon(2, 8, "median62")
+median_icon(1, 14, "median64")
+median_icon(1, 8, "median42")
 
 
 # direction of the parallel line: two lanes, arrows opposite ways
@@ -273,7 +281,7 @@ save(im, "direction")
 
 # preview sheet for checking by eye
 names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under",
-         "elevated", "auto", "reset", "parallel", "side", "beside", "upgrade", "direction", "ramp", "median"]
+         "elevated", "auto", "reset", "parallel", "side", "beside", "upgrade", "direction", "ramp", "median62", "median64", "median42"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")

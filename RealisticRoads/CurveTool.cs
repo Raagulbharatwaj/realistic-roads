@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using ColossalFramework;
 using ColossalFramework.Math;
@@ -503,7 +504,8 @@ namespace RealisticRoads
             second = parallelMode && !liveDeck.Contains(true) ? DivideParallel(preview, CurrentParallel()) : null;
             // A median ramp road from anywhere but along an existing road: its new
             // ground road beside it, to the first road it meets.
-            if (medianRamp != 0 && preview.Plan != null && preview.Plan.MedianStart == null) second = DivideGround(preview, MedianGroundSplit);
+            if (medianRamp != 0 && preview.Plan != null && preview.Plan.MedianStart == null && preview.Plan.MedianEnd == null)
+                second = DivideGround(preview, MedianGroundSplit);
             cursorText = CursorText(withHover);
             ShowPanel();
             PlaceButtons();
@@ -543,7 +545,8 @@ namespace RealisticRoads
             }
             // A deck point on a road sits over its centre line: no junction with it.
             // Not a ramp's first point: that one starts on the road (and rises off it).
-            if (deckMode && onMap && !typed && !((rampMode || medianRamp != 0) && points.Count == 0) &&
+            // Nor a median ramp's points coming down: it lands on the road.
+            if (deckMode && onMap && !typed && !((rampMode || medianRamp != 0) && points.Count == 0) && !MedianDown &&
                 RoadAt(hoverNode, hoverSegment, hoverT, out aimRoad, out aimRoadT))
             {
                 aimNode = 0;
@@ -1590,10 +1593,10 @@ namespace RealisticRoads
         private readonly List<UpgradePoint> upgradePoints = new List<UpgradePoint>();
         private UpgradePlan upgradePlan;          // the preview
 
-        // Off, then each median ramp road in turn.
-        private void ToggleMedianRamp()
+        // One of the three median ramp roads (1..3); picked again: off.
+        private void PickMedianRamp(int choice)
         {
-            medianRamp = (medianRamp + 1) % MedianRampNames.Length;
+            medianRamp = medianRamp == choice ? 0 : choice;
             if (medianRamp != 0 && (SplitRoads.RampRoad(MedianRampLanes) == null || MedianGroundSplit == null))
             {
                 Mod.Log("Median ramp: " + MedianRampNames[medianRamp] + " isn't available (its ramp or split road wasn't made when the city loaded)");
@@ -1612,6 +1615,71 @@ namespace RealisticRoads
             choicesVersion++;
             Mod.Log(medianRamp != 0 ? "Median ramp: " + MedianRampNames[medianRamp] : "Median ramp off");
         }
+
+        // A median ramp's height along it (set by MedianProfile for the plan),
+        // and what it does, for the log.
+        private Func<float, float, float> medianProfile;
+        private string medianSummary;
+
+        // The median ramp's profile: up from where it starts (the ground road's
+        // height, or the ground) at 8 % to its target, then level; or down from
+        // the deck it starts on at 8 % to the road (or ground) it lands on. The
+        // target going up: the deck it ends on, else the first deck level (the
+        // height RR's own deck has over the road where it starts). Null if
+        // fine, else why it can't be built.
+        private string MedianProfile(List<Vector3> controls, List<ushort> nodes, List<ushort> segments, int n, float length, out bool down)
+        {
+            medianProfile = null;
+            medianSummary = null;
+            var terrain = TerrainManager.instance;
+            var net = NetManager.instance;
+            Vector3 start = nodes[0] != 0 ? net.m_nodes.m_buffer[nodes[0]].m_position : controls[0];
+            Vector3 end = nodes[n] != 0 ? net.m_nodes.m_buffer[nodes[n]].m_position : controls[n];
+            float startGround = terrain.SampleRawHeightSmooth(start), endGround = terrain.SampleRawHeightSmooth(end);
+            bool startOnRoad = nodes[0] != 0 || segments[0] != 0, endOnRoad = nodes[n] != 0 || segments[n] != 0;
+            float grade = RoadPlanner.MedianRampGrade;
+            down = startOnRoad && start.y - startGround >= DeckJoinHeight;
+            if (!down)
+            {
+                float from = startOnRoad ? start.y : startGround;
+                bool joinsDeck = nodes[n] != 0 && end.y - endGround >= DeckJoinHeight;
+                float target = joinsDeck ? end.y : from + FirstDeckLevel(start);
+                string what = joinsDeck ? "the deck it joins" : "the first deck level";
+                if (target - from < 1f) return "No deck level to climb to here (" + what + " is " + (target - from).ToString("F1") + " m up)";
+                float climb = (target - from) / grade;
+                if (length < climb - 1f)
+                    return "The ramp needs " + climb.ToString("N0") + " m to climb at 8 % to " + what + " (" + (target - from).ToString("F1") +
+                           " m up) and the line drawn is " + length.ToString("N0") + " m: draw it longer";
+                medianProfile = (d, total) => Mathf.Min(from + grade * d, target);
+                medianSummary = "up " + (target - from).ToString("F1") + " m to " + what + " in " + climb.ToString("N0") + " m at 8 %, then level for " +
+                                Mathf.Max(0f, length - climb).ToString("N0") + " m";
+                return null;
+            }
+            if (nodes[0] == 0) return "A median ramp coming down starts on a deck's end: click the end of the deck first";
+            float top = start.y, to = endOnRoad ? end.y : endGround;
+            if (top - to < 1f) return "The deck it starts on is no higher than where it lands";
+            float fall = (top - to) / grade;
+            if (length < fall - 1f)
+                return "The ramp needs " + fall.ToString("N0") + " m to come down at 8 % from the deck (" + (top - to).ToString("F1") +
+                       " m) and the line drawn is " + length.ToString("N0") + " m: draw it longer";
+            medianProfile = (d, total) => Mathf.Min(top, to + grade * (total - d));
+            medianSummary = "level at the deck for " + Mathf.Max(0f, length - fall).ToString("N0") + " m, then down " + (top - to).ToString("F1") +
+                            " m in " + fall.ToString("N0") + " m at 8 %";
+            return null;
+        }
+
+        // How high RR's own deck is over the road at 'p' (its clearance over that
+        // road and what stands on it), or over the ground where there is none.
+        private float FirstDeckLevel(Vector3 p)
+        {
+            var below = Decks.Under(p, Net != null ? Net.m_halfWidth : 4f);
+            if (below.Segment == 0) return Decks.Clearance;
+            return Decks.Floor(p, below) - below.Center.y;
+        }
+
+        // Drawing a median ramp down: it started on a raised deck.
+        private bool MedianDown => medianRamp != 0 && points.Count > 0 &&
+                                   points[0].y - TerrainManager.instance.SampleRawHeightSmooth(points[0]) >= DeckJoinHeight;
 
         private void ToggleRamp()
         {
@@ -1952,9 +2020,11 @@ namespace RealisticRoads
                 {
                     string why = ground == null || ground.Plan == null ? "it can't be drawn there"
                         : !ground.Ok ? "it bends too sharply" : string.Join("; ", ground.Plan.Problems.ToArray());
-                    Mod.Log("The ground road beside the ramp was not built (" + why + "). Ctrl+Z removes the ramp");
-                    Mod.WarnNow("Ground road not built", "The ramp was built, but the road beside it on the ground wasn't: " + why +
-                                                         ". Ctrl+Z removes the ramp.");
+                    // One construction: without its ground road the ramp goes too.
+                    Mod.Log("The ground road beside the ramp could not be built (" + why + "): the ramp is removed again");
+                    Mod.WarnNow("Median ramp not built", "The road beside the ramp on the ground couldn't be built: " + why +
+                                                         ". The ramp was removed again.");
+                    NetworkBuilder.UndoLast();
                     return;
                 }
                 Mod.Log("Building the ground road " + waiting.Ground.name + " beside the ramp: " + ground.Length.ToString("F0") + " m in " +
@@ -2069,11 +2139,22 @@ namespace RealisticRoads
             ushort firstNode, firstSegment;
             float firstT;
             EndOn(ref first, split, EndSnap, out firstNode, out firstSegment, out firstT);
-            foreach (var crossing in CrossingFinder.Find(ramp.Polyline, split, firstNode, 0))
-                if (crossing.Distance > MinSpacing && crossing.ExistingAtGround && crossing.CanConnect && crossing.Distance < until &&
-                    !SplitRoads.IsRamp(segments[crossing.Segment].Info))
-                    until = crossing.Distance;
-            var polyline = CurveMath.Slice(ramp.Polyline, 0f, until);
+            // Going down, the ground lanes run from the last junction before the
+            // landing to it; going up, from the start to the first junction.
+            bool down = ramp.Plan != null && ramp.Plan.MedianDown;
+            float from = 0f;
+            Vector3 last = ramp.Polyline[ramp.Polyline.Count - 1];
+            ushort lastNode, lastSegment;
+            float lastT;
+            EndOn(ref last, split, EndSnap, out lastNode, out lastSegment, out lastT);
+            foreach (var crossing in CrossingFinder.Find(ramp.Polyline, split, down ? (ushort)0 : firstNode, down ? lastNode : (ushort)0))
+            {
+                if (!crossing.ExistingAtGround || !crossing.CanConnect || SplitRoads.IsRamp(segments[crossing.Segment].Info)) continue;
+                if (!down && crossing.Distance > MinSpacing && crossing.Distance < until) until = crossing.Distance;
+                if (down && crossing.Distance < ramp.Length - MinSpacing && crossing.Distance > from) from = crossing.Distance;
+            }
+            if (down && from <= 0f) return null;   // no road on the ground behind the landing for its lanes to come from
+            var polyline = CurveMath.Slice(ramp.Polyline, from, until);
             if (CurveMath.Length(polyline) < 1f) return null;
             ushort startNode, endNode, startSegment, endSegment;
             float startT, endT;
@@ -2100,6 +2181,9 @@ namespace RealisticRoads
                 division.Lifts = lifts;
                 if (division.Points.Count < 2) return division;
                 PlanDivision(division, startNode, endNode, startSegment, startT, endSegment, endT, new List<KeyValuePair<Vector3, float>>());
+                if (!down && until >= ramp.Length && division.Plan != null && endNode == 0 && endSegment == 0)
+                    division.Plan.Warnings.Add("No road on the ground along the ramp's line: the lanes beside it end where you stop drawing " +
+                                               "(join them to a road later, or draw the ramp on to a junction)");
                 return division;
             }
             finally
@@ -2276,11 +2360,13 @@ namespace RealisticRoads
 
             // A median ramp road's new ground road: checked now, built once the ramp is.
             NetInfo groundRoad = null;
-            if (medianRamp != 0 && division.Plan.MedianStart == null)
+            if (medianRamp != 0 && division.Plan.MedianStart == null && division.Plan.MedianEnd == null)
             {
                 groundRoad = MedianGroundSplit;
                 var ground = DivideGround(division, groundRoad);
-                string why = ground == null || ground.Plan == null ? "its ground road can't be drawn here"
+                string why = ground == null && division.Plan.MedianDown
+                    ? "no road on the ground behind where it lands, for the lanes beside it to come from: draw it along a road"
+                    : ground == null || ground.Plan == null ? "its ground road can't be drawn here"
                     : !ground.Ok ? "its ground road bends too sharply"
                     : !ground.Plan.Ok ? "ground road: " + string.Join("; ", ground.Plan.Problems.ToArray()) : null;
                 if (why != null)
@@ -2291,6 +2377,9 @@ namespace RealisticRoads
             }
 
             var drawn = DrawNetwork;
+            if (medianRamp != 0)
+                Mod.Log("Median ramp " + MedianRampNames[medianRamp] + ": " + (medianSummary ?? "no profile") + "; ground lanes " +
+                        (division.Plan.MedianStart != null || division.Plan.MedianEnd != null ? "on the existing road (split to the junction)" : "a new " + MedianGroundSplit.name));
             Mod.Log("Building " + drawn.name + ": " + division.Length.ToString("F0") + " m in " +
                     (division.Points.Count - 1) + " segment(s), " + division.Crossings.Count + " crossing(s)");
             if (spec == null && groundRoad == null) NetworkBuilder.BuildCurve(drawn, division.Plan);
@@ -2443,7 +2532,17 @@ namespace RealisticRoads
             for (int i = 0; i <= n; i++)
                 if (Mathf.Abs(lifts[i]) > 0.01f) raisedPoints.Add(new KeyValuePair<Vector3, float>(controls[i], lifts[i]));
             division.Lifts = lifts;
+            // A median ramp's own height profile (up to its target and level, or down).
+            bool down = false;
+            string profileProblem = medianRamp != 0 ? MedianProfile(controls, nodes, segments, n, division.Length, out down) : null;
+            if (medianRamp == 0) medianProfile = null;
             PlanDivision(division, nodes[0], nodes[n], startSegment, ts[0], endSegment, ts[n], raisedPoints);
+            if (division.Plan != null)
+            {
+                division.Plan.MedianDown = down;
+                if (profileProblem != null) division.Plan.Problems.Insert(0, profileProblem);
+                else if (medianRamp != 0 && medianSummary != null) division.Plan.Warnings.Add("Median ramp: " + medianSummary);
+            }
             if (rampNote != null && division.Plan != null) division.Plan.Warnings.Insert(0, rampNote);
             if (rampProblem != null && division.Plan != null) division.Plan.Problems.Insert(0, rampProblem);
             if (division.Plan != null)
@@ -2467,6 +2566,7 @@ namespace RealisticRoads
             RoadPlanner.Ramp = rampMode;
             RoadPlanner.MedianRamp = medianRamp != 0 && !planningGround;
             RoadPlanner.HoldStart = medianRamp != 0 && !planningGround && startNode == 0 && startSegment == 0;
+            RoadPlanner.Profile = medianRamp != 0 && !planningGround ? medianProfile : null;
             FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
             MedianSupports(division);
             division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
@@ -2487,6 +2587,7 @@ namespace RealisticRoads
             RoadPlanner.Ramp = false;
             RoadPlanner.MedianRamp = false;
             RoadPlanner.HoldStart = false;
+            RoadPlanner.Profile = null;
             DropNodesOverCrossings(division);
             division.NodeAlong = NodeDistances(division);
             division.Cost = NetworkBuilder.Cost(Net, division.Plan);
@@ -3378,7 +3479,7 @@ namespace RealisticRoads
                 panel.FlipDirection = FlipDirection;
                 panel.ToggleUpgrade = ToggleUpgrade;
                 panel.ToggleRamp = ToggleRamp;
-                panel.ToggleMedianRamp = ToggleMedianRamp;
+                panel.PickMedianRamp = PickMedianRamp;
             }
             panel.Show(Model());
         }
@@ -3431,6 +3532,7 @@ namespace RealisticRoads
                 Upgrade = upgradeMode,
                 Ramp = rampMode,
                 MedianRamp = medianRamp != 0 ? MedianRampNames[medianRamp] : null,
+                MedianChoice = medianRamp,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
                 Mode = planning
                     ? "PLANNING: drag the points to adjust; pick each crossing here or on the map. Check mark / Enter: build. Esc: scrap. Right-click: keep drawing."
