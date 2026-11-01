@@ -72,9 +72,6 @@ namespace RealisticRoads
         public float StartT, EndT;
         public bool Ok => Problems.Count == 0;
         public bool GradeProblem;             // it doesn't fit at its grade (a steeper one may do)
-        // A ramp rising out of (or landing in) the middle of these roads at its
-        // start (end): the road under it is split until it is high enough.
-        public NetInfo MedianStart, MedianEnd;
         public bool MedianDown;               // a median ramp coming down from a deck (else going up)
         public float Grade;                   // the grade it was planned at
     }

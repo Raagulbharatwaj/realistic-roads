@@ -173,107 +173,6 @@ namespace RealisticRoads
             }
         }
 
-        // Simulation thread. The road a median ramp rises out of (atStart) or
-        // lands in (the end), from the ramp's end node along under it, becomes
-        // its split copy (the middle taken out): whole segments, to the next
-        // junction (which the ramp flies over), or to where the ramp turns off
-        // it. Undone with the build.
-        private static void SplitUnderRamp(Plan plan, List<Vector3> points, ushort[] nodeIds, bool atStart, NetInfo ramp, Build build)
-        {
-            var net = NetManager.instance;
-            var segments = net.m_segments.m_buffer;
-            var nodes = net.m_nodes.m_buffer;
-            int last = points.Count - 1, k0 = atStart ? 0 : last, step = atStart ? 1 : -1;
-            if (last < 1) return;
-            ushort node = nodeIds[k0];
-            if (!NodeExists(node)) return;
-
-            // The way the ramp leaves its end node (its own direction there, not the
-            // chord to its next node, which on a curve points off the road).
-            Vector3 heading = CurveMath.FlatNormal(atStart ? plan.Tangents[0] : -plan.InTangent(last));
-            if (heading == Vector3.zero) heading = CurveMath.FlatNormal(points[k0 + step] - points[k0]);
-            // The ramp as built: its segments (for whether a road is under it).
-            var rampSegments = new List<ushort>(build.Segments);
-
-            float done = 0f;
-            int pieces = 0;
-            var passed = new List<ushort>();   // nodes the split went on through
-            string roadName = null;
-            float ahead = Mathf.Cos(25f * Mathf.Deg2Rad);
-            for (int guard = 0; guard < 64; guard++)
-            {
-                // The road going on from the node under the ramp (not the ramp itself).
-                ushort segment = 0;
-                float best = ahead;
-                for (int i = 0; i < 8; i++)
-                {
-                    ushort s = nodes[node].GetSegment(i);
-                    if (s == 0 || build.Segments.Contains(s) || SplitRoads.For(segments[s].Info, SplitRoads.RampLanes(ramp)) == null) continue;
-                    Vector3 away = CurveMath.FlatNormal(segments[s].m_startNode == node ? segments[s].m_startDirection : segments[s].m_endDirection);
-                    float dot = Vector3.Dot(away, heading);
-                    if (dot <= best) continue;
-                    best = dot;
-                    segment = s;
-                }
-                if (segment == 0) break;
-                var road = segments[segment].Info;
-                var split = SplitRoads.For(road, SplitRoads.RampLanes(ramp));
-                roadName = road.name;
-                float length2 = Mathf.Max(segments[segment].m_averageLength, 1f);
-                bool fromStart = segments[segment].m_startNode == node;
-                ushort far = fromStart ? segments[segment].m_endNode : segments[segment].m_startNode;
-                // Only while the ramp is over it: where the ramp turns off the road
-                // (before its far end), the road stays whole from there.
-                Vector3 a, b, c, d;
-                CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
-                if (!UnderRamp(rampSegments, CurveMath.Bezier(a, b, c, d, 0.5f)) || !UnderRamp(rampSegments, nodes[far].m_position)) break;
-                SplitSegment(segment, new float[0], new[] { split }, build);
-                pieces++;
-                done += length2;
-                if (SegmentCount(far) != 2) break;   // a junction: the split stops there (the ramp flies over it)
-                heading = CurveMath.FlatNormal(nodes[far].m_position - nodes[node].m_position);
-                passed.Add(far);
-                node = far;
-            }
-            // A node with split roads on both sides is drawn as one too (its middle
-            // flat, no median end or crossing there).
-            foreach (ushort through in passed)
-            {
-                NetInfo both = null;
-                bool all = true;
-                for (int i = 0; i < 8; i++)
-                {
-                    ushort s = nodes[through].GetSegment(i);
-                    if (s == 0) continue;
-                    if (!SplitRoads.IsSplit(segments[s].Info)) all = false;
-                    else both = segments[s].Info;
-                }
-                if (!all || both == null || nodes[through].Info == both) continue;
-                build.NodeInfos.Add(new KeyValuePair<ushort, NetInfo>(through, nodes[through].Info));
-                SetNodeInfo(through, both);
-            }
-            if (pieces > 0)
-                Mod.Log("  Split " + roadName + " beside the ramp: " + done.ToString("F0") + " m in " + pieces + " segment(s), " +
-                        "to the next junction (or where the ramp leaves it)");
-            else
-                Mod.Log("  No road to split under the ramp (it rises out of the plain road)");
-        }
-
-        private const float MedianCover = 4f;   // a road this close to a median ramp (as built) runs under it
-
-        // Whether 'p' is within MedianCover (flat) of one of the ramp's segments.
-        private static bool UnderRamp(List<ushort> rampSegments, Vector3 p)
-        {
-            foreach (ushort segment in rampSegments)
-            {
-                if ((NetManager.instance.m_segments.m_buffer[segment].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
-                Vector3 onRamp;
-                CrossingFinder.ClosestT(segment, p, out onRamp);
-                if (CurveMath.FlatDistance(onRamp, p) <= MedianCover) return true;
-            }
-            return false;
-        }
-
         private static void SetNodeInfo(ushort node, NetInfo info)
         {
             if (info == null) return;
@@ -646,21 +545,6 @@ namespace RealisticRoads
                     Mod.Log("  " + bridges + " bridge, " + elevated + " elevated, " + tunnels + " tunnel/slope segment(s)");
                 for (int c = 0; c < plan.Crossings.Count; c++)
                     Mod.Log("  Crossing " + (c + 1) + " with " + plan.Crossings[c].ExistingName + ": " + plan.Crossings[c].Describe());
-
-                // A ramp rising out of a road's middle: that road split under it until
-                // it is high enough. A split that fails never undoes the ramp.
-                foreach (bool atStart in new[] { true, false })
-                {
-                    if ((atStart ? plan.MedianStart : plan.MedianEnd) == null) continue;
-                    try
-                    {
-                        SplitUnderRamp(plan, points, nodeIds, atStart, info, build);
-                    }
-                    catch (Exception e)
-                    {
-                        Mod.LogError("Splitting the road under the ramp failed; it rises out of the plain road", e);
-                    }
-                }
 
                 Keep(build);
                 Mod.Log("Built " + build.Segments.Count + " segment(s) of " + info.name +
