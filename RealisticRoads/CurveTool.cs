@@ -1777,16 +1777,21 @@ namespace RealisticRoads
 
         // A node on the ground with a road of 'road's kind (or its ground road)
         // at it, not a median ramp road.
-        private static bool EndsOnGroundRoad(ushort node, NetInfo road)
+        // Any road on the ground there (the one the player started on: the
+        // Six-Lane Road, with a median or not, or any other), not a median
+        // ramp or its ground road: its lanes feed the ramp and the ground road,
+        // so no stretch of road is built there (it would lie on top of it).
+        private static bool EndsOnGroundRoad(ushort node)
         {
-            if (node == 0 || road == null) return false;
+            if (node == 0) return false;
             var net = NetManager.instance;
+            if (OffGround(net.m_nodes.m_buffer[node].m_position)) return false;
             for (int i = 0; i < 8; i++)
             {
                 ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
                 if (s == 0) continue;
                 var info = net.m_segments.m_buffer[s].Info;
-                if (info != null && !SplitRoads.IsRamp(info) && SplitRoads.OriginalOf(info) == road) return true;
+                if (info != null && !SplitRoads.IsRamp(info) && !SplitRoads.IsSplit(info)) return true;
             }
             return false;
         }
@@ -2041,7 +2046,7 @@ namespace RealisticRoads
             string why = null;
             Division lead = null;
             if (origin == 0) why = "the ramp's " + (down ? "last" : "first") + " node wasn't found";
-            else if (!EndsOnGroundRoad(origin, waiting.Full))
+            else if (!EndsOnGroundRoad(origin))
             {
                 lead = DivideLeadIn(ramp, origin, down, waiting.Full);
                 if (lead == null || lead.Plan == null) why = "the " + LeadIn.ToString("F0") + " m of " + Title(waiting.Full) + " to the ramp can't be drawn there";
@@ -2613,7 +2618,17 @@ namespace RealisticRoads
                 // Not on a road of its kind: a short stretch of that road is built
                 // to the node where the ramp leaves (or lands in) it (see FinishParallel).
                 int joinAt = down ? n : 0;
-                if (medianRamp != 0 && !EndsOnGroundRoad(nodes[joinAt], MedianGroundRoad))
+                // On a road but not on its end node (on its middle, or near an end
+                // without snapping to it): it would be built through that road.
+                Vector3 joinPoint = controls[joinAt];
+                ushort onNode, onSegment;
+                float onT;
+                if (medianRamp != 0 && nodes[joinAt] == 0) EndOn(ref joinPoint, MedianGroundRoad, EndSnap, out onNode, out onSegment, out onT, true);
+                else onNode = onSegment = 0;
+                if (onNode != 0 || onSegment != 0)
+                    division.Plan.Problems.Insert(0, (down ? "End" : "Start") + " the " + MedianRampNames[medianRamp] + " on the end node of the road " +
+                                                     "(it snaps to it), or on open ground: here it would be built through the road");
+                else if (medianRamp != 0 && !EndsOnGroundRoad(nodes[joinAt]))
                     division.Plan.Warnings.Add("A " + LeadIn.ToString("F0") + " m stretch of " + Title(MedianGroundRoad) + " is built " +
                                                (down ? "on from where it lands" : "behind where it starts") + ", for its lanes to " +
                                                (down ? "go on to" : "come from"));
