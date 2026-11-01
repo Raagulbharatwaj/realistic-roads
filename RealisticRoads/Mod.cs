@@ -15,7 +15,7 @@ namespace RealisticRoads
     {
         // Which source this build is from, in the log, to tell an old or second
         // copy of the mod from the current one. Changed with each tested feature.
-        public const string SourceTag = "median-full-road-first";
+        public const string SourceTag = "median-full-road-first-logged";
 
         public string Name => "Realistic Roads (beta)";
         public string Description => "Plan your roads and add layers to your city: draw a whole route, choose how it crosses everything, stack decks over and under streets.";
@@ -109,7 +109,7 @@ namespace RealisticRoads
         {
             mainThread = Thread.CurrentThread;
             LoadSettings();
-            Log("Enabled, version " + typeof(Mod).Assembly.GetName().Version + " (source: " + SourceTag + ")");
+            Log("Enabled, version " + typeof(Mod).Assembly.GetName().Version + " (source: " + SourceTag + ", built " + BuildTime() + ", " + DllPath() + ")");
             HarmonyHelper.DoOnHarmonyReady(Patcher.PatchAll);
         }
 
@@ -128,6 +128,35 @@ namespace RealisticRoads
         }
 
         // Safe to call from any thread, including the simulation thread.
+        // When this DLL was compiled: its version is "0.1.*", which the compiler
+        // fills with the days since 1 Jan 2000 and half the seconds since that
+        // midnight (the building machine's local time).
+        private static string BuildTime()
+        {
+            try
+            {
+                var v = typeof(Mod).Assembly.GetName().Version;
+                var at = new DateTime(2000, 1, 1).AddDays(v.Build).AddSeconds(v.Revision * 2);
+                return at.ToString("yyyy-MM-dd HH:mm:ss");
+            }
+            catch
+            {
+                return "unknown";
+            }
+        }
+
+        private static string DllPath()
+        {
+            try
+            {
+                return typeof(Mod).Assembly.Location;
+            }
+            catch
+            {
+                return "path unknown";
+            }
+        }
+
         public static void Log(string msg)
         {
             // Goes to output_log.txt (Unity's Debug.Log is thread-safe)
