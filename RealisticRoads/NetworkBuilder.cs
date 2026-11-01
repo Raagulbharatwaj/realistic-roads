@@ -914,6 +914,21 @@ namespace RealisticRoads
                 if (middles > 0) Mod.Log("  Suspension bridge: towers on every other node, " + middles + " middle node(s)");
                 if (bridges + elevated + tunnels > 0)
                     Mod.Log("  " + bridges + " bridge, " + elevated + " elevated, " + tunnels + " tunnel/slope segment(s)");
+                // Nodes below the ground (a cutting dug for them), and how deep:
+                // a road that digs a trench shows here.
+                int sunk = 0;
+                float deepest = 0f;
+                var belowAt = new List<string>();
+                for (int i = 0; i < plan.Kinds.Length && i < points.Count; i++)
+                {
+                    if (plan.Kinds[i] != NodeKind.Cut && plan.Kinds[i] != NodeKind.Slope && plan.Kinds[i] != NodeKind.Tunnel) continue;
+                    float depth = TerrainManager.instance.SampleRawHeightSmooth(points[i]) - points[i].y;
+                    sunk++;
+                    deepest = Mathf.Max(deepest, depth);
+                    if (belowAt.Count < 6) belowAt.Add("node " + i + " " + plan.Kinds[i] + " " + depth.ToString("F1") + " m down");
+                }
+                if (sunk > 0)
+                    Mod.Log("  " + sunk + " node(s) below the ground, deepest " + deepest.ToString("F1") + " m (" + string.Join(", ", belowAt.ToArray()) + ")");
                 for (int c = 0; c < plan.Crossings.Count; c++)
                     Mod.Log("  Crossing " + (c + 1) + " with " + plan.Crossings[c].ExistingName + ": " + plan.Crossings[c].Describe());
 
