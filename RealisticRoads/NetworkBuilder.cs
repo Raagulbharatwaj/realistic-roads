@@ -430,12 +430,13 @@ namespace RealisticRoads
                 string tmpe = TmpeManager("LaneConnectionManager", out object manager);
                 if (manager == null) return "left to the game (TM:PE " + tmpe + ")";
                 Vector3 at = net.m_nodes.m_buffer[node].m_position;
-                Vector3 h = CurveMath.FlatNormal(segments[ramp].m_startNode == node ? segments[ramp].m_startDirection : segments[ramp].m_endDirection);
-                Vector3 right = new Vector3(h.z, 0f, -h.x);
                 float keep = LeftHandTraffic() ? -1f : 1f;   // the side traffic heading away from the full road drives on
-                var fullLanes = LanesAt(full, node, at, right);
-                var rampLanes = LanesAt(ramp, node, at, right);
-                var groundLanes = LanesAt(ground, node, at, right);
+                // Each road's lanes across its own way through the node (the full
+                // road's towards the node, the ramp's and ground road's away from
+                // it), so the roads may meet at an angle.
+                var fullLanes = LanesAt(full, node, at, -Away(full, node));
+                var rampLanes = LanesAt(ramp, node, at, Away(ramp, node));
+                var groundLanes = LanesAt(ground, node, at, Away(ground, node));
                 var joined = new List<string>();
                 int made = 0, wanted = 0;
                 foreach (float side in new[] { keep, -keep })
@@ -471,13 +472,21 @@ namespace RealisticRoads
         private struct LaneEnd
         {
             public uint Lane;
-            public float Across;      // across the ramp's direction at the node (+ right)
+            public float Across;      // across its road's way through the node (+ right)
             public bool StartNode;    // the node is its segment's start
         }
 
-        // A segment's car lanes where they end at 'node'.
-        private static List<LaneEnd> LanesAt(ushort segment, ushort node, Vector3 at, Vector3 right)
+        // The way a segment leaves 'node' (flat).
+        private static Vector3 Away(ushort segment, ushort node)
         {
+            var s = NetManager.instance.m_segments.m_buffer[segment];
+            return CurveMath.FlatNormal(s.m_startNode == node ? s.m_startDirection : s.m_endDirection);
+        }
+
+        // A segment's car lanes where they end at 'node', across 'way' (+ right of it).
+        private static List<LaneEnd> LanesAt(ushort segment, ushort node, Vector3 at, Vector3 way)
+        {
+            Vector3 right = new Vector3(way.z, 0f, -way.x);
             var net = NetManager.instance;
             var s = net.m_segments.m_buffer[segment];
             var result = new List<LaneEnd>();
@@ -905,6 +914,21 @@ namespace RealisticRoads
                 if (middles > 0) Mod.Log("  Suspension bridge: towers on every other node, " + middles + " middle node(s)");
                 if (bridges + elevated + tunnels > 0)
                     Mod.Log("  " + bridges + " bridge, " + elevated + " elevated, " + tunnels + " tunnel/slope segment(s)");
+                // Nodes below the ground (a cutting dug for them), and how deep:
+                // a road that digs a trench shows here.
+                int sunk = 0;
+                float deepest = 0f;
+                var belowAt = new List<string>();
+                for (int i = 0; i < plan.Kinds.Length && i < points.Count; i++)
+                {
+                    if (plan.Kinds[i] != NodeKind.Cut && plan.Kinds[i] != NodeKind.Slope && plan.Kinds[i] != NodeKind.Tunnel) continue;
+                    float depth = TerrainManager.instance.SampleRawHeightSmooth(points[i]) - points[i].y;
+                    sunk++;
+                    deepest = Mathf.Max(deepest, depth);
+                    if (belowAt.Count < 6) belowAt.Add("node " + i + " " + plan.Kinds[i] + " " + depth.ToString("F1") + " m down");
+                }
+                if (sunk > 0)
+                    Mod.Log("  " + sunk + " node(s) below the ground, deepest " + deepest.ToString("F1") + " m (" + string.Join(", ", belowAt.ToArray()) + ")");
                 for (int c = 0; c < plan.Crossings.Count; c++)
                     Mod.Log("  Crossing " + (c + 1) + " with " + plan.Crossings[c].ExistingName + ": " + plan.Crossings[c].Describe());
 
