@@ -797,7 +797,12 @@ namespace RealisticRoads
                     }
                     else
                     {
-                        BridgeOver(plan, crossing, info.m_halfWidth / crossing.Skew + UnderpassBridgeExtra, touched, build);
+                        // Over our cutting and its banks, measured along the road crossed;
+                        // at an angle that road's own edge reaches further along the
+                        // cutting too (its half width x cot of the angle).
+                        float skew = Mathf.Clamp(crossing.Skew, 0.2f, 1f);
+                        float edge = crossing.ExistingHalfWidth * Mathf.Sqrt(1f - skew * skew) / skew;
+                        BridgeOver(plan, crossing, info.m_halfWidth / skew + UnderpassBridgeExtra + edge, touched, build);
                     }
                 }
 
@@ -822,8 +827,10 @@ namespace RealisticRoads
                     }
                     if (kind == NodeKind.Tunnel) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Underground;
                     // Like the vanilla tool: nodes on (or dug into) the ground follow the terrain.
-                    // Not on an embankment or in a shallow cut: there the game would snap the
-                    // node back onto the terrain, while the road itself reshapes the ground.
+                    // Not on an embankment (above the ground): there the game would snap the
+                    // node back onto the terrain. A cutting's node does get it, as the vanilla
+                    // tool, Network Multitool and Move It build them: its road digs the
+                    // ground down to it, so the node stays on (dug) terrain.
                     bool onTerrain = Mathf.Abs(points[i].y - TerrainManager.instance.SampleRawHeightSmooth(points[i])) < 0.5f;
                     if ((kind == NodeKind.Ground && onTerrain) || kind == NodeKind.Cut) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.OnGround;
                     if (plan.Middle != null && plan.Middle[i]) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Double;
@@ -1191,8 +1198,9 @@ namespace RealisticRoads
 
             var s = net.m_segments.m_buffer[next];
             NetInfo existing = s.Info;
-            NetInfo bridge = RoadPlanner.Variant(existing, "m_elevatedInfo") ?? RoadPlanner.Variant(existing, "m_bridgeInfo");
-            if (bridge == null) return;
+            // The road on beyond has no raised piece: the underpass deck would stop
+            // short over the cutting, so the build fails (and is put back) instead.
+            NetInfo bridge = UnderpassBridge(existing);
             float length = Mathf.Max(s.m_averageLength, 1f);
             if (metres > length - MinPieceOf(existing))
             {

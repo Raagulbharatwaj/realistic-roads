@@ -136,18 +136,18 @@ namespace RealisticRoads
             ushort startSegment = 0, float startT = 0f, ushort endSegment = 0, float endT = 0f,
             List<KeyValuePair<Vector3, float>> lifts = null, List<Vector3> inTangents = null,
             bool[] onDeck = null, DeckBelow[] decks = null, bool[] underDeck = null,
-            List<KeyValuePair<Vector3, float>> dragged = null, Forced[] forced = null)
+            List<KeyValuePair<Vector3, float>> dragged = null, Forced[] forced = null, float[] along = null)
         {
             // At the usual grades; if it only fails for want of room to ramp,
             // again at up to SteepGrade.
             steepGrades = false;
             var plan = MakeAt(info, points, tangents, crossings, crossingIndex, waterRuns, startNode, endNode, startSegment, startT,
-                endSegment, endT, lifts, inTangents, onDeck, decks, underDeck, dragged, forced);
+                endSegment, endT, lifts, inTangents, onDeck, decks, underDeck, dragged, forced, along);
             if (!plan.Ok && plan.GradeProblem)
             {
                 steepGrades = true;
                 var steep = MakeAt(info, points, tangents, crossings, crossingIndex, waterRuns, startNode, endNode, startSegment, startT,
-                    endSegment, endT, lifts, inTangents, onDeck, decks, underDeck, dragged, forced);
+                    endSegment, endT, lifts, inTangents, onDeck, decks, underDeck, dragged, forced, along);
                 steepGrades = false;
                 if (steep.Ok)
                 {
@@ -185,7 +185,7 @@ namespace RealisticRoads
             ushort startSegment, float startT, ushort endSegment, float endT,
             List<KeyValuePair<Vector3, float>> lifts, List<Vector3> inTangents,
             bool[] onDeck, DeckBelow[] decks, bool[] underDeck,
-            List<KeyValuePair<Vector3, float>> dragged, Forced[] forced)
+            List<KeyValuePair<Vector3, float>> dragged, Forced[] forced, float[] along)
         {
             var plan = new Plan
             {
@@ -234,7 +234,16 @@ namespace RealisticRoads
 
             for (int i = 0; i < n; i++)
             {
-                if (i > 0) distance[i] = distance[i - 1] + CurveMath.FlatDistance(points[i - 1], points[i]);
+                // Along the curve, as the water runs and crossings are measured
+                // ('along', from the division), never less than the chord between
+                // two nodes (an arc is never shorter; it keeps a step from 0).
+                if (i == 0 && along != null && along.Length == n) distance[0] = along[0];
+                if (i > 0)
+                {
+                    float chord = CurveMath.FlatDistance(points[i - 1], points[i]);
+                    float arc = along != null && along.Length == n ? along[i] - along[i - 1] : 0f;
+                    distance[i] = distance[i - 1] + Mathf.Max(chord, arc);
+                }
                 ground[i] = terrain.SampleRawHeightSmooth(points[i]);
                 float surface = terrain.SampleRawHeightSmoothWithWater(points[i], false, 0f);
                 water[i] = surface - ground[i] > 0.5f;
@@ -581,8 +590,7 @@ namespace RealisticRoads
         // The road's version for a node kind, or null if it has none.
         private static float GradeFor(NetInfo info)
         {
-            return info != null && info.m_class != null && info.m_class.m_service == ItemClass.Service.PublicTransport
-                ? RailGrade : RoadGrade;
+            return IsRail(info) ? RailGrade : RoadGrade;
         }
 
         // Half the length of our deck over a crossed road or rail, measured along
@@ -1279,6 +1287,19 @@ namespace RealisticRoads
                     plan.Problems.Add("Crossing " + (c + 1) + " (" + crossing.ExistingName + ") is on the piece of road the curve " +
                                       (crossing.Segment == plan.StartSegment ? "starts" : "ends") +
                                       " on: pick a bridge or tunnel there, or start the curve on another road");
+                // Two crossings so close together they share one node (see
+                // CurveTool.DivideAlong): passing over or under both is fine, but
+                // one node can't join (or change) two roads apart.
+                for (int d = 0; d < c; d++)
+                {
+                    if (plan.CrossingIndex[d] != plan.CrossingIndex[c]) continue;
+                    var other = plan.Crossings[d];
+                    bool otherChanges = other.Connects || other.Type == CrossingType.Overpass || other.Type == CrossingType.Underpass;
+                    if (changesIt || otherChanges)
+                        plan.Problems.Add("Crossings " + (d + 1) + " (" + other.ExistingName + ") and " + (c + 1) + " (" + crossing.ExistingName +
+                                          ") are only " + Mathf.Abs(crossing.Distance - other.Distance).ToString("F0") +
+                                          " m apart: too close for a junction (or overpass, underpass) at either; pick a bridge or tunnel for both, or move the line");
+                }
                 if (changesIt) continue;
                 float gap = Mathf.Abs(plan.Points[plan.CrossingIndex[c]].y - crossing.Point.y);
                 if (gap < UnderClearance - 0.5f)

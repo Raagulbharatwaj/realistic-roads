@@ -53,6 +53,9 @@ namespace RealisticRoads
             var prefabsField = collection.GetType().GetField("m_prefabs", BindingFlags.Public | BindingFlags.Instance);
             var prefabs = prefabsField != null ? prefabsField.GetValue(collection) as NetInfo[] : null;
             if (prefabs == null || prefabs.Length == 0) return;
+            // Already added to this collection (it woke twice): not again.
+            foreach (var prefab in prefabs)
+                if (prefab != null && prefab.name != null && (prefab.name.StartsWith(MedianPrefix) || prefab.name.StartsWith(MedianRampPrefix))) return;
             var made = new List<NetInfo>();
             // The median ramp roads' ground roads: the Six-Lane Road without its
             // inner one or two lanes each way, the Four-Lane Road without its inner one.

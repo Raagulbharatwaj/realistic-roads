@@ -2834,25 +2834,32 @@ namespace RealisticRoads
             RoadPlanner.MedianRamp = medianRamp != 0 && !planningGround;
             RoadPlanner.HoldStart = medianRamp != 0 && !planningGround && startNode == 0 && startSegment == 0;
             RoadPlanner.Profile = medianRamp != 0 && !planningGround ? medianProfile : null;
-            FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
-            division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
-                division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
-                startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
-                division.Heights, division.Forced);
-            // Raised stretches get a node (and pillar) every RaisedSpacing, like the
-            // vanilla tool's elevated roads; plan again with them.
-            if (AddRaisedNodes(division))
+            try
             {
                 FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
                 division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
                     division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
                     startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
-                    division.Heights, division.Forced);
+                    division.Heights, division.Forced, NodeDistances(division));
+                // Raised stretches get a node (and pillar) every RaisedSpacing, like the
+                // vanilla tool's elevated roads; plan again with them.
+                if (AddRaisedNodes(division))
+                {
+                    FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
+                    division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
+                        division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
+                        startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
+                        division.Heights, division.Forced, NodeDistances(division));
+                }
             }
-            RoadPlanner.Ramp = false;
-            RoadPlanner.MedianRamp = false;
-            RoadPlanner.HoldStart = false;
-            RoadPlanner.Profile = null;
+            finally
+            {
+                // Never left set for the next plan (a parallel line, the next curve).
+                RoadPlanner.Ramp = false;
+                RoadPlanner.MedianRamp = false;
+                RoadPlanner.HoldStart = false;
+                RoadPlanner.Profile = null;
+            }
             DropNodesOverCrossings(division);
             division.NodeAlong = NodeDistances(division);
             division.Cost = NetworkBuilder.Cost(Net, division.Plan);
@@ -3124,6 +3131,9 @@ namespace RealisticRoads
             cuts.Sort((p, q) => p.Key.CompareTo(q.Key));
 
             var stops = new List<KeyValuePair<float, Crossing>> { new KeyValuePair<float, Crossing>(0f, null) };
+            // A crossing too close to another one for a node of its own shares that
+            // one's node: its height still holds there (it is never dropped).
+            var sharing = new Dictionary<Crossing, List<Crossing>>();
             foreach (var cut in cuts)
             {
                 if (cut.Key < 4f || cut.Key > division.Length - 4f) continue;
@@ -3132,6 +3142,13 @@ namespace RealisticRoads
                     // Too close to the previous stop: keep the crossing if there is one,
                     // else a sharp corner (the road turns there, so it needs the node).
                     var previous = stops[stops.Count - 1];
+                    if (cut.Value != null && previous.Value != null)
+                    {
+                        List<Crossing> list;
+                        if (!sharing.TryGetValue(previous.Value, out list)) sharing[previous.Value] = list = new List<Crossing>();
+                        list.Add(cut.Value);
+                        continue;
+                    }
                     bool better = cut.Value != null || (IsCornerAt(corners, cut.Key) && !IsCornerAt(corners, previous.Key));
                     if (better && previous.Value == null && stops.Count > 1)
                         stops[stops.Count - 1] = cut;
@@ -3196,6 +3213,13 @@ namespace RealisticRoads
                         }
                         division.Crossings.Add(stops[c].Value);
                         division.CrossingIndex.Add(index);
+                        List<Crossing> sharers;
+                        if (sharing.TryGetValue(stops[c].Value, out sharers))
+                            foreach (var sharer in sharers)
+                            {
+                                division.Crossings.Add(sharer);
+                                division.CrossingIndex.Add(index);
+                            }
                     }
                 }
             }

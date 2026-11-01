@@ -160,9 +160,13 @@ namespace RealisticRoads
                         {
                             // Where our road starts or ends on an existing node, the roads
                             // at that node meet it there anyway; other crossings with them
-                            // further along (a loop back over one of them) still count.
+                            // further along (a loop back over one of them) still count. Only
+                            // roads at that node: another road passing close by is crossed.
                             float near = existing.m_halfWidth + info.m_halfWidth + 2f;
-                            if (NearNode(crossing.Point, ignoreNodeA, near) || NearNode(crossing.Point, ignoreNodeB, near)) continue;
+                            ushort a = segments[current].m_startNode, b = segments[current].m_endNode;
+                            bool atA = ignoreNodeA != 0 && (a == ignoreNodeA || b == ignoreNodeA);
+                            bool atB = ignoreNodeB != 0 && (a == ignoreNodeB || b == ignoreNodeB);
+                            if ((atA && NearNode(crossing.Point, ignoreNodeA, near)) || (atB && NearNode(crossing.Point, ignoreNodeB, near))) continue;
 
                             crossing.Segment = current;
                             crossing.SameType = existing.m_class.m_service == info.m_class.m_service &&
@@ -315,8 +319,10 @@ namespace RealisticRoads
             if (a == null || b == null) return false;
             if (a.m_service == b.m_service && a.m_subService == b.m_subService) return true;
             bool aRoad = a.m_service == ItemClass.Service.Road, bRoad = b.m_service == ItemClass.Service.Road;
-            bool aTrain = a.m_subService == TrainSubService;
-            bool bTrain = b.m_subService == TrainSubService;
+            // A road over a railway or a tram track (standalone) is a level crossing,
+            // as the game builds them; metro and monorail never join a road.
+            bool aTrain = a.m_subService == TrainSubService || a.m_subService == ItemClass.SubService.PublicTransportTram;
+            bool bTrain = b.m_subService == TrainSubService || b.m_subService == ItemClass.SubService.PublicTransportTram;
             return (aRoad && bRoad) || (aRoad && bTrain) || (aTrain && bRoad);
         }
 
