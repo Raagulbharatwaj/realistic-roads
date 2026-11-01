@@ -6,21 +6,18 @@ using UnityEngine;
 
 namespace RealisticRoads
 {
-    // Split roads, VOP-style: a copy of a wide two-way road with its middle
-    // (its inner lanes on both sides, and the median between them) taken out,
-    // built under a ramp rising out of the road's middle until the ramp is
-    // high enough to drive under. The ramp sits in the middle: no traffic,
-    // street lights or raised median under it, and no more width than the road.
-    // The middle stays paved (the median flattened into the road's surface),
-    // so no ground shows under the ramp's raised part or beside a narrow ramp.
+    // The pieces of the three median ramp roads, built the way the Vanilla
+    // Overpass Project builds its overpasses: a ground road (the Six- or
+    // Four-Lane Road without its inner lanes, its halves moved so the gap in
+    // its middle is as wide as the ramp, the gap paved flat) and a narrow ramp
+    // (9 m with two lanes, 15 m with four; no sidewalks) that runs in that gap.
     //
-    // The copies are made from the game's own roads (their lanes and 3D
-    // models) while a city loads, before its roads are read,
-    // so cities saved with them load them again. They are hidden from the menus.
-    // A city saved with them needs this mod to load them.
+    // They are made from the game's own roads (their lanes and 3D models)
+    // while a city loads, before its roads are read, so cities saved with
+    // them load them again. They are hidden from the menus. A city saved with
+    // them needs this mod to load them.
     public static class SplitRoads
     {
-        public const string Prefix = "RR Split ";
         // The ground roads of the three median ramp roads: a split road whose two
         // halves (each carriageway with its sidewalk) are moved out (or in, past
         // a median) so the gap is as wide as the median ramp (9 m for a 2-lane ramp, 15 m
@@ -34,7 +31,6 @@ namespace RealisticRoads
             public string Name;
             public int Inner;     // inner lanes cut out on each side
             public float Cut;     // the gap: this far either side of the centre
-            public bool Median;   // a median ramp road's ground road (halves moved out)
             public NetInfo Info;  // once loaded
         }
 
@@ -48,34 +44,16 @@ namespace RealisticRoads
 
         // --- making the copies (while a city loads) ------------------------------
 
-        // Prefix of NetCollection.Awake: the collection's roads that can be split
-        // get their split copies added to it, so the game sets them up with the
-        // rest (before a saved city's roads are read).
+        // Prefix of NetCollection.Awake: the median ramp roads' pieces (their
+        // ground roads and ramps) are added to the collection holding the
+        // game's roads they are made from, so the game sets them up with the
+        // rest (before a saved city's roads are read). Nothing else is made.
         public static void AddTo(object collection)
         {
             var prefabsField = collection.GetType().GetField("m_prefabs", BindingFlags.Public | BindingFlags.Instance);
             var prefabs = prefabsField != null ? prefabsField.GetValue(collection) as NetInfo[] : null;
             if (prefabs == null || prefabs.Length == 0) return;
             var made = new List<NetInfo>();
-            int candidates = 0;
-            foreach (var road in prefabs)
-            {
-                if (!CanSplit(road)) continue;
-                candidates++;
-                int perSide = Mathf.Min(VehicleLanes(road, -1), VehicleLanes(road, 1));
-                for (int inner = 1; inner < perSide && inner <= 2; inner++)
-                {
-                    try
-                    {
-                        var copy = Make(road, inner, -1f);
-                        if (copy != null) made.Add(copy);
-                    }
-                    catch (Exception e)
-                    {
-                        Mod.LogError("Making the split " + road.name + " (" + inner + " inner lane(s)) failed", e);
-                    }
-                }
-            }
             // The median ramp roads' ground roads: the Six-Lane Road without its
             // inner one or two lanes each way, the Four-Lane Road without its inner one.
             foreach (var road in prefabs)
@@ -98,7 +76,6 @@ namespace RealisticRoads
                 }
             }
             string collectionName = ((Component)collection).gameObject.name;
-            int splits = made.Count;
             try
             {
                 MakeRamps(prefabs, made);
@@ -107,11 +84,7 @@ namespace RealisticRoads
             {
                 Mod.LogError("Making the median ramp roads failed", e);
             }
-            if (made.Count == 0)
-            {
-                if (candidates > 0) Mod.Log("Split roads: " + candidates + " road(s) of " + collectionName + " could be split, but no copy was made");
-                return;
-            }
+            if (made.Count == 0) return;
             var all = new NetInfo[prefabs.Length + made.Count];
             prefabs.CopyTo(all, 0);
             made.CopyTo(all, prefabs.Length);
@@ -126,7 +99,7 @@ namespace RealisticRoads
                 for (int i = replaced.Length; i < longer.Length; i++) longer[i] = string.Empty;
                 replacedField.SetValue(collection, longer);
             }
-            Mod.Log("Split roads: " + splits + " made from " + candidates + " road(s) of " + collectionName);
+            Mod.Log("Median ramp roads: " + made.Count + " piece(s) made in " + collectionName);
         }
 
         // A two-way ground road with at least two vehicle lanes each way.
@@ -137,7 +110,7 @@ namespace RealisticRoads
             // filled in then): its AI is the component on it.
             var ai = road.m_netAI != null ? road.m_netAI : road.GetComponent<NetAI>();
             if (ai == null || ai.GetType().Name != "RoadAI") return false;
-            if (road.name != null && road.name.StartsWith(Prefix)) return false;
+            if (road.name != null && road.name.StartsWith(MedianPrefix)) return false;
             return VehicleLanes(road, -1) >= 2 && VehicleLanes(road, 1) >= 2 && road.m_segments != null && road.m_lanes != null;
         }
 
@@ -168,15 +141,15 @@ namespace RealisticRoads
             return Mathf.Max(left[inner - 1], right[inner - 1]);
         }
 
-        // 'gapHalf' > 0: a median ramp road's ground road, each half moved
-        // (out, or in past a median) so the gap reaches 'gapHalf' either side.
+        // A median ramp road's ground road: 'road' without its 'inner' inner
+        // lanes each way, each half moved (out, or in past a median) so the gap
+        // reaches 'gapHalf' either side.
         private static NetInfo Make(NetInfo road, int inner, float gapHalf)
         {
             float cut = CutFor(road, inner);
-            if (cut <= 0f) return null;
-            bool median = gapHalf > 0f;
-            float widen = median ? gapHalf - cut : 0f;
-            string name = (median ? MedianPrefix : Prefix) + road.name + " " + inner;
+            if (cut <= 0f || gapHalf <= 0f) return null;
+            float widen = gapHalf - cut;
+            string name = MedianPrefix + road.name + " " + inner;
             var go = UnityEngine.Object.Instantiate(road.gameObject);
             go.name = name;
             if (road.transform != null && go.transform != null) go.transform.parent = road.transform.parent;
@@ -192,11 +165,11 @@ namespace RealisticRoads
             foreach (var lane in copy.m_lanes)
                 if (lane != null && Mathf.Abs(lane.m_position) >= cut - 0.01f)
                 {
-                    if (median) lane.m_position += lane.m_position < 0f ? -widen : widen;
+                    lane.m_position += lane.m_position < 0f ? -widen : widen;
                     lanes.Add(lane);
                 }
             copy.m_lanes = lanes.ToArray();
-            if (median) copy.m_halfWidth += widen;
+            copy.m_halfWidth += widen;
             // Its models (segments, and nodes: the ends of the split stretch) with
             // the middle flattened into the road's surface.
             float surface = road.m_surfaceLevel;
@@ -204,37 +177,32 @@ namespace RealisticRoads
                 foreach (var segment in copy.m_segments)
                 {
                     if (segment == null) continue;
-                    var mesh = median ? Widen(segment.m_mesh, cut, widen, surface) : FlattenMiddle(segment.m_mesh, cut, surface);
+                    var mesh = Widen(segment.m_mesh, cut, widen, surface);
                     if (mesh != null) segment.m_mesh = mesh;
-                    var lod = median ? Widen(segment.m_lodMesh, cut, widen, surface) : FlattenMiddle(segment.m_lodMesh, cut, surface);
+                    var lod = Widen(segment.m_lodMesh, cut, widen, surface);
                     if (lod != null) segment.m_lodMesh = lod;
                 }
             if (copy.m_nodes != null)
                 foreach (var node in copy.m_nodes)
                 {
                     if (node == null) continue;
-                    var mesh = median ? Widen(node.m_mesh, cut, widen, surface) : FlattenMiddle(node.m_mesh, cut, surface);
+                    var mesh = Widen(node.m_mesh, cut, widen, surface);
                     if (mesh != null) node.m_mesh = mesh;
-                    var lod = median ? Widen(node.m_lodMesh, cut, widen, surface) : FlattenMiddle(node.m_lodMesh, cut, surface);
+                    var lod = Widen(node.m_lodMesh, cut, widen, surface);
                     if (lod != null) node.m_lodMesh = lod;
                 }
             HideFromMenus(copy);
-            if (median)
-                Name(copy, Title(road) + " (" + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes beside a median ramp)",
-                    "Built by Realistic Roads beside a ramp in the road's middle.");
-            else
-                Name(copy, Title(road) + " (split, " + inner + " lane" + (inner > 1 ? "s" : "") + " each way)",
-                    "Built by Realistic Roads under a ramp rising out of the road's middle.");
+            Name(copy, Title(road) + " (" + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes beside a median ramp)",
+                "Built by Realistic Roads beside a ramp in the road's middle.");
             lock (variants)
             {
                 List<Variant> list;
                 if (!variants.TryGetValue(road.name, out list)) variants[road.name] = list = new List<Variant>();
                 list.RemoveAll(v => v.Name == name);
-                list.Add(new Variant { Name = name, Inner = inner, Cut = median ? cut + widen : cut, Median = median });
+                list.Add(new Variant { Name = name, Inner = inner, Cut = cut + widen });
                 list.Sort((a, b) => a.Cut.CompareTo(b.Cut));
             }
-            if (median)
-                Mod.Log("Median ramp roads: " + name + " from " + road.name + " (" + (2f * road.m_halfWidth).ToString("F1") + " m, inner lane edge " +
+            Mod.Log("Median ramp roads: " + name + " from " + road.name + " (" + (2f * road.m_halfWidth).ToString("F1") + " m, inner lane edge " +
                         cut.ToString("F1") + " m): " + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes, halves moved " +
                         widen.ToString("+0.0;-0.0") + " m, a " + (2f * (cut + widen)).ToString("F1") + " m gap in the middle, " +
                         (2f * copy.m_halfWidth).ToString("F1") + " m wide");
@@ -293,7 +261,7 @@ namespace RealisticRoads
             catch (Exception e)
             {
                 namingFailed = true;
-                Mod.Log("Split roads: naming them in the game's text tables failed (" + e.GetType().Name + ": " + e.Message +
+                Mod.Log("Median ramp roads: naming them in the game's text tables failed (" + e.GetType().Name + ": " + e.Message +
                         "); the game logs a missing name for each, harmlessly");
             }
         }
@@ -334,8 +302,7 @@ namespace RealisticRoads
 
         // --- narrow ramp roads (for median ramps) ---------------------------------
 
-        public const string RampPrefix = "RR Ramp ";
-        public const string MedianRampPrefix = "RR Median Ramp ";   // the three median ramp roads' ramps (9 and 15 m)
+        public const string MedianRampPrefix = "RR Median Ramp ";   // the median ramp roads' ramps (9 and 15 m)
         private const float RampBarrier = 0.6f;    // the parapet each side of a ramp road
         private static readonly Dictionary<int, string> rampNames = new Dictionary<int, string>();   // by its lanes (2, 4)
         private static readonly Dictionary<int, NetInfo> ramps = new Dictionary<int, NetInfo>();
@@ -347,35 +314,31 @@ namespace RealisticRoads
         // narrower, a parapet at each edge.
         private static void MakeRamps(NetInfo[] prefabs, List<NetInfo> made)
         {
-            NetInfo basic = null, medium = null, large = null;
+            NetInfo basic = null, medium = null;
             foreach (var prefab in prefabs)
             {
                 if (prefab == null) continue;
                 if (prefab.name == "Basic Road") basic = prefab;
                 else if (prefab.name == "Medium Road") medium = prefab;
-                else if (prefab.name == "Large Road") large = prefab;
             }
-            // The first ones (kept for cities built with them): as wide as the plain gap.
-            if (basic != null) MakeRamp(basic, 2, large != null ? CutFor(large, 1) : 3f, made, RampPrefix, false);
-            if (medium != null) MakeRamp(medium, 4, large != null ? CutFor(large, 2) : 6f, made, RampPrefix, false);
             // The median ramp roads' ramps: as wide as their ground road's gap
             // (9 m with two lanes, 15 m with four), the lanes at full width and a
             // shoulder to the parapet.
-            if (basic != null) MakeRamp(basic, 2, MedianGap2, made, MedianRampPrefix, true);
-            if (medium != null) MakeRamp(medium, 4, MedianGap4, made, MedianRampPrefix, true);
+            if (basic != null) MakeRamp(basic, 2, MedianGap2, made);
+            if (medium != null) MakeRamp(medium, 4, MedianGap4, made);
         }
 
         private static readonly List<string> allRampNames = new List<string>();   // every ramp road made (their pillars)
 
-        private static void MakeRamp(NetInfo road, int lanes, float half, List<NetInfo> made, string prefix, bool median)
+        private static void MakeRamp(NetInfo road, int lanes, float half, List<NetInfo> made)
         {
             if (half <= 1f) return;
             var ai = road.m_netAI != null ? road.m_netAI : road.GetComponent<NetAI>();
             var elevatedField = ai != null ? ai.GetType().GetField("m_elevatedInfo", BindingFlags.Public | BindingFlags.Instance) : null;
             var elevated = elevatedField != null ? elevatedField.GetValue(ai) as NetInfo : null;
             if (elevated == null) return;
-            var narrowElevated = Narrow(elevated, prefix + lanes + " Elevated", half, median);
-            var narrow = Narrow(road, prefix + lanes, half, median);
+            var narrowElevated = Narrow(elevated, MedianRampPrefix + lanes + " Elevated", half);
+            var narrow = Narrow(road, MedianRampPrefix + lanes, half);
             if (narrow == null || narrowElevated == null) return;
             // The ground version's raised versions: the narrow elevated one (no bridge
             // trusses, no slope or tunnel: a ramp never goes below the ground).
@@ -392,7 +355,7 @@ namespace RealisticRoads
             made.Add(narrow);
             lock (variants)
             {
-                if (median) rampNames[lanes] = narrow.name;
+                rampNames[lanes] = narrow.name;
                 allRampNames.Add(narrow.name);
             }
             Mod.Log("Median ramps: " + narrow.name + " made from " + road.name + ", " + (2f * narrow.m_halfWidth).ToString("F1") + " m wide (elevated " +
@@ -412,9 +375,9 @@ namespace RealisticRoads
             return string.Join(" ", parts.ToArray());
         }
 
-        // 'shoulder': the lanes keep their width (at most) and the road is
-        // exactly 'half' either side: a shoulder fills the room to the parapet.
-        private static NetInfo Narrow(NetInfo road, string name, float half, bool shoulder)
+        // The lanes keep their width (at most) and the road is exactly 'half'
+        // either side: a shoulder fills the room to the parapet.
+        private static NetInfo Narrow(NetInfo road, string name, float half)
         {
             // The carriageway: from the median's edge (0 without one) to the outer
             // vehicle lane's edge. A median is closed up (a ramp has none).
@@ -432,7 +395,7 @@ namespace RealisticRoads
             float inner = Mathf.Max(half - RampBarrier, drive * 0.85f);
             float scale = Mathf.Min(1f, inner / drive);
             float laneEdge = drive * scale;
-            if (!shoulder || inner < laneEdge) inner = laneEdge;
+            if (inner < laneEdge) inner = laneEdge;
             float roadHalf = road.m_halfWidth;
             // The carriageway's edge (past the outer lane: a gutter), where the sidewalk starts.
             float gutter = Mathf.Clamp(road.m_halfWidth - road.m_pavementWidth, keep, Mathf.Max(keep, roadHalf - RampBarrier));
@@ -467,9 +430,9 @@ namespace RealisticRoads
                     if (segment == null) continue;
                     // A model of the median alone (an elevated road's median strip) goes.
                     if (median > 0.5f && MaxX(segment.m_mesh) <= median + 0.5f) continue;
-                    var mesh = Squeeze(segment.m_mesh, roadHalf, median, keep, scale, inner, surface, shoulder ? gutter : -1f);
+                    var mesh = Squeeze(segment.m_mesh, roadHalf, median, keep, scale, inner, surface, gutter);
                     if (mesh != null) segment.m_mesh = mesh;
-                    var lod = Squeeze(segment.m_lodMesh, roadHalf, median, keep, scale, inner, surface, shoulder ? gutter : -1f);
+                    var lod = Squeeze(segment.m_lodMesh, roadHalf, median, keep, scale, inner, surface, gutter);
                     if (lod != null) segment.m_lodMesh = lod;
                     kept.Add(segment);
                 }
@@ -479,9 +442,9 @@ namespace RealisticRoads
                 foreach (var node in copy.m_nodes)
                 {
                     if (node == null) continue;
-                    var mesh = Squeeze(node.m_mesh, roadHalf, median, keep, scale, inner, surface, shoulder ? gutter : -1f);
+                    var mesh = Squeeze(node.m_mesh, roadHalf, median, keep, scale, inner, surface, gutter);
                     if (mesh != null) node.m_mesh = mesh;
-                    var lod = Squeeze(node.m_lodMesh, roadHalf, median, keep, scale, inner, surface, shoulder ? gutter : -1f);
+                    var lod = Squeeze(node.m_lodMesh, roadHalf, median, keep, scale, inner, surface, gutter);
                     if (lod != null) node.m_lodMesh = lod;
                 }
             HideFromMenus(copy);
@@ -582,7 +545,7 @@ namespace RealisticRoads
         // One of the ramp roads (either version).
         public static bool IsRamp(NetInfo info)
         {
-            return info != null && info.name != null && (info.name.StartsWith(RampPrefix) || info.name.StartsWith(MedianRampPrefix));
+            return info != null && info.name != null && info.name.StartsWith(MedianRampPrefix);
         }
 
         // The ramp road with 'lanes' lanes (2 or 4), once the city is loaded; null if none.
@@ -593,26 +556,6 @@ namespace RealisticRoads
         }
 
         // --- flattening a model's middle -----------------------------------------
-
-        // The model with everything closer than 'cut' to its centre line (x) and
-        // above the road's surface (a raised median, its kerbs) brought down to
-        // the surface: the middle stays paved, only flat. Null if it can't be read.
-        internal static Mesh FlattenMiddle(Mesh mesh, float cut, float surface)
-        {
-            if (mesh == null) return null;
-            var vertices = mesh.vertices;
-            var triangles = mesh.triangles;
-            if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length == 0) return null;
-            int moved = 0;
-            for (int i = 0; i < vertices.Length; i++)
-            {
-                if (Mathf.Abs(vertices[i].x) >= cut - 0.01f || vertices[i].y <= surface) continue;
-                vertices[i] = new Vector3(vertices[i].x, surface, vertices[i].z);
-                moved++;
-            }
-            if (moved == 0) return null;   // nothing raised in the middle: the model as it is
-            return CopyWith(mesh, vertices, triangles, " (split)");
-        }
 
         // A median ramp road's ground road model: everything 'cut' or more from
         // the centre line (each carriageway's outer lanes, kerb, sidewalk and
@@ -813,7 +756,7 @@ namespace RealisticRoads
                     }
                 }
             active = found > 0;
-            if (variants.Count > 0) Mod.Log("Split roads: " + found + " ready; median ramp roads: " + ramps.Count);
+            if (variants.Count > 0) Mod.Log("Median ramp roads: " + found + " ground road(s) and " + ramps.Count + " ramp(s) ready");
         }
 
         // Main thread, the city unloading: its copies go (made again for the next).
@@ -861,16 +804,9 @@ namespace RealisticRoads
             {
                 List<Variant> list;
                 if (!variants.TryGetValue(road.name, out list)) return null;
-                // A median ramp road's own ground road first (its gap fits the ramp).
                 foreach (var variant in list)
-                    if (variant.Info != null && variant.Median && variant.Inner == inner) return variant.Info;
-                Variant best = null;
-                foreach (var variant in list)
-                {
-                    if (variant.Info == null || variant.Median) continue;
-                    if (best == null || Mathf.Abs(variant.Inner - inner) < Mathf.Abs(best.Inner - inner)) best = variant;
-                }
-                return best != null ? best.Info : null;
+                    if (variant.Info != null && variant.Inner == inner) return variant.Info;
+                return null;
             }
         }
 

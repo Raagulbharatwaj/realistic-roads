@@ -209,8 +209,11 @@ namespace RealisticRoads
             get { return selectedNetwork; }
             set
             {
-                // A split copy (picked from a road built with one) draws as its road.
+                // A median ramp road's piece (picked from one built) draws as the
+                // game's road it was made from: the pieces are never drawn alone.
                 if (SplitRoads.IsSplit(value)) value = SplitRoads.OriginalOf(value);
+                else if (SplitRoads.IsRamp(value))
+                    value = PrefabCollection<NetInfo>.FindLoaded(SplitRoads.RampLanes(value) > 1 ? "Medium Road" : "Basic Road") ?? value;
                 if (pickingBeside && value != null && selectedNetwork != null && value != selectedNetwork)
                 {
                     pickingBeside = false;
@@ -503,9 +506,8 @@ namespace RealisticRoads
             preview = Divide(live, liveNodes, liveSegments, liveTs, liveLifts, liveStraight, liveDeck, liveUnder, liveRoad, liveRoadT);
             // The parallel line beside it (not along decks yet).
             second = parallelMode && !liveDeck.Contains(true) ? DivideParallel(preview, CurrentParallel()) : null;
-            // A median ramp road from anywhere but along an existing road: its new
-            // ground road beside it, to the first road it meets.
-            if (medianRamp != 0 && preview.Plan != null && preview.Plan.MedianStart == null && preview.Plan.MedianEnd == null)
+            // A median ramp road: its ground road beside the ramp.
+            if (medianRamp != 0 && preview.Plan != null)
                 second = DivideGround(preview, MedianGroundSplit);
             cursorText = CursorText(withHover);
             ShowPanel();
@@ -1575,16 +1577,16 @@ namespace RealisticRoads
         // Drawing a slip ramp: its ends leave and join the roads there along
         // them (in their traffic's direction), turned RampAngle off them.
         private bool rampMode;
-        // A median ramp road (0: off): a ramp rising out of a road's middle to
-        // deck level at 8 %, the road's outer lanes going on beside it on the
-        // ground (a split road) to the next junction. 1: six-lane road with a
-        // 2-lane ramp, 2: six-lane with a 4-lane ramp, 3: four-lane with a 2-lane ramp.
+        // A median ramp road (0: off): a ramp in the road's middle rising to
+        // deck level at 8 %, the road's outer lanes on the ground beside it (its
+        // ground road) along the whole line. 1: six-lane road with a 2-lane ramp,
+        // 2: six-lane with a 4-lane ramp, 3: four-lane with a 2-lane ramp.
         private int medianRamp;
         private static readonly string[] MedianRampNames =
             { null, "six-lane road + 2-lane median ramp", "six-lane road + 4-lane median ramp", "four-lane road + 2-lane median ramp" };
         private int MedianRampLanes => medianRamp == 2 ? 4 : 2;
         private NetInfo MedianGroundRoad => medianRamp == 0 ? null : PrefabCollection<NetInfo>.FindLoaded(medianRamp == 3 ? "Medium Road" : "Large Road");
-        // The split road going on beside the ramp on the ground.
+        // The ground road beside the ramp (the road without its inner lanes).
         private NetInfo MedianGroundSplit => SplitRoads.For(MedianGroundRoad, MedianRampLanes / 2);
         // The road the curve is drawn with: a median ramp's ramp road, else the one picked.
         private NetInfo DrawNetwork => medianRamp != 0 && SplitRoads.RampRoad(MedianRampLanes) != null ? SplitRoads.RampRoad(MedianRampLanes) : SelectedNetwork;
@@ -1600,9 +1602,9 @@ namespace RealisticRoads
             medianRamp = medianRamp == choice ? 0 : choice;
             if (medianRamp != 0 && (SplitRoads.RampRoad(MedianRampLanes) == null || MedianGroundSplit == null))
             {
-                Mod.Log("Median ramp: " + MedianRampNames[medianRamp] + " isn't available (its ramp or split road wasn't made when the city loaded)");
+                Mod.Log("Median ramp: " + MedianRampNames[medianRamp] + " isn't available (its ramp or ground road wasn't made when the city loaded)");
                 Mod.WarnNow("Median ramp not available", "The " + MedianRampNames[medianRamp] + " needs road copies made when the city loads, " +
-                                                         "and they weren't. The log says why (lines with 'Split roads' or 'Median ramps').");
+                                                         "and they weren't. The log says why (lines with 'Median ramp roads' or 'Median ramps').");
                 medianRamp = 0;
             }
             if (medianRamp != 0)
@@ -1772,7 +1774,7 @@ namespace RealisticRoads
             return true;
         }
 
-        // A node on the ground with a road of 'road's kind (or its split copy)
+        // A node on the ground with a road of 'road's kind (or its ground road)
         // at it, not a median ramp road.
         private static bool EndsOnGroundRoad(ushort node, NetInfo road)
         {
@@ -1786,35 +1788,6 @@ namespace RealisticRoads
                 if (info != null && !SplitRoads.IsRamp(info) && SplitRoads.OriginalOf(info) == road) return true;
             }
             return false;
-        }
-
-        // The segment of 'road' (or its split copy) under 'p', and where on it.
-        private static bool SameRoadAt(Vector3 p, NetInfo road, out ushort segment, out float t)
-        {
-            segment = 0;
-            t = 0f;
-            if (road == null) return false;
-            var segments = NetManager.instance.m_segments.m_buffer;
-            float best = float.MaxValue;
-            foreach (ushort s in RoadPlanner.NearbySegments(p, 40f))
-            {
-                var info = segments[s].Info;
-                if (info == null || (info != road && SplitRoads.OriginalOf(info) != road)) continue;
-                Vector3 onRoad;
-                float at = CrossingFinder.ClosestT(s, p, out onRoad);
-                float distance = CurveMath.FlatDistance(onRoad, p);
-                if (distance > info.m_halfWidth + 2f || distance >= best) continue;
-                best = distance;
-                segment = s;
-                t = at;
-            }
-            return segment != 0;
-        }
-
-        // Vehicle lanes, both ways.
-        private static int VehicleLanes(NetInfo info)
-        {
-            return info == null ? 0 : info.m_forwardVehicleLaneCount + info.m_backwardVehicleLaneCount;
         }
 
         // Which way a road's traffic runs along it: 1 from its start node to its
@@ -2488,13 +2461,11 @@ namespace RealisticRoads
 
             // A median ramp road's new ground road: checked now, built once the ramp is.
             NetInfo groundRoad = null;
-            if (medianRamp != 0 && division.Plan.MedianStart == null && division.Plan.MedianEnd == null)
+            if (medianRamp != 0)
             {
                 groundRoad = MedianGroundSplit;
                 var ground = DivideGround(division, groundRoad);
-                string why = ground == null && division.Plan.MedianDown
-                    ? "no road on the ground behind where it lands, for the lanes beside it to come from: draw it along a road"
-                    : ground == null || ground.Plan == null ? "its ground road can't be drawn here"
+                string why = ground == null || ground.Plan == null ? "its ground road can't be drawn here"
                     : !ground.Ok ? "its ground road bends too sharply"
                     : !ground.Plan.Ok ? "ground road: " + string.Join("; ", ground.Plan.Problems.ToArray()) : null;
                 if (why != null)
@@ -2506,8 +2477,7 @@ namespace RealisticRoads
 
             var drawn = DrawNetwork;
             if (medianRamp != 0)
-                Mod.Log("Median ramp " + MedianRampNames[medianRamp] + ": " + (medianSummary ?? "no profile") + "; ground lanes " +
-                        (division.Plan.MedianStart != null || division.Plan.MedianEnd != null ? "on the existing road (split to the junction)" : "a new " + MedianGroundSplit.name));
+                Mod.Log("Median ramp " + MedianRampNames[medianRamp] + ": " + (medianSummary ?? "no profile") + "; ground road " + MedianGroundSplit.name);
             Mod.Log("Building " + drawn.name + ": " + division.Length.ToString("F0") + " m in " +
                     (division.Points.Count - 1) + " segment(s), " + division.Crossings.Count + " crossing(s)");
             if (spec == null && groundRoad == null) NetworkBuilder.BuildCurve(drawn, division.Plan);
@@ -2539,11 +2509,10 @@ namespace RealisticRoads
             // Span i (point i to i+1) is straight if point i+1 was placed in straight mode.
             var straight = new List<bool>();
             for (int i = 1; i <= n; i++) straight.Add(i < pointModes.Count && pointModes[i]);
-            // A ramp leaves and joins the roads at its ends along them; one rising
-            // out of a two-way road's middle follows its centre line, and has
-            // fewer lanes than it (it takes the middle ones).
+            // A ramp leaves and joins the roads at its ends along them. A median
+            // ramp road is drawn like a new road: from (or to) a road's end or open
+            // ground, never out of an existing road's middle.
             string rampNote = null, rampProblem = null;
-            NetInfo medianStart = null, medianEnd = null;   // the roads a ramp rises out of (or lands in) the middle of
             Vector3 rampStart = Vector3.zero, rampEnd = Vector3.zero;
             if (rampMode || medianRamp != 0)
             {
@@ -2558,8 +2527,8 @@ namespace RealisticRoads
                     ushort road;
                     float roadT;
                     if (!RampDirection(nodes[k], segments[k], ts[k], heading, out along, ref rampNote, out median, out road, out roadT)) continue;
-                    // Only a median ramp road rises out of a road's middle; a ramp
-                    // (Ramp mode) leaves at the side.
+                    // A side ramp (Ramp mode) leaves a road at its side; a median ramp
+                    // road isn't drawn out of a road's middle (see below).
                     if (median && medianRamp == 0)
                     {
                         median = false;
@@ -2567,21 +2536,9 @@ namespace RealisticRoads
                         if (!RampDirection(nodes[k], segments[k], ts[k], heading, out along, ref ignore, out median, out road, out roadT, false)) continue;
                     }
                     if (e == 0) rampStart = along; else rampEnd = along;
-                    if (!median) continue;
-                    roads[k] = road;
-                    roadTs[k] = roadT;
-                    var ground = NetManager.instance.m_segments.m_buffer[road].Info;
-                    if (e == 0) medianStart = ground; else medianEnd = ground;
-                    // The median ramp road picked is for a six- or a four-lane road.
-                    int wanted = medianRamp == 3 ? 4 : 6;
-                    if (medianRamp != 0 && VehicleLanes(SplitRoads.OriginalOf(ground)) != wanted)
-                        rampProblem = "The road here is the " + Title(ground) + " (" + VehicleLanes(SplitRoads.OriginalOf(ground)) + " lanes); the " +
-                                      MedianRampNames[medianRamp] + " rises out of a " + wanted + "-lane road: pick the median ramp road for " +
-                                      VehicleLanes(SplitRoads.OriginalOf(ground)) + " lanes (Median ramp button), or start it elsewhere";
-                    else if (VehicleLanes(Net) >= VehicleLanes(ground))
-                        rampProblem = "A ramp rising out of the middle of the " + (ground != null ? ground.name : "road") + " (" + VehicleLanes(ground) +
-                                      " lanes) takes its middle lanes: pick a road with fewer lanes for it" +
-                                      (VehicleLanes(ground) > 4 ? " (2 or 4)" : VehicleLanes(ground) > 2 ? " (2)" : "");
+                    if (median)
+                        rampProblem = "The " + MedianRampNames[medianRamp] + " is drawn like a new road: " + (e == 0 ? "start" : "end") +
+                                      " it on the end of a road or on open ground, not along the middle of an existing road";
                 }
                 if (rampMode && ((nodes[0] == 0 && segments[0] == 0) || (nodes[n] == 0 && segments[n] == 0)))
                     rampNote = rampNote ?? "A ramp starts on the road it leaves and ends on the road it joins: snap both ends to roads";
@@ -2593,25 +2550,9 @@ namespace RealisticRoads
             var under = new HashSet<ushort>();
             for (int i = 1; i <= n; i++)
             {
-                // A median ramp road's ramp is a deck all along (over the road it
-                // rises out of, or over its own ground road and the ground).
+                // A median ramp road's ramp is a deck all along (over its own ground
+                // road and the ground).
                 bool onDeck = (i < deckModes.Count && deckModes[i]) || medianRamp != 0;
-                // A ramp's piece rising out of (or landing in) a road's middle is a
-                // deck over that road, following it, whether Deck is on or not.
-                bool medianPiece = (i == 1 && medianStart != null) || (i == n && medianEnd != null);
-                if (medianPiece)
-                {
-                    onDeck = true;
-                    int other = i == 1 && medianStart != null ? i : i - 1;   // the piece's other point: over the road too
-                    ushort alongRoad;
-                    float alongT;
-                    // The same road there (not a deck or another road over it).
-                    if (roads[other] == 0 && SameRoadAt(controls[other], i == 1 && medianStart != null ? medianStart : medianEnd, out alongRoad, out alongT))
-                    {
-                        roads[other] = alongRoad;
-                        roadTs[other] = alongT;
-                    }
-                }
                 deck.Add(onDeck);
                 below.Add(onDeck && i < underModes.Count && underModes[i]);
                 // Rounded where it turns at a junction (the roads meet at an angle
@@ -2621,13 +2562,6 @@ namespace RealisticRoads
                 var followed = new HashSet<ushort>();
                 var path = onDeck && roads[i - 1] != 0 && roads[i] != 0
                     ? Decks.CachedRoadPath(roads[i - 1], roadTs[i - 1], roads[i], roadTs[i], followed) : null;
-                // A ramp's piece over the road it rises out of follows that road only
-                // straight along it, never round a detour through the network.
-                if (medianPiece && path != null && CurveMath.Length(path) > 1.5f * CurveMath.FlatDistance(controls[i - 1], controls[i]) + 40f)
-                {
-                    path = null;
-                    followed.Clear();
-                }
                 under.UnionWith(followed);
                 paths.Add(path != null
                     ? CurveMath.RoundCorners(path, RoadPlanner.IsRail(Net) ? RailDeckTurnRadius : DeckTurnRadius, 8f, InwardAllowed(followed))
@@ -2675,16 +2609,10 @@ namespace RealisticRoads
             if (rampProblem != null && division.Plan != null) division.Plan.Problems.Insert(0, rampProblem);
             if (division.Plan != null)
             {
-                division.Plan.MedianStart = medianStart;
-                division.Plan.MedianEnd = medianEnd;
-                var split = SplitRoads.For(medianStart ?? medianEnd, SplitRoads.RampLanes(Net));
-                if ((medianStart != null || medianEnd != null) && split == null)
-                    division.Plan.Warnings.Add("The " + (medianStart ?? medianEnd).name + " has no split version (only the game's own two-way roads " +
-                                               "with two or more lanes each way do): the ramp rises out of the plain road");
                 // Not on a road of its kind: a short stretch of that road is built
                 // to the node where the ramp leaves (or lands in) it (see FinishParallel).
                 int joinAt = down ? n : 0;
-                if (medianRamp != 0 && medianStart == null && medianEnd == null && !EndsOnGroundRoad(nodes[joinAt], MedianGroundRoad))
+                if (medianRamp != 0 && !EndsOnGroundRoad(nodes[joinAt], MedianGroundRoad))
                     division.Plan.Warnings.Add("A " + LeadIn.ToString("F0") + " m stretch of " + Title(MedianGroundRoad) + " is built " +
                                                (down ? "on from where it lands" : "behind where it starts") + ", for its lanes to " +
                                                (down ? "go on to" : "come from"));
@@ -2703,7 +2631,6 @@ namespace RealisticRoads
             RoadPlanner.HoldStart = medianRamp != 0 && !planningGround && startNode == 0 && startSegment == 0;
             RoadPlanner.Profile = medianRamp != 0 && !planningGround ? medianProfile : null;
             FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
-            MedianSupports(division);
             division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
                 division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
                 startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
@@ -2713,7 +2640,6 @@ namespace RealisticRoads
             if (AddRaisedNodes(division))
             {
                 FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
-                MedianSupports(division);
                 division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
                     division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
                     startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
@@ -3121,25 +3047,6 @@ namespace RealisticRoads
                 if (info != null) narrowest = Mathf.Min(narrowest, info.m_halfWidth);
             }
             return narrowest == float.MaxValue ? 4f : Mathf.Max(narrowest - 1f, 2f);
-        }
-
-        // A median ramp road's ramp over a two-way road: that road gets a gap in
-        // its middle (its split copy), so the ramp stands on a column there, not
-        // on a frame across all its lanes.
-        private void MedianSupports(Division division)
-        {
-            if (medianRamp == 0 || planningGround || division.Below == null) return;
-            var segments = NetManager.instance.m_segments.m_buffer;
-            for (int i = 0; i < division.Below.Length; i++)
-            {
-                var below = division.Below[i];
-                if (below.Segment == 0 || below.Median) continue;
-                var info = segments[below.Segment].Info;
-                if (SplitRoads.For(SplitRoads.OriginalOf(info), MedianRampLanes / 2) == null && !SplitRoads.IsSplit(info)) continue;
-                below.Median = true;
-                below.MedianHalf = Mathf.Max(below.MedianHalf, Net != null ? Net.m_halfWidth : 3f);
-                division.Below[i] = below;
-            }
         }
 
         // The roads at the curve's joined ends: a deck joined to one of ours is

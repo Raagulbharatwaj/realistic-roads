@@ -111,9 +111,10 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      deck level: the height RR's own deck has over the road where it starts), then stays level however far you draw,
      flying over every road it crosses. **Down**: start on a deck's end; it comes down at exactly 8 % to the ground. If the
      line is too short to climb or come down at 8 %, or the profile doesn't clear something it crosses, the panel says so
-     and nothing is built. The **ground carriageways** are one road with the ramp's gap in its middle (the Six-Lane or
-     Four-Lane Road without its inner lanes, each half moved 1.5 m out so the gap fits the ramp; the lane markings move
-     with the lanes). They run along the whole line on the ground and join the roads they cross there as normal
+     and nothing is built. It is drawn like a new road: from (or to) the end of a road or open ground, not along the
+     middle of an existing road. The **ground carriageways** are one road with the ramp's gap in its middle (the Six-Lane or
+     Four-Lane Road without its inner lanes, each half moved so the gap is exactly the ramp's width; the lane markings
+     move with the lanes). They run along the whole line on the ground and join the roads they cross there as normal
      junctions, under the ramp. **Where the ramp leaves (or lands)**, one node joins the full road, the ground road and the
      ramp: the full road's outer lanes go on along the ground, its inner ones up the ramp. Starting on the end of a road of
      the choice's kind, that road is the full road; elsewhere 20 m of it is built there (like VOP's part A). That node gets
@@ -121,7 +122,9 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      build: one Ctrl+Z removes them all, and if any part can't be built nothing stays. The ramps are made from the game's
      Two-Lane and Four-Lane Road: full-width lanes, a shoulder and a parapet each side, no sidewalks, on the highway ramp's
      slim pillar. All these roads are made from the game's own roads while a city loads and are hidden from the menus; a
-     city saved with them needs this mod to load them. Where a split road and the ramp leave a node together, they and the road coming in end square there;
+     city saved with them needs this mod to load them. Where the ground road and the ramp leave a node together, they and
+     the road coming in end square there. The earlier split copies of every road and the first ramp roads are gone: a
+     city saved with those pieces loses them when it loads;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,
