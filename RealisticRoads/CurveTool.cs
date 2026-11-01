@@ -378,6 +378,7 @@ namespace RealisticRoads
             public NetInfo RampInfo;     // the ramp road (built after the full road on open ground)
             public Vector3 LeadAt;       // where that full road ends (the ramp's node)
             public bool AnyBuilt;        // a part is built (a failure removes what is)
+            public string RampLog;       // the ramp's "Building ..." line, logged when its build starts
         }
 
         private enum MedianStage { LeadIn, Ramp, Convert, Ground }
@@ -2105,6 +2106,7 @@ namespace RealisticRoads
                         });
                         return;
                     }
+                    Mod.Log("Median ramp road: the ramp is built, " + (down ? "landing at" : "leaving from") + " node #" + waiting.Origin);
                     if (!EndsOnGroundRoad(waiting.Origin))
                     {
                         FailMedian(waiting, "no road on the ground at the ramp's node #" + waiting.Origin + " for its lanes");
@@ -2133,6 +2135,9 @@ namespace RealisticRoads
                         return;
                     }
                     if (down) ramp.Plan.EndNode = end; else ramp.Plan.StartNode = end;
+                    Mod.Log("Median ramp road, step 2: the " + LeadIn.ToString("F0") + " m of " + waiting.Full.name + " is built; its end node #" + end +
+                            " is where the ramp " + (down ? "lands" : "leaves"));
+                    Mod.Log("Median ramp road, step 3: " + waiting.RampLog + ", " + (down ? "ending" : "starting") + " on node #" + end);
                     NextMedian(waiting, MedianStage.Ramp);
                     NetworkBuilder.BuildCurve(waiting.RampInfo, ramp.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
                     return;
@@ -2158,7 +2163,7 @@ namespace RealisticRoads
                 FailMedian(waiting, why);
                 return;
             }
-            Mod.Log("Building the ground road " + waiting.Ground.name + " beside the ramp: " + ground.Length.ToString("F0") + " m in " +
+            Mod.Log("Median ramp road, next: building the ground road " + waiting.Ground.name + " beside the ramp from node #" + from + ": " + ground.Length.ToString("F0") + " m in " +
                     (ground.Points.Count - 1) + " segment(s), " + ground.Crossings.Count + " crossing(s) on the ground");
             NextMedian(waiting, MedianStage.Ground);
             NetworkBuilder.BuildCurve(waiting.Ground, ground.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
@@ -2166,7 +2171,7 @@ namespace RealisticRoads
 
         private void FinishMedianOrigin(PendingParallel waiting)
         {
-            Mod.Log("Median ramp road built: ramp, ground road and the node #" + waiting.Origin + " where they meet; one Ctrl+Z removes it all");
+            Mod.Log("Median ramp road, last: all parts built; setting up node #" + waiting.Origin + " where they meet (one Ctrl+Z removes it all)");
             NetworkBuilder.MedianOrigin(waiting.Origin);
         }
 
@@ -2611,8 +2616,10 @@ namespace RealisticRoads
             var drawn = DrawNetwork;
             if (medianRamp != 0)
                 Mod.Log("Median ramp " + MedianRampNames[medianRamp] + ": " + (medianSummary ?? "no profile") + "; ground road " + MedianGroundSplit.name);
-            Mod.Log("Building " + drawn.name + ": " + division.Length.ToString("F0") + " m in " +
-                    (division.Points.Count - 1) + " segment(s), " + division.Crossings.Count + " crossing(s)");
+            string building = "Building " + drawn.name + ": " + division.Length.ToString("F0") + " m in " +
+                              (division.Points.Count - 1) + " segment(s), " + division.Crossings.Count + " crossing(s)";
+            // A median ramp road logs its ramp when the ramp's build starts (see below).
+            if (groundRoad == null) Mod.Log(building);
             if (spec == null && groundRoad == null) NetworkBuilder.BuildCurve(drawn, division.Plan);
             else
             {
@@ -2639,12 +2646,18 @@ namespace RealisticRoads
                         Mod.Log("Not built: " + why);
                         return;
                     }
-                    Mod.Log("Building " + LeadIn.ToString("F0") + " m of " + waiting.Full.name + (down ? " on from where the ramp lands" : " to where the ramp leaves") + " first");
+                    Mod.Log("Median ramp road, step 1: building " + LeadIn.ToString("F0") + " m of " + waiting.Full.name +
+                            (down ? " on from where the ramp lands" : " to where the ramp leaves") + " first");
                     waiting.Stage = MedianStage.LeadIn;
+                    waiting.RampLog = building;
                     waiting.LeadAt = at;
                     NetworkBuilder.BuildCurve(waiting.Full, lead.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
                 }
-                else NetworkBuilder.BuildCurve(drawn, division.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
+                else
+                {
+                    if (groundRoad != null) Mod.Log("Median ramp road, step 1: " + building + " (from " + (division.Plan.MedianAlong ? "the road it runs along" : "the road's end") + ")");
+                    NetworkBuilder.BuildCurve(drawn, division.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
+                }
                 pending = waiting;
             }
             ClearPoints();
