@@ -167,6 +167,12 @@ namespace RealisticRoads
             // road's own footprint). If the sidewalk is too narrow for that, the
             // whole half moves and the road gets wider.
             float edge = road.m_halfWidth, kerb = road.m_halfWidth - road.m_pavementWidth;
+            // The middle of the innermost lane: plain road surface (its markings are
+            // at its edges), what the gap is drawn with.
+            float plain = cut;
+            foreach (var lane in road.m_lanes)
+                if (lane != null && (lane.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None)
+                    plain = Mathf.Min(plain, Mathf.Abs(lane.m_position));
             bool inside = kerb > cut + 0.5f && edge - (kerb + widen) >= MinSidewalk;
             var lanes = new List<NetInfo.Lane>();
             foreach (var lane in copy.m_lanes)
@@ -187,18 +193,18 @@ namespace RealisticRoads
                 foreach (var segment in copy.m_segments)
                 {
                     if (segment == null) continue;
-                    var mesh = Widen(segment.m_mesh, cut, widen, surface, inside ? kerb : -1f, edge);
+                    var mesh = Widen(segment.m_mesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
                     if (mesh != null) segment.m_mesh = mesh;
-                    var lod = Widen(segment.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge);
+                    var lod = Widen(segment.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
                     if (lod != null) segment.m_lodMesh = lod;
                 }
             if (copy.m_nodes != null)
                 foreach (var node in copy.m_nodes)
                 {
                     if (node == null) continue;
-                    var mesh = Widen(node.m_mesh, cut, widen, surface, inside ? kerb : -1f, edge);
+                    var mesh = Widen(node.m_mesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
                     if (mesh != null) node.m_mesh = mesh;
-                    var lod = Widen(node.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge);
+                    var lod = Widen(node.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
                     if (lod != null) node.m_lodMesh = lod;
                 }
             HideFromMenus(copy);
@@ -612,10 +618,17 @@ namespace RealisticRoads
         // paving under the ramp, no median kerbs).
         // 'kerb' >= 0: the carriageway (to the kerb) moves, the sidewalk (kerb to
         // 'edge') takes it up and the edge and past it stay (see Across).
-        internal static Mesh Widen(Mesh mesh, float cut, float widen, float surface, float kerb = -1f, float edge = 0f)
+        // 'plain' > 0: the gap is drawn with the road surface found that far
+        // from the centre (the innermost lane's middle): no lane markings, no
+        // median under the ramp, only paving.
+        internal static Mesh Widen(Mesh mesh, float cut, float widen, float surface, float kerb = -1f, float edge = 0f, float plain = 0f)
         {
-            var sliced = SliceAcross(mesh, kerb >= 0f ? new[] { -cut, cut, -kerb, kerb, -edge, edge } : new[] { -cut, cut });
+            var lines = new List<float> { -cut, cut };
+            if (kerb >= 0f) lines.AddRange(new[] { -kerb, kerb, -edge, edge });
+            if (plain > 0.05f && plain < cut - 0.05f) lines.AddRange(new[] { -plain, plain });
+            var sliced = SliceAcross(mesh, lines.ToArray());
             if (sliced == null) return null;
+            if (plain > 0.05f && plain < cut - 0.05f && sliced.Uv != null) PlainGap(sliced, cut, plain);
             var vertices = sliced.Vertices;
             var triangles = sliced.Triangles;
             float stretch = (cut + widen) / cut;
@@ -632,6 +645,35 @@ namespace RealisticRoads
                 vertices[i] = new Vector3(side * a, y, vertices[i].z);
             }
             return sliced.Make(mesh, " (median)");
+        }
+
+        // Every corner in the gap (within 'cut') takes the texture place of the
+        // corner at +'plain' nearest along the road: the gap shows that one line
+        // of road surface all across (one side's, so nothing between the two
+        // sides, like the centre line, is drawn in it).
+        private static void PlainGap(Sliced sliced, float cut, float plain)
+        {
+            var v = sliced.Vertices;
+            var refs = new List<int>();
+            for (int i = 0; i < v.Length; i++)
+                if (Mathf.Abs(v[i].x - plain) < 0.02f) refs.Add(i);
+            if (refs.Count == 0) return;
+            var uv = (Vector2[])sliced.Uv.Clone();
+            for (int i = 0; i < v.Length; i++)
+            {
+                if (Mathf.Abs(v[i].x) >= cut - 0.01f) continue;
+                int best = -1;
+                float bestScore = float.MaxValue;
+                foreach (int r in refs)
+                {
+                    float score = Mathf.Abs(v[r].z - v[i].z);
+                    if (score >= bestScore) continue;
+                    bestScore = score;
+                    best = r;
+                }
+                if (best >= 0) uv[i] = sliced.Uv[best];
+            }
+            sliced.Uv = uv;
         }
 
         private const float MinSidewalk = 2f;   // a sidewalk the carriageway moves into keeps at least this

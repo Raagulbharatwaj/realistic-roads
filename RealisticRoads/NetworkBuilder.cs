@@ -430,12 +430,13 @@ namespace RealisticRoads
                 string tmpe = TmpeManager("LaneConnectionManager", out object manager);
                 if (manager == null) return "left to the game (TM:PE " + tmpe + ")";
                 Vector3 at = net.m_nodes.m_buffer[node].m_position;
-                Vector3 h = CurveMath.FlatNormal(segments[ramp].m_startNode == node ? segments[ramp].m_startDirection : segments[ramp].m_endDirection);
-                Vector3 right = new Vector3(h.z, 0f, -h.x);
                 float keep = LeftHandTraffic() ? -1f : 1f;   // the side traffic heading away from the full road drives on
-                var fullLanes = LanesAt(full, node, at, right);
-                var rampLanes = LanesAt(ramp, node, at, right);
-                var groundLanes = LanesAt(ground, node, at, right);
+                // Each road's lanes across its own way through the node (the full
+                // road's towards the node, the ramp's and ground road's away from
+                // it), so the roads may meet at an angle.
+                var fullLanes = LanesAt(full, node, at, -Away(full, node));
+                var rampLanes = LanesAt(ramp, node, at, Away(ramp, node));
+                var groundLanes = LanesAt(ground, node, at, Away(ground, node));
                 var joined = new List<string>();
                 int made = 0, wanted = 0;
                 foreach (float side in new[] { keep, -keep })
@@ -471,13 +472,21 @@ namespace RealisticRoads
         private struct LaneEnd
         {
             public uint Lane;
-            public float Across;      // across the ramp's direction at the node (+ right)
+            public float Across;      // across its road's way through the node (+ right)
             public bool StartNode;    // the node is its segment's start
         }
 
-        // A segment's car lanes where they end at 'node'.
-        private static List<LaneEnd> LanesAt(ushort segment, ushort node, Vector3 at, Vector3 right)
+        // The way a segment leaves 'node' (flat).
+        private static Vector3 Away(ushort segment, ushort node)
         {
+            var s = NetManager.instance.m_segments.m_buffer[segment];
+            return CurveMath.FlatNormal(s.m_startNode == node ? s.m_startDirection : s.m_endDirection);
+        }
+
+        // A segment's car lanes where they end at 'node', across 'way' (+ right of it).
+        private static List<LaneEnd> LanesAt(ushort segment, ushort node, Vector3 at, Vector3 way)
+        {
+            Vector3 right = new Vector3(way.z, 0f, -way.x);
             var net = NetManager.instance;
             var s = net.m_segments.m_buffer[segment];
             var result = new List<LaneEnd>();
