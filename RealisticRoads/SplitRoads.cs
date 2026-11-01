@@ -22,11 +22,12 @@ namespace RealisticRoads
     {
         public const string Prefix = "RR Split ";
         // The ground roads of the three median ramp roads: a split road whose two
-        // halves (each carriageway with its sidewalk) sit MedianWiden further out,
-        // so the gap is as wide as the median ramp (9 m for a 2-lane ramp, 15 m
+        // halves (each carriageway with its sidewalk) are moved out (or in, past
+        // a median) so the gap is as wide as the median ramp (9 m for a 2-lane ramp, 15 m
         // for a 4-lane one) and its parapets stay clear of the ground lanes.
         public const string MedianPrefix = "RR Median Ground ";
-        public const float MedianWiden = 1.5f;
+        public const float MedianGap2 = 4.5f;   // half the gap for (and the width of) a 2-lane median ramp: 9 m
+        public const float MedianGap4 = 7.5f;   // and a 4-lane one: 15 m
 
         private class Variant
         {
@@ -66,7 +67,7 @@ namespace RealisticRoads
                 {
                     try
                     {
-                        var copy = Make(road, inner, 0f);
+                        var copy = Make(road, inner, -1f);
                         if (copy != null) made.Add(copy);
                     }
                     catch (Exception e)
@@ -85,7 +86,9 @@ namespace RealisticRoads
                 {
                     try
                     {
-                        var copy = Make(road, inner, MedianWiden);
+                        // Its gap as wide as the ramp: the halves moved out (or in,
+                        // past a median) to it.
+                        var copy = Make(road, inner, inner == 1 ? MedianGap2 : MedianGap4);
                         if (copy != null) made.Add(copy);
                     }
                     catch (Exception e)
@@ -165,13 +168,14 @@ namespace RealisticRoads
             return Mathf.Max(left[inner - 1], right[inner - 1]);
         }
 
-        // 'widen' > 0: a median ramp road's ground road, each half moved out
-        // that far (the gap 2 x 'widen' wider, the road too).
-        private static NetInfo Make(NetInfo road, int inner, float widen)
+        // 'gapHalf' > 0: a median ramp road's ground road, each half moved
+        // (out, or in past a median) so the gap reaches 'gapHalf' either side.
+        private static NetInfo Make(NetInfo road, int inner, float gapHalf)
         {
             float cut = CutFor(road, inner);
             if (cut <= 0f) return null;
-            bool median = widen > 0f;
+            bool median = gapHalf > 0f;
+            float widen = median ? gapHalf - cut : 0f;
             string name = (median ? MedianPrefix : Prefix) + road.name + " " + inner;
             var go = UnityEngine.Object.Instantiate(road.gameObject);
             go.name = name;
@@ -230,8 +234,10 @@ namespace RealisticRoads
                 list.Sort((a, b) => a.Cut.CompareTo(b.Cut));
             }
             if (median)
-                Mod.Log("Median ramp roads: " + name + ": " + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes, a " +
-                        (2f * (cut + widen)).ToString("F1") + " m gap in the middle, " + (2f * copy.m_halfWidth).ToString("F1") + " m wide");
+                Mod.Log("Median ramp roads: " + name + " from " + road.name + " (" + (2f * road.m_halfWidth).ToString("F1") + " m, inner lane edge " +
+                        cut.ToString("F1") + " m): " + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes, halves moved " +
+                        widen.ToString("+0.0;-0.0") + " m, a " + (2f * (cut + widen)).ToString("F1") + " m gap in the middle, " +
+                        (2f * copy.m_halfWidth).ToString("F1") + " m wide");
             return copy;
         }
 
@@ -355,8 +361,8 @@ namespace RealisticRoads
             // The median ramp roads' ramps: as wide as their ground road's gap
             // (9 m with two lanes, 15 m with four), the lanes at full width and a
             // shoulder to the parapet.
-            if (basic != null) MakeRamp(basic, 2, (large != null ? CutFor(large, 1) : 3f) + MedianWiden, made, MedianRampPrefix, true);
-            if (medium != null) MakeRamp(medium, 4, (large != null ? CutFor(large, 2) : 6f) + MedianWiden, made, MedianRampPrefix, true);
+            if (basic != null) MakeRamp(basic, 2, MedianGap2, made, MedianRampPrefix, true);
+            if (medium != null) MakeRamp(medium, 4, MedianGap4, made, MedianRampPrefix, true);
         }
 
         private static readonly List<string> allRampNames = new List<string>();   // every ramp road made (their pillars)
