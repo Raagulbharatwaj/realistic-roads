@@ -113,8 +113,9 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      line is too short to climb or come down at 8 %, or the profile doesn't clear something it crosses, the panel says so
      and nothing is built. It is drawn like a new road: from (or to) the end of a road or open ground, not along the
      middle of an existing road. The **ground carriageways** are one road with the ramp's gap in its middle (the Six-Lane or
-     Four-Lane Road without its inner lanes, each half moved so the gap is exactly the ramp's width; the lane markings
-     move with the lanes). They run along the whole line on the ground and join the roads they cross there as normal
+     Four-Lane Road without its inner lanes, each carriageway moved into its sidewalk so the gap is exactly the ramp's
+     width and the road keeps its own width; the lane markings move with the lanes). The panel shows the ground road's
+     problems too, and nothing is built while it has any. They run along the whole line on the ground and join the roads they cross there as normal
      junctions, under the ramp. **Where the ramp leaves (or lands)**, one node joins the full road, the ground road and the
      ramp: the full road's outer lanes go on along the ground, its inner ones up the ramp. Starting on the end of a road of
      the choice's kind, that road is the full road; elsewhere 20 m of it is built there (like VOP's part A). That node gets

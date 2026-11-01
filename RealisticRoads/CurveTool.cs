@@ -3655,7 +3655,7 @@ namespace RealisticRoads
             if (second != null && second.Plan != null)
             {
                 AddItems(model, second, "P");
-                model.Summary += "   ·   parallel " + second.Length.ToString("N0") + " m" +
+                model.Summary += "   ·   " + (medianRamp != 0 ? "ground road " : "parallel ") + second.Length.ToString("N0") + " m" +
                                  (second.Cost > 0 ? ", cost " + (second.Cost / 100).ToString("N0") : "");
             }
             model.Problems.AddRange(plan.Problems);
@@ -3673,6 +3673,19 @@ namespace RealisticRoads
                     foreach (var warning in second.Plan.Warnings) model.Warnings.Add("Parallel line: " + warning);
                 }
                 model.CanBuild &= why == null && second.Ok && second.Plan.Ok;
+            }
+            // A median ramp road's ground road: what stops it stops the build
+            // (else the ramp would be built and taken away again).
+            if (medianRamp != 0)
+            {
+                if (second == null || second.Plan == null) model.Problems.Add("The ground road beside the ramp can't be drawn here");
+                else
+                {
+                    if (!second.Ok) model.Problems.Add("Ground road: a bend is too sharp (over " + MaxBend + " degrees per segment)");
+                    foreach (var problem in second.Plan.Problems) model.Problems.Add("Ground road: " + problem);
+                    foreach (var warning in second.Plan.Warnings) model.Warnings.Add("Ground road: " + warning);
+                }
+                model.CanBuild &= second != null && second.Plan != null && second.Ok && second.Plan.Ok;
             }
             return model;
         }
