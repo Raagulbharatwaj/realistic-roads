@@ -190,6 +190,151 @@ namespace RealisticRoads
             return ++lastGroup;
         }
 
+        // A median ramp road drawn along an existing road: that road, from the
+        // ramp's node ('origin') on under the line ('line', from that node
+        // outward), becomes the median ramp road's ground road, the way VOP's
+        // part B replaces the road beside its ramp: whole segments while the
+        // road runs under the line (through junctions, which stay junctions),
+        // and the one the line ends in is cut there (the rest stays the road
+        // it was). Only the road the ramp rises out of: a ground road with
+        // 'lanes' vehicle lanes. One build in 'group' (undone with the rest);
+        // 'done' is told (simulation thread) the node it got to, how far along
+        // the line that is, and how many segments became the ground road.
+        public static void ConvertAlong(List<Vector3> line, ushort origin, NetInfo ground, int lanes, int group, Action<ushort, float, int> done)
+        {
+            SimulationManager.instance.AddAction(() =>
+            {
+                var build = new Build { Group = group };
+                ushort node = origin;
+                float along = 0f;
+                int converted = 0;
+                try
+                {
+                    var net = NetManager.instance;
+                    var segments = net.m_segments.m_buffer;
+                    var nodes = net.m_nodes.m_buffer;
+                    float lineLength = CurveMath.Length(line);
+                    Vector3 heading = CurveMath.FlatNormal(line[1] - line[0]);
+                    float ahead = Mathf.Cos(30f * Mathf.Deg2Rad);
+                    var passed = new List<ushort>();
+                    for (int guard = 0; guard < 64; guard++)
+                    {
+                        // The road going on from the node along the line.
+                        ushort segment = 0;
+                        float best = ahead;
+                        for (int i = 0; i < 8; i++)
+                        {
+                            ushort s = nodes[node].GetSegment(i);
+                            if (s == 0 || !ConvertsToGround(segments[s].Info, lanes)) continue;
+                            Vector3 away = CurveMath.FlatNormal(segments[s].m_startNode == node ? segments[s].m_startDirection : segments[s].m_endDirection);
+                            float dot = Vector3.Dot(away, heading);
+                            if (dot <= best) continue;
+                            Vector3 a, b, c, d;
+                            CrossingFinder.SegmentBezier(s, out a, out b, out c, out d);
+                            float mid;
+                            if (OffLine(line, CurveMath.Bezier(a, b, c, d, 0.5f), out mid)) continue;
+                            best = dot;
+                            segment = s;
+                        }
+                        if (segment == 0) break;
+                        bool fromStart = segments[segment].m_startNode == node;
+                        ushort far = fromStart ? segments[segment].m_endNode : segments[segment].m_startNode;
+                        float farAlong;
+                        bool farOff = OffLine(line, nodes[far].m_position, out farAlong);
+                        var road = segments[segment].Info;
+                        if (farOff || farAlong >= lineLength - 1f)
+                        {
+                            // The line ends in this segment: cut it there.
+                            Vector3 onRoad;
+                            float t = CrossingFinder.ClosestT(segment, line[line.Count - 1], out onRoad);
+                            float length = Mathf.Max(segments[segment].m_averageLength, 1f);
+                            if (t * length < Crossing.NodeSnap || (1f - t) * length < Crossing.NodeSnap)
+                            {
+                                // At (or by) one of its ends: whole, or not at all.
+                                bool toFar = fromStart ? t > 0.5f : t < 0.5f;
+                                if (!toFar) break;
+                                SplitSegment(segment, new float[0], new[] { ground }, build);
+                                converted++;
+                                node = far;
+                                along = lineLength;
+                                break;
+                            }
+                            var cut = SplitSegment(segment, new[] { t }, fromStart ? new[] { ground, road } : new[] { road, ground }, build);
+                            converted++;
+                            if (cut != null && cut.Nodes.Count > 0) node = cut.Nodes[0];
+                            along = lineLength;
+                            break;
+                        }
+                        SplitSegment(segment, new float[0], new[] { ground }, build);
+                        converted++;
+                        heading = CurveMath.FlatNormal(nodes[far].m_position - nodes[node].m_position);
+                        along = farAlong;
+                        if (SegmentCount(far) == 2) passed.Add(far);
+                        node = far;
+                    }
+                    // A node between two ground road segments is drawn as one.
+                    foreach (ushort through in passed)
+                    {
+                        bool all = true;
+                        for (int i = 0; i < 8; i++)
+                        {
+                            ushort s = nodes[through].GetSegment(i);
+                            if (s != 0 && segments[s].Info != ground) all = false;
+                        }
+                        if (!all || nodes[through].Info == ground) continue;
+                        build.NodeInfos.Add(new KeyValuePair<ushort, NetInfo>(through, nodes[through].Info));
+                        SetNodeInfo(through, ground);
+                    }
+                    if (converted > 0) Keep(build);
+                    Mod.Log("  " + converted + " segment(s) of the road under the line became " + ground.name + ", to node #" + node +
+                            " (" + along.ToString("F0") + " of " + lineLength.ToString("F0") + " m)");
+                }
+                catch (Exception e)
+                {
+                    Mod.LogError("Turning the road under the median ramp into its ground road failed; put back", e);
+                    Remove(build);
+                    converted = -1;
+                }
+                if (done != null) done(node, along, converted);
+            });
+        }
+
+        private const float LineCover = 3f;   // a road this close to the drawn line (flat) runs under it
+
+        // Off the line (further than LineCover from it); 'along': how far along it the nearest place is.
+        private static bool OffLine(List<Vector3> line, Vector3 p, out float along)
+        {
+            float best = float.MaxValue, run = 0f;
+            along = 0f;
+            for (int i = 0; i + 1 < line.Count; i++)
+            {
+                Vector3 a = line[i], b = line[i + 1];
+                float length = CurveMath.FlatDistance(a, b);
+                if (length < 0.001f) continue;
+                Vector3 dir = new Vector3((b.x - a.x) / length, 0f, (b.z - a.z) / length);
+                float t = Mathf.Clamp((p.x - a.x) * dir.x + (p.z - a.z) * dir.z, 0f, length);
+                Vector3 q = new Vector3(a.x + dir.x * t, 0f, a.z + dir.z * t);
+                float d = CurveMath.FlatDistance(q, p);
+                if (d < best)
+                {
+                    best = d;
+                    along = run + t;
+                }
+                run += length;
+            }
+            return best > LineCover;
+        }
+
+        // A road on the ground (not a raised, sunk or median ramp version) with
+        // 'lanes' vehicle lanes: one a median ramp road's ground road replaces.
+        private static bool ConvertsToGround(NetInfo info, int lanes)
+        {
+            if (info == null || SplitRoads.IsRamp(info) || SplitRoads.IsSplit(info) || RoadUpgrade.VersionOf(info) >= 0) return false;
+            if (info.m_netAI == null || info.m_netAI.GetType().Name != "RoadAI") return false;
+            return info.m_forwardVehicleLaneCount + info.m_backwardVehicleLaneCount == lanes &&
+                   info.m_forwardVehicleLaneCount == info.m_backwardVehicleLaneCount;
+        }
+
         // The node where a median ramp road's ramp leaves (or lands in) the
         // road, set up the way the VOP overpasses set theirs (read from their
         // assets): no traffic lights (the game's own setting, kept by marking
@@ -241,16 +386,168 @@ namespace RealisticRoads
                         lock (tmpeRetries) tmpeRetries.Add(new KeyValuePair<ushort, int>(node, attempt + 1));
                         return;
                     }
+                    string laneLinks = TmpeConnectLanes(node);
                     Mod.Log("Median ramp node #" + node + ": " + ends.Count + " road end(s): " + string.Join(", ", ends.ToArray()) +
                             "; " + lights + (trafficLights != null ? (tmpeLightsOff ? ", TM:PE traffic light off" : ", TM:PE traffic light NOT taken off") : "") +
                             "; " + (restrictions != null ? "TM:PE: pedestrian crossing off on " + tmpeSet + " of them" +
-                            (attempt > 0 ? " (asked " + (attempt + 1) + " times)" : "") : "TM:PE: " + tmpe));
+                            (attempt > 0 ? " (asked " + (attempt + 1) + " times)" : "") : "TM:PE: " + tmpe) + "; lanes: " + laneLinks);
                 }
                 catch (Exception e)
                 {
                     Mod.LogError("Setting up the median ramp node #" + node + " failed", e);
                 }
             });
+        }
+
+        // The lanes at a median ramp's node joined the way VOP's assets join
+        // them (their TM:PE lane connections): the full road's inner lanes each
+        // way to the ramp's lanes, its outer ones to the ground road's, and back
+        // the same way. Lanes are told apart by where they end at the node
+        // across the ramp's direction there (which side, how far out), so it
+        // holds whichever way each segment was drawn. With TM:PE only (RR
+        // leaves the game's own lane choice alone otherwise); what was joined
+        // goes to the log, lane by lane.
+        private static string TmpeConnectLanes(ushort node)
+        {
+            try
+            {
+                var net = NetManager.instance;
+                var segments = net.m_segments.m_buffer;
+                ushort ramp = 0, ground = 0, full = 0;
+                int others = 0;
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
+                    if (s == 0) continue;
+                    var info = segments[s].Info;
+                    if (SplitRoads.IsRamp(info)) ramp = s;
+                    else if (SplitRoads.IsSplit(info)) ground = s;
+                    else if (full == 0) full = s;
+                    else others++;
+                }
+                if (ramp == 0 || ground == 0 || full == 0 || others > 0)
+                    return "not joined by RR (the node has " + (others > 0 ? "more roads than the full road, ground road and ramp" : "not all three of them") + ")";
+                string tmpe = TmpeManager("LaneConnectionManager", out object manager);
+                if (manager == null) return "left to the game (TM:PE " + tmpe + ")";
+                Vector3 at = net.m_nodes.m_buffer[node].m_position;
+                Vector3 h = CurveMath.FlatNormal(segments[ramp].m_startNode == node ? segments[ramp].m_startDirection : segments[ramp].m_endDirection);
+                Vector3 right = new Vector3(h.z, 0f, -h.x);
+                float keep = LeftHandTraffic() ? -1f : 1f;   // the side traffic heading away from the full road drives on
+                var fullLanes = LanesAt(full, node, at, right);
+                var rampLanes = LanesAt(ramp, node, at, right);
+                var groundLanes = LanesAt(ground, node, at, right);
+                var joined = new List<string>();
+                int made = 0, wanted = 0;
+                foreach (float side in new[] { keep, -keep })
+                {
+                    // Lanes on this side, inner (nearest the middle) first.
+                    var f = Side(fullLanes, side);
+                    var r = Side(rampLanes, side);
+                    var g = Side(groundLanes, side);
+                    bool outward = side == keep;   // traffic from the full road towards the ramp and ground road
+                    for (int k = 0; k < f.Count; k++)
+                    {
+                        bool toRamp = k < r.Count;
+                        var other = toRamp ? r : g;
+                        int j = toRamp ? k : Mathf.Min(k - r.Count, g.Count - 1);
+                        if (j < 0 || j >= other.Count) continue;
+                        var from = outward ? f[k] : other[j];
+                        var to = outward ? other[j] : f[k];
+                        wanted++;
+                        bool ok = TmpeAddLaneConnection(manager, from.Lane, to.Lane, from.StartNode);
+                        if (ok) made++;
+                        joined.Add((outward ? "full " + k : (toRamp ? "ramp " : "ground ") + j) + " -> " + (outward ? (toRamp ? "ramp " : "ground ") + j : "full " + k) +
+                                   (ok ? "" : " (not taken)"));
+                    }
+                }
+                return "TM:PE joined " + made + " of " + wanted + " (" + string.Join(", ", joined.ToArray()) + ")";
+            }
+            catch (Exception e)
+            {
+                return "not joined (" + e.GetType().Name + ": " + e.Message + ")";
+            }
+        }
+
+        private struct LaneEnd
+        {
+            public uint Lane;
+            public float Across;      // across the ramp's direction at the node (+ right)
+            public bool StartNode;    // the node is its segment's start
+        }
+
+        // A segment's car lanes where they end at 'node'.
+        private static List<LaneEnd> LanesAt(ushort segment, ushort node, Vector3 at, Vector3 right)
+        {
+            var net = NetManager.instance;
+            var s = net.m_segments.m_buffer[segment];
+            var result = new List<LaneEnd>();
+            var info = s.Info;
+            if (info == null || info.m_lanes == null) return result;
+            bool start = s.m_startNode == node;
+            uint lane = s.m_lanes;
+            for (int i = 0; i < info.m_lanes.Length && lane != 0; i++)
+            {
+                var laneInfo = info.m_lanes[i];
+                if ((laneInfo.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None &&
+                    (laneInfo.m_vehicleType & VehicleInfo.VehicleType.Car) != VehicleInfo.VehicleType.None)
+                {
+                    var bezier = net.m_lanes.m_buffer[lane].m_bezier;
+                    Vector3 end = start ? bezier.a : bezier.d;
+                    result.Add(new LaneEnd { Lane = lane, Across = (end.x - at.x) * right.x + (end.z - at.z) * right.z, StartNode = start });
+                }
+                lane = net.m_lanes.m_buffer[lane].m_nextLane;
+            }
+            return result;
+        }
+
+        // The lanes on one side (sign of Across), the nearest the middle first.
+        private static List<LaneEnd> Side(List<LaneEnd> lanes, float side)
+        {
+            var result = lanes.FindAll(l => l.Across * side > 0.1f);
+            result.Sort((a, b) => Mathf.Abs(a.Across).CompareTo(Mathf.Abs(b.Across)));
+            return result;
+        }
+
+        private static bool LeftHandTraffic()
+        {
+            try
+            {
+                var meta = typeof(SimulationManager).GetField("m_metaData").GetValue(SimulationManager.instance);
+                var invert = meta.GetType().GetField("m_invertTraffic").GetValue(meta);
+                return invert != null && invert.ToString() == "True";
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TmpeAddLaneConnection(object manager, uint from, uint to, bool fromStartNode)
+        {
+            foreach (var m in manager.GetType().GetMethods())
+            {
+                if (m.Name != "AddLaneConnection") continue;
+                var p = m.GetParameters();
+                if (p.Length < 3 || p[0].ParameterType != typeof(uint) || p[1].ParameterType != typeof(uint) || p[2].ParameterType != typeof(bool)) continue;
+                var args = new object[p.Length];
+                args[0] = from;
+                args[1] = to;
+                args[2] = fromStartNode;
+                for (int i = 3; i < p.Length; i++)
+                    args[i] = p[i].IsOptional && p[i].DefaultValue != DBNull.Value ? p[i].DefaultValue
+                        : p[i].ParameterType.IsValueType ? Activator.CreateInstance(p[i].ParameterType) : null;
+                try
+                {
+                    var result = m.Invoke(manager, args);
+                    return !(result is bool) || (bool)result;
+                }
+                catch (Exception e)
+                {
+                    Mod.Log("TM:PE AddLaneConnection " + from + " -> " + to + " failed: " + e.GetType().Name + ": " + e.Message);
+                    return false;
+                }
+            }
+            return false;
         }
 
         private const int TmpeAttempts = 6;

@@ -111,16 +111,20 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      deck level: the height RR's own deck has over the road where it starts), then stays level however far you draw,
      flying over every road it crosses. **Down**: start on a deck's end; it comes down at exactly 8 % to the ground. If the
      line is too short to climb or come down at 8 %, or the profile doesn't clear something it crosses, the panel says so
-     and nothing is built. It is drawn like a new road: from (or to) the end of a road or open ground, not along the
-     middle of an existing road. The **ground carriageways** are one road with the ramp's gap in its middle (the Six-Lane or
+     and nothing is built. It starts (or lands) on the end of a road, on open ground, or along the middle of a two-way
+     road with the lanes it is for (six or four): that road is split where the ramp leaves it and, under the line, becomes
+     the ground road (cut where the line ends in it); the rest of it stays as it was. The **ground carriageways** are one road with the ramp's gap in its middle (the Six-Lane or
      Four-Lane Road without its inner lanes, each carriageway moved into its sidewalk so the gap is exactly the ramp's
      width and the road keeps its own width; the lane markings move with the lanes). The panel shows the ground road's
      problems too, and nothing is built while it has any. They run along the whole line on the ground and join the roads they cross there as normal
      junctions, under the ramp. **Where the ramp leaves (or lands)**, one node joins the full road, the ground road and the
      ramp: the full road's outer lanes go on along the ground, its inner ones up the ramp. Starting on the end of a road of
      the choice's kind, that road is the full road; elsewhere 20 m of it is built there (like VOP's part A). That node gets
-     no traffic lights and, with TM:PE, no pedestrian crossing (as in VOP's assets). Ramp, ground road and that 20 m are one
-     build: one Ctrl+Z removes them all, and if any part can't be built nothing stays. The ramps are made from the game's
+     no traffic lights and, with TM:PE, no pedestrian crossing, and its lanes joined as in VOP's assets: the full road's
+     inner lanes each way to the ramp, its outer ones to the ground road, and back (the log lists each one joined). It is
+     built part by part (ramp, then the road there, then the ground road, then that node), each only once the one before
+     is built; if any part fails, every part built is removed again and changed roads are put back. One Ctrl+Z removes it
+     all. The ramps are made from the game's
      Two-Lane and Four-Lane Road: full-width lanes, a shoulder and a parapet each side, no sidewalks, on the highway ramp's
      slim pillar. All these roads are made from the game's own roads while a city loads and are hidden from the menus; a
      city saved with them needs this mod to load them. Where the ground road and the ramp leave a node together, they and

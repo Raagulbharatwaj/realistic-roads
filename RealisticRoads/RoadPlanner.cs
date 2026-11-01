@@ -73,6 +73,7 @@ namespace RealisticRoads
         public bool Ok => Problems.Count == 0;
         public bool GradeProblem;             // it doesn't fit at its grade (a steeper one may do)
         public bool MedianDown;               // a median ramp coming down from a deck (else going up)
+        public bool MedianAlong;              // it leaves (or lands in) the middle of an existing road along it
         public float Grade;                   // the grade it was planned at
     }
 
