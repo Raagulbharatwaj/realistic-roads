@@ -23,6 +23,13 @@ namespace RealisticRoads
         // a median) so the gap is as wide as the median ramp (9 m for a 2-lane ramp, 15 m
         // for a 4-lane one) and its parapets stay clear of the ground lanes.
         public const string MedianPrefix = "RR Median Ground ";
+        // The pieces at the node where a median ramp leaves (or lands in) the
+        // road, like VOP's parts A and B: the full road's last stretch and the
+        // ground road's first, copies that draw nothing at a junction, so
+        // there only the three roads' own surfaces meet (no crosswalks, kerbs
+        // or junction corners).
+        public const string StartPrefix = "RR Median Start ";
+        public const float StartLength = 40f;
         public const float MedianGap2 = 4.5f;   // half the gap for (and the width of) a 2-lane median ramp: 9 m
         public const float MedianGap4 = 7.5f;   // and a 4-lane one: 15 m
 
@@ -31,6 +38,7 @@ namespace RealisticRoads
             public string Name;
             public int Inner;     // inner lanes cut out on each side
             public float Cut;     // the gap: this far either side of the centre
+            public bool Start;    // the start piece (no junction models) of that ground road
             public NetInfo Info;  // once loaded
         }
 
@@ -55,7 +63,8 @@ namespace RealisticRoads
             if (prefabs == null || prefabs.Length == 0) return;
             // Already added to this collection (it woke twice): not again.
             foreach (var prefab in prefabs)
-                if (prefab != null && prefab.name != null && (prefab.name.StartsWith(MedianPrefix) || prefab.name.StartsWith(MedianRampPrefix))) return;
+                if (prefab != null && prefab.name != null &&
+                    (prefab.name.StartsWith(MedianPrefix) || prefab.name.StartsWith(MedianRampPrefix) || prefab.name.StartsWith(StartPrefix))) return;
             var made = new List<NetInfo>();
             // The median ramp roads' ground roads: the Six-Lane Road without its
             // inner one or two lanes each way, the Four-Lane Road without its inner one.
@@ -69,13 +78,29 @@ namespace RealisticRoads
                     {
                         // Its gap as wide as the ramp: the halves moved out (or in,
                         // past a median) to it.
-                        var copy = Make(road, inner, inner == 1 ? MedianGap2 : MedianGap4);
+                        var copy = Make(road, inner, inner == 1 ? MedianGap2 : MedianGap4, false);
                         if (copy != null) made.Add(copy);
+                        var start = Make(road, inner, inner == 1 ? MedianGap2 : MedianGap4, true);
+                        if (start != null) made.Add(start);
                     }
                     catch (Exception e)
                     {
                         Mod.LogError("Making the median ground road from " + road.name + " (" + inner + " inner lane(s)) failed", e);
                     }
+                }
+            }
+            // The full roads' start pieces.
+            foreach (var road in prefabs)
+            {
+                if (road == null || (road.name != "Large Road" && road.name != "Medium Road")) continue;
+                try
+                {
+                    var start = MakeFullStart(road);
+                    if (start != null) made.Add(start);
+                }
+                catch (Exception e)
+                {
+                    Mod.LogError("Making the median ramp start piece of " + road.name + " failed", e);
                 }
             }
             string collectionName = ((Component)collection).gameObject.name;
@@ -113,7 +138,7 @@ namespace RealisticRoads
             // filled in then): its AI is the component on it.
             var ai = road.m_netAI != null ? road.m_netAI : road.GetComponent<NetAI>();
             if (ai == null || ai.GetType().Name != "RoadAI") return false;
-            if (road.name != null && road.name.StartsWith(MedianPrefix)) return false;
+            if (road.name != null && (road.name.StartsWith(MedianPrefix) || road.name.StartsWith(StartPrefix))) return false;
             return VehicleLanes(road, -1) >= 2 && VehicleLanes(road, 1) >= 2 && road.m_segments != null && road.m_lanes != null;
         }
 
@@ -147,12 +172,13 @@ namespace RealisticRoads
         // A median ramp road's ground road: 'road' without its 'inner' inner
         // lanes each way, each half moved (out, or in past a median) so the gap
         // reaches 'gapHalf' either side.
-        private static NetInfo Make(NetInfo road, int inner, float gapHalf)
+        // 'start': its start piece (see StartPrefix).
+        private static NetInfo Make(NetInfo road, int inner, float gapHalf, bool start)
         {
             float cut = CutFor(road, inner);
             if (cut <= 0f || gapHalf <= 0f) return null;
             float widen = gapHalf - cut;
-            string name = MedianPrefix + road.name + " " + inner;
+            string name = (start ? StartPrefix + "Ground " : MedianPrefix) + road.name + " " + inner;
             var go = UnityEngine.Object.Instantiate(road.gameObject);
             go.name = name;
             if (road.transform != null && go.transform != null) go.transform.parent = road.transform.parent;
@@ -210,15 +236,16 @@ namespace RealisticRoads
                     var lod = Widen(node.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
                     if (lod != null) node.m_lodMesh = lod;
                 }
+            if (start) NoJunctionPieces(copy);
             HideFromMenus(copy);
-            Name(copy, Title(road) + " (" + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes beside a median ramp)",
+            Name(copy, Title(road) + " (" + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes beside a median ramp" + (start ? ", where it starts" : "") + ")",
                 "Built by Realistic Roads beside a ramp in the road's middle.");
             lock (variants)
             {
                 List<Variant> list;
                 if (!variants.TryGetValue(road.name, out list)) variants[road.name] = list = new List<Variant>();
                 list.RemoveAll(v => v.Name == name);
-                list.Add(new Variant { Name = name, Inner = inner, Cut = cut + widen });
+                list.Add(new Variant { Name = name, Inner = inner, Cut = cut + widen, Start = start });
                 list.Sort((a, b) => a.Cut.CompareTo(b.Cut));
             }
             Mod.Log("Median ramp roads: " + name + " from " + road.name + " (" + (2f * road.m_halfWidth).ToString("F1") + " m, inner lane edge " +
@@ -833,6 +860,12 @@ namespace RealisticRoads
             }
             lock (variants)
             {
+                fullStarts.Clear();
+                foreach (var pair in fullStartNames)
+                {
+                    var info = PrefabCollection<NetInfo>.FindLoaded(pair.Value);
+                    if (info != null) fullStarts[pair.Key] = info;
+                }
                 ramps.Clear();
                 foreach (var pair in rampNames)
                 {
@@ -874,6 +907,7 @@ namespace RealisticRoads
             {
                 splitInfos.Clear();
                 ramps.Clear();
+                fullStarts.Clear();
                 foreach (var list in variants.Values) foreach (var variant in list) variant.Info = null;
             }
             lock (madeMeshes)
@@ -886,6 +920,7 @@ namespace RealisticRoads
         // The road a split copy was made from (the road itself if it is none).
         public static NetInfo OriginalOf(NetInfo info)
         {
+            if (IsFullStart(info)) return PrefabCollection<NetInfo>.FindLoaded(info.name.Substring(StartPrefix.Length)) ?? info;
             if (!IsSplit(info)) return info;
             lock (variants)
                 foreach (var pair in variants)
@@ -912,9 +947,61 @@ namespace RealisticRoads
                 List<Variant> list;
                 if (!variants.TryGetValue(road.name, out list)) return null;
                 foreach (var variant in list)
-                    if (variant.Info != null && variant.Inner == inner) return variant.Info;
+                    if (variant.Info != null && !variant.Start && variant.Inner == inner) return variant.Info;
                 return null;
             }
+        }
+
+        // The start piece of a ground road (For's), and of a full road (Large or
+        // Medium Road, the one the median ramp road is for); null if none.
+        public static NetInfo StartFor(NetInfo ground)
+        {
+            if (ground == null) return null;
+            lock (variants)
+                foreach (var pair in variants)
+                {
+                    var match = pair.Value.Find(v => v.Info == ground);
+                    if (match == null) continue;
+                    var start = pair.Value.Find(v => v.Start && v.Inner == match.Inner);
+                    return start != null ? start.Info : null;
+                }
+            return null;
+        }
+
+        public static NetInfo FullStartFor(NetInfo road)
+        {
+            NetInfo info;
+            lock (variants) return road != null && fullStarts.TryGetValue(road.name, out info) ? info : null;
+        }
+
+        public static bool IsFullStart(NetInfo info)
+        {
+            return info != null && info.name != null && info.name.StartsWith(StartPrefix) && !info.name.StartsWith(StartPrefix + "Ground ");
+        }
+
+        private static readonly Dictionary<string, string> fullStartNames = new Dictionary<string, string>();   // by the road's name
+        private static readonly Dictionary<string, NetInfo> fullStarts = new Dictionary<string, NetInfo>();
+
+        // A copy of the full road that draws nothing at a junction (VOP's part A).
+        private static NetInfo MakeFullStart(NetInfo road)
+        {
+            string name = StartPrefix + road.name;
+            var go = UnityEngine.Object.Instantiate(road.gameObject);
+            go.name = name;
+            if (road.transform != null && go.transform != null) go.transform.parent = road.transform.parent;
+            var copy = go.GetComponent<NetInfo>();
+            if (copy == null)
+            {
+                UnityEngine.Object.Destroy(go);
+                return null;
+            }
+            OwnItems(copy);
+            NoJunctionPieces(copy);
+            HideFromMenus(copy);
+            Name(copy, Title(road) + " (where a median ramp leaves it)", "Built by Realistic Roads where a ramp rises out of the road's middle.");
+            lock (variants) fullStartNames[road.name] = name;
+            Mod.Log("Median ramp roads: " + name + " made from " + road.name + " (drawn without junction pieces)");
+            return copy;
         }
 
         // A ramp's lanes each way (its busier way), at least 1.

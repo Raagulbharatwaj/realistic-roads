@@ -119,7 +119,10 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      problems too, and nothing is built while it has any. They run along the whole line on the ground and join the roads they cross there as normal
      junctions, under the ramp. **Where the ramp leaves (or lands)**, one node joins the full road, the ground road and the
      ramp: the full road's outer lanes go on along the ground, its inner ones up the ramp. Starting on the end of a road of
-     the choice's kind, that road is the full road; elsewhere 20 m of it is built there (like VOP's part A). That node gets
+     the choice's kind, that road is the full road; elsewhere 40 m of it is built there. At that node, as in VOP (its parts A
+     and B), the full road's last 40 m and the ground road's first 40 m are start pieces that draw nothing at the junction:
+     only the three roads' own surfaces meet there, squared off edge to edge, with no crosswalks, kerbs or junction corners.
+     If they can't be made (the full road reaches another junction within 48 m), nothing is built. That node gets
      no traffic lights and, with TM:PE, no pedestrian crossing, and its lanes joined as in VOP's assets: the full road's
      inner lanes each way to the ramp, its outer ones to the ground road, and back (the log lists each one joined). It is
      built part by part (ramp, then the road there, then the ground road, then that node), each only once the one before

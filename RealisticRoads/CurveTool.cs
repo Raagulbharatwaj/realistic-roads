@@ -379,9 +379,10 @@ namespace RealisticRoads
             public Vector3 LeadAt;       // where that full road ends (the ramp's node)
             public bool AnyBuilt;        // a part is built (a failure removes what is)
             public string RampLog;       // the ramp's "Building ..." line, logged when its build starts
+            public string StartsWhy;     // why the start pieces couldn't be made
         }
 
-        private enum MedianStage { LeadIn, Ramp, Convert, Ground }
+        private enum MedianStage { LeadIn, Ramp, Convert, Ground, Starts }
 
         private bool parallelMode;
         private float parallelGap = DefaultGap;  // metres between the two roads' edges
@@ -2075,6 +2076,7 @@ namespace RealisticRoads
                 FailMedian(waiting, waiting.Stage == MedianStage.Ramp ? "the ramp couldn't be built" :
                                     waiting.Stage == MedianStage.Convert ? "the road under it couldn't be turned into its ground road" :
                                     waiting.Stage == MedianStage.LeadIn ? "the " + LeadIn.ToString("F0") + " m of " + Title(waiting.Full) + " couldn't be built" :
+                                    waiting.Stage == MedianStage.Starts ? "the start pieces at its node couldn't be made: " + waiting.StartsWhy :
                                     "the ground road couldn't be built");
                 return;
             }
@@ -2123,7 +2125,7 @@ namespace RealisticRoads
                     }
                     // The line goes on past the road: the ground road from where it left it.
                     if (waiting.StopAlong < ramp.Length - MinSpacing) BuildMedianGround(waiting, waiting.Stop, waiting.StopAlong);
-                    else FinishMedianOrigin(waiting);
+                    else MakeMedianStarts(waiting);
                     return;
                 case MedianStage.LeadIn:
                 {
@@ -2143,6 +2145,9 @@ namespace RealisticRoads
                     return;
                 }
                 case MedianStage.Ground:
+                    MakeMedianStarts(waiting);
+                    return;
+                case MedianStage.Starts:
                     FinishMedianOrigin(waiting);
                     return;
             }
@@ -2169,6 +2174,29 @@ namespace RealisticRoads
             NetworkBuilder.BuildCurve(waiting.Ground, ground.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
         }
 
+        // VOP's parts A and B at the ramp's node: the full road's last stretch
+        // and the ground road's first become start pieces that draw nothing at
+        // that junction (NetworkBuilder.MedianTransition). Without them it would
+        // be an ordinary junction (crosswalks, kerbs across the road): the whole
+        // median ramp road is removed instead.
+        private void MakeMedianStarts(PendingParallel waiting)
+        {
+            var full = SplitRoads.FullStartFor(waiting.Full);
+            var ground = SplitRoads.StartFor(waiting.Ground);
+            if (full == null || ground == null)
+            {
+                FailMedian(waiting, "its start pieces weren't made when the city loaded (the log's 'Median ramp roads' lines say why)");
+                return;
+            }
+            Mod.Log("Median ramp road, next: the start pieces at node #" + waiting.Origin + " (" + full.name + ", " + ground.name + ")");
+            NextMedian(waiting, MedianStage.Starts);
+            NetworkBuilder.MedianTransition(waiting.Origin, full, ground, waiting.Group, (ok, why) =>
+            {
+                waiting.StartsWhy = why;
+                waiting.State = ok ? 1 : 2;
+            });
+        }
+
         private void FinishMedianOrigin(PendingParallel waiting)
         {
             Mod.Log("Median ramp road, last: all parts built; setting up node #" + waiting.Origin + " where they meet (one Ctrl+Z removes it all)");
@@ -2191,7 +2219,10 @@ namespace RealisticRoads
             if (waiting.AnyBuilt) NetworkBuilder.UndoLast();
         }
 
-        private const float LeadIn = 20f;   // the full road before a median ramp's node off a road (VOP's part A is 20 m)
+        // The full road built before a median ramp's node on open ground: one
+        // start piece long (it becomes one whole). 20 m (VOP's part A) dug a
+        // trench in the owner's test, shorter than RR ever builds a road.
+        private const float LeadIn = SplitRoads.StartLength;
 
         // The node of the full road (any road but a median ramp's pieces) at 'at'.
         private static ushort FullRoadEndAt(Vector3 at, NetInfo road)

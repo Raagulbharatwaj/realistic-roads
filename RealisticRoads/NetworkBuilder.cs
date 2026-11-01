@@ -299,6 +299,82 @@ namespace RealisticRoads
             });
         }
 
+        // The node where a median ramp leaves (or lands in) the road, made like
+        // VOP's: the full road's last StartLength there becomes its start piece
+        // ('fullStart', VOP's part A) and the ground road's first becomes its
+        // ('groundStart', part B); neither draws anything at that junction, so
+        // only the roads' own surfaces meet there, squared off edge to edge
+        // (SplitRoadsCornerPatch). A longer segment is cut, the piece by the
+        // node changed, the rest kept; a shorter one changes whole, unless its
+        // other end is a junction too (it would draw nothing there either): then
+        // the build fails. One build in 'group' (undone with the rest); 'done' is
+        // told (simulation thread) whether every piece was made.
+        public static void MedianTransition(ushort node, NetInfo fullStart, NetInfo groundStart, int group, Action<bool, string> done)
+        {
+            SimulationManager.instance.AddAction(() =>
+            {
+                var build = new Build { Group = group };
+                string why = null;
+                var made = new List<string>();
+                try
+                {
+                    var net = NetManager.instance;
+                    var segments = net.m_segments.m_buffer;
+                    var at = new List<ushort>();
+                    for (int i = 0; i < 8; i++)
+                    {
+                        ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
+                        if (s != 0) at.Add(s);
+                    }
+                    bool full = false, ground = false;
+                    foreach (ushort s in at)
+                    {
+                        var info = segments[s].Info;
+                        if (SplitRoads.IsRamp(info)) continue;
+                        bool isGround = SplitRoads.IsSplit(info);
+                        var target = isGround ? groundStart : fullStart;
+                        if (isGround) ground = true; else full = true;
+                        if (info == target) continue;
+                        float length = Mathf.Max(segments[s].m_averageLength, 1f);
+                        bool fromStart = segments[s].m_startNode == node;
+                        ushort far = fromStart ? segments[s].m_endNode : segments[s].m_startNode;
+                        if (length <= SplitRoads.StartLength + MinPiece)
+                        {
+                            if (SegmentCount(far) > 2)
+                            {
+                                why = "the " + info.name + " at the ramp's node is only " + length.ToString("F0") + " m to the next junction (at least " +
+                                      (SplitRoads.StartLength + MinPiece).ToString("F0") + " m needed for its start piece)";
+                                break;
+                            }
+                            SplitSegment(s, new float[0], new[] { target }, build);
+                            made.Add(info.name + " #" + s + " whole (" + length.ToString("F0") + " m)");
+                            continue;
+                        }
+                        float t = fromStart ? SplitRoads.StartLength / length : 1f - SplitRoads.StartLength / length;
+                        SplitSegment(s, new[] { t }, fromStart ? new[] { target, info } : new[] { info, target }, build);
+                        made.Add(info.name + " #" + s + " (its " + SplitRoads.StartLength.ToString("F0") + " m by the node)");
+                    }
+                    if (why == null && (!full || !ground)) why = "the ramp's node #" + node + " has no " + (full ? "ground road" : "full road");
+                    if (why != null)
+                    {
+                        Remove(build);
+                        Mod.Log("Median ramp node #" + node + ": start pieces not made: " + why);
+                        if (done != null) done(false, why);
+                        return;
+                    }
+                    if (build.Splits.Count > 0) Keep(build);
+                    Mod.Log("Median ramp node #" + node + ": start pieces (no junction pieces drawn there): " + string.Join("; ", made.ToArray()));
+                    if (done != null) done(true, null);
+                }
+                catch (Exception e)
+                {
+                    Mod.LogError("Making the median ramp node #" + node + "'s start pieces failed; put back", e);
+                    Remove(build);
+                    if (done != null) done(false, "making its start pieces failed (" + e.Message + ")");
+                }
+            });
+        }
+
         private const float LineCover = 3f;   // a road this close to the drawn line (flat) runs under it
 
         // Off the line (further than LineCover from it); 'along': how far along it the nearest place is.
