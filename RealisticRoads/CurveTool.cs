@@ -428,6 +428,7 @@ namespace RealisticRoads
         protected override void OnToolUpdate()
         {
             base.OnToolUpdate();
+            NetworkBuilder.PollMedianOrigins();
             var camera = Camera.main;
             if (camera != null)
             {

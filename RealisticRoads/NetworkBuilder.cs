@@ -196,7 +196,7 @@ namespace RealisticRoads
         // them custom), and with TM:PE no pedestrian crossing on any road end
         // there and entering a blocked junction allowed. Queued after the
         // roads at it are built.
-        public static void MedianOrigin(ushort node)
+        public static void MedianOrigin(ushort node, int attempt = 0)
         {
             if (node == 0) return;
             SimulationManager.instance.AddAction(() =>
@@ -229,14 +229,48 @@ namespace RealisticRoads
                         if (TmpeSet(restrictions, "SetPedestrianCrossingAllowed", s, start, false)) tmpeSet++;
                         TmpeSet(restrictions, "SetEnteringBlockedJunctionAllowed", s, start, true);
                     }
+                    // TM:PE takes a road end only once it has set the new road up
+                    // (not yet in the same step it was built in): asked again a
+                    // little later, a few times.
+                    if (restrictions != null && tmpeSet < ends.Count && attempt < TmpeAttempts)
+                    {
+                        lock (tmpeRetries) tmpeRetries.Add(new KeyValuePair<ushort, int>(node, attempt + 1));
+                        return;
+                    }
                     Mod.Log("Median ramp node #" + node + ": " + ends.Count + " road end(s): " + string.Join(", ", ends.ToArray()) +
-                            "; " + lights + "; " + (restrictions != null ? "TM:PE: pedestrian crossing off on " + tmpeSet + " of them" : "TM:PE: " + tmpe));
+                            "; " + lights + "; " + (restrictions != null ? "TM:PE: pedestrian crossing off on " + tmpeSet + " of them" +
+                            (attempt > 0 ? " (asked " + (attempt + 1) + " times)" : "") : "TM:PE: " + tmpe));
                 }
                 catch (Exception e)
                 {
                     Mod.LogError("Setting up the median ramp node #" + node + " failed", e);
                 }
             });
+        }
+
+        private const int TmpeAttempts = 6;
+        private const int TmpeRetryFrames = 30;
+        private static readonly List<KeyValuePair<ushort, int>> tmpeRetries = new List<KeyValuePair<ushort, int>>();
+        private static int tmpeWait;
+
+        // Main thread, every frame the tool runs: a median ramp node TM:PE
+        // wasn't ready for is set up again after TmpeRetryFrames.
+        public static void PollMedianOrigins()
+        {
+            List<KeyValuePair<ushort, int>> due;
+            lock (tmpeRetries)
+            {
+                if (tmpeRetries.Count == 0)
+                {
+                    tmpeWait = 0;
+                    return;
+                }
+                if (++tmpeWait < TmpeRetryFrames) return;
+                tmpeWait = 0;
+                due = new List<KeyValuePair<ushort, int>>(tmpeRetries);
+                tmpeRetries.Clear();
+            }
+            foreach (var retry in due) MedianOrigin(retry.Key, retry.Value);
         }
 
         // TM:PE's junction restrictions manager, if TM:PE is loaded (found by

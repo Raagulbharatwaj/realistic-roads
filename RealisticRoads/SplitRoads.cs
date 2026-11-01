@@ -287,6 +287,36 @@ namespace RealisticRoads
                 for (int i = 0; i < copy.m_nodes.Length; i++) copy.m_nodes[i] = Copy(copy.m_nodes[i]);
         }
 
+        // A ramp draws nothing of its own where it meets other roads at a node
+        // (a junction): its models there are a parapet wrapping round the
+        // corner, which at the node it shares with the road it rises out of
+        // would wrap across that road's lanes. The other roads' junction
+        // pieces and the ramp's square end meet there instead. Its own joins
+        // (two ramp segments, a bend) keep theirs. By name: the game's fields.
+        private static void NoJunctionPieces(NetInfo ramp)
+        {
+            if (ramp.m_nodes == null) return;
+            try
+            {
+                if (!Enum.IsDefined(typeof(NetNode.Flags), "Junction")) return;
+                var junction = (NetNode.Flags)Enum.Parse(typeof(NetNode.Flags), "Junction");
+                var field = typeof(NetInfo.Node).GetField("m_flagsForbidden", BindingFlags.Public | BindingFlags.Instance);
+                if (field == null || field.FieldType != typeof(NetNode.Flags)) return;
+                int changed = 0;
+                foreach (var node in ramp.m_nodes)
+                {
+                    if (node == null) continue;
+                    field.SetValue(node, (NetNode.Flags)field.GetValue(node) | junction);
+                    changed++;
+                }
+                Mod.Log("Median ramps: " + ramp.name + ": " + changed + " node model(s) not drawn at junctions");
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Keeping " + ramp.name + "'s parapet off its junctions failed", e);
+            }
+        }
+
         private static void HideFromMenus(NetInfo info)
         {
             try
@@ -447,6 +477,7 @@ namespace RealisticRoads
                     var lod = Squeeze(node.m_lodMesh, roadHalf, median, keep, scale, inner, surface, gutter);
                     if (lod != null) node.m_lodMesh = lod;
                 }
+            NoJunctionPieces(copy);
             HideFromMenus(copy);
             return copy;
         }
