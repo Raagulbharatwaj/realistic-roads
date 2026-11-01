@@ -15,7 +15,7 @@ namespace RealisticRoads
     {
         // Which source this build is from, in the log, to tell an old or second
         // copy of the mod from the current one. Changed with each tested feature.
-        public const string SourceTag = "median-vop-start-pieces";
+        public const string SourceTag = "median-node-dump";
 
         public string Name => "Realistic Roads (beta)";
         public string Description => "Plan your roads and add layers to your city: draw a whole route, choose how it crosses everything, stack decks over and under streets.";
@@ -31,9 +31,29 @@ namespace RealisticRoads
             set { debugLogging = value; SetSetting("RealisticRoads.DebugLogging", value); }
         }
 
+        // Tests of the median ramp node's geometry: RR's two changes to how the
+        // game draws it can be switched off, to see what each one does.
+        private static bool squareRampEnds = true, hideRampJunctions = true;
+
+        // The roads at a median ramp's node end square at its centre (SplitRoadsCornerPatch).
+        public static bool SquareRampEnds
+        {
+            get { return squareRampEnds; }
+            set { squareRampEnds = value; SetSetting("RealisticRoads.SquareRampEnds", value); }
+        }
+
+        // The ramp and the start pieces draw no junction models (read when a city loads).
+        public static bool HideRampJunctions
+        {
+            get { return hideRampJunctions; }
+            set { hideRampJunctions = value; SetSetting("RealisticRoads.HideRampJunctions", value); }
+        }
+
         private static void LoadSettings()
         {
             debugLogging = Setting("RealisticRoads.DebugLogging", false);
+            squareRampEnds = Setting("RealisticRoads.SquareRampEnds", true);
+            hideRampJunctions = Setting("RealisticRoads.HideRampJunctions", true);
         }
 
         private static bool Setting(string key, bool fallback)
@@ -125,6 +145,9 @@ namespace RealisticRoads
         {
             var group = helper.AddGroup("Realistic Roads");
             group.AddCheckbox("Detailed logging (every segment the game creates)", DebugLogging, value => DebugLogging = value);
+            var test = helper.AddGroup("Median ramp node tests");
+            test.AddCheckbox("Roads at a median ramp's node end square (off: the game's own corners)", SquareRampEnds, value => SquareRampEnds = value);
+            test.AddCheckbox("Ramp and start pieces draw no junction models (takes effect when a city loads)", HideRampJunctions, value => HideRampJunctions = value);
         }
 
         // Safe to call from any thread, including the simulation thread.

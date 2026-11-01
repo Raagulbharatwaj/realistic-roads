@@ -342,6 +342,11 @@ namespace RealisticRoads
         private static void NoJunctionPieces(NetInfo ramp)
         {
             if (ramp.m_nodes == null) return;
+            if (!Mod.HideRampJunctions)
+            {
+                Mod.Log("Median ramps: " + ramp.name + ": junction models kept (test setting)");
+                return;
+            }
             try
             {
                 if (!Enum.IsDefined(typeof(NetNode.Flags), "Junction")) return;
@@ -1017,7 +1022,7 @@ namespace RealisticRoads
         // corner between roads whose edges meet far out, or never).
         internal static bool SquareEnd(ushort segment, ushort node, Vector3 direction)
         {
-            if (!active || node == 0) return false;
+            if (!active || node == 0 || !Mod.SquareRampEnds) return false;
             Vector3 dir = CurveMath.FlatNormal(direction);
             if (dir == Vector3.zero) return false;
             var net = NetManager.instance;
