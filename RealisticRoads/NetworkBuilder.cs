@@ -217,7 +217,11 @@ namespace RealisticRoads
                     }
                     var ends = new List<string>();
                     int tmpeSet = 0;
-                    string tmpe = TmpeJunctions(out object restrictions);
+                    string tmpe = TmpeManager("JunctionRestrictionsManager", out object restrictions);
+                    // With TM:PE its own traffic light setting rules the node (it puts
+                    // the game's back): off there too, as VOP's assets have it.
+                    TmpeManager("TrafficLightManager", out object trafficLights);
+                    bool tmpeLightsOff = trafficLights != null && TmpeLightsOff(trafficLights, node);
                     for (int i = 0; i < 8; i++)
                     {
                         ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
@@ -232,13 +236,14 @@ namespace RealisticRoads
                     // TM:PE takes a road end only once it has set the new road up
                     // (not yet in the same step it was built in): asked again a
                     // little later, a few times.
-                    if (restrictions != null && tmpeSet < ends.Count && attempt < TmpeAttempts)
+                    if (((restrictions != null && tmpeSet < ends.Count) || (trafficLights != null && !tmpeLightsOff)) && attempt < TmpeAttempts)
                     {
                         lock (tmpeRetries) tmpeRetries.Add(new KeyValuePair<ushort, int>(node, attempt + 1));
                         return;
                     }
                     Mod.Log("Median ramp node #" + node + ": " + ends.Count + " road end(s): " + string.Join(", ", ends.ToArray()) +
-                            "; " + lights + "; " + (restrictions != null ? "TM:PE: pedestrian crossing off on " + tmpeSet + " of them" +
+                            "; " + lights + (trafficLights != null ? (tmpeLightsOff ? ", TM:PE traffic light off" : ", TM:PE traffic light NOT taken off") : "") +
+                            "; " + (restrictions != null ? "TM:PE: pedestrian crossing off on " + tmpeSet + " of them" +
                             (attempt > 0 ? " (asked " + (attempt + 1) + " times)" : "") : "TM:PE: " + tmpe));
                 }
                 catch (Exception e)
@@ -273,9 +278,35 @@ namespace RealisticRoads
             foreach (var retry in due) MedianOrigin(retry.Key, retry.Value);
         }
 
-        // TM:PE's junction restrictions manager, if TM:PE is loaded (found by
-        // name: RR doesn't need TM:PE). Null with why not.
-        private static string TmpeJunctions(out object manager)
+        // TM:PE's traffic light for 'node' set off (its SetHasTrafficLight).
+        private static bool TmpeLightsOff(object manager, ushort node)
+        {
+            try
+            {
+                foreach (var m in manager.GetType().GetMethods())
+                {
+                    if (m.Name != "SetHasTrafficLight") continue;
+                    var p = m.GetParameters();
+                    if (p.Length < 2 || p[0].ParameterType != typeof(ushort)) continue;
+                    if (p[1].ParameterType != typeof(bool) && p[1].ParameterType != typeof(bool?)) continue;
+                    var args = new object[p.Length];
+                    args[0] = node;
+                    args[1] = false;
+                    for (int i = 2; i < p.Length; i++) args[i] = p[i].ParameterType.IsValueType ? Activator.CreateInstance(p[i].ParameterType) : null;
+                    var result = m.Invoke(manager, args);
+                    return !(result is bool) || (bool)result;
+                }
+            }
+            catch (Exception e)
+            {
+                Mod.Log("TM:PE SetHasTrafficLight on node #" + node + " failed: " + e.GetType().Name + ": " + e.Message);
+            }
+            return false;
+        }
+
+        // One of TM:PE's managers by its property name, if TM:PE is loaded (found
+        // by name: RR doesn't need TM:PE). Null with why not.
+        private static string TmpeManager(string name, out object manager)
         {
             manager = null;
             try
@@ -290,9 +321,9 @@ namespace RealisticRoads
                     var factoryProperty = constants.GetProperty("ManagerFactory", any);
                     var factory = factoryProperty != null ? factoryProperty.GetValue(null, null) : null;
                     if (factory == null) return "its manager factory not found";
-                    var managerProperty = factory.GetType().GetProperty("JunctionRestrictionsManager");
+                    var managerProperty = factory.GetType().GetProperty(name);
                     manager = managerProperty != null ? managerProperty.GetValue(factory, null) : null;
-                    return manager != null ? null : "its junction restrictions manager not found";
+                    return manager != null ? null : "its " + name + " not found";
                 }
                 return "not loaded";
             }
