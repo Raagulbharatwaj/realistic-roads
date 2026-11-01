@@ -161,15 +161,25 @@ namespace RealisticRoads
             }
             OwnItems(copy);
             // Its lanes outside the gap (the median's street lights and trees go with it).
+            // The road keeps its width: each carriageway moves into its sidewalk
+            // (narrower, or wider moving in), the kerb with it, the outer edge
+            // stays (no step where it meets the full road, nothing past the
+            // road's own footprint). If the sidewalk is too narrow for that, the
+            // whole half moves and the road gets wider.
+            float edge = road.m_halfWidth, kerb = road.m_halfWidth - road.m_pavementWidth;
+            bool inside = kerb > cut + 0.5f && edge - (kerb + widen) >= MinSidewalk;
             var lanes = new List<NetInfo.Lane>();
             foreach (var lane in copy.m_lanes)
                 if (lane != null && Mathf.Abs(lane.m_position) >= cut - 0.01f)
                 {
-                    lane.m_position += lane.m_position < 0f ? -widen : widen;
+                    float a = Mathf.Abs(lane.m_position);
+                    float moved = inside ? Across(a, cut, widen, kerb, edge) : a + widen;
+                    lane.m_position = lane.m_position < 0f ? -moved : moved;
                     lanes.Add(lane);
                 }
             copy.m_lanes = lanes.ToArray();
-            copy.m_halfWidth += widen;
+            if (inside) copy.m_pavementWidth = edge - (kerb + widen);
+            else copy.m_halfWidth += widen;
             // Its models (segments, and nodes: the ends of the split stretch) with
             // the middle flattened into the road's surface.
             float surface = road.m_surfaceLevel;
@@ -177,18 +187,18 @@ namespace RealisticRoads
                 foreach (var segment in copy.m_segments)
                 {
                     if (segment == null) continue;
-                    var mesh = Widen(segment.m_mesh, cut, widen, surface);
+                    var mesh = Widen(segment.m_mesh, cut, widen, surface, inside ? kerb : -1f, edge);
                     if (mesh != null) segment.m_mesh = mesh;
-                    var lod = Widen(segment.m_lodMesh, cut, widen, surface);
+                    var lod = Widen(segment.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge);
                     if (lod != null) segment.m_lodMesh = lod;
                 }
             if (copy.m_nodes != null)
                 foreach (var node in copy.m_nodes)
                 {
                     if (node == null) continue;
-                    var mesh = Widen(node.m_mesh, cut, widen, surface);
+                    var mesh = Widen(node.m_mesh, cut, widen, surface, inside ? kerb : -1f, edge);
                     if (mesh != null) node.m_mesh = mesh;
-                    var lod = Widen(node.m_lodMesh, cut, widen, surface);
+                    var lod = Widen(node.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge);
                     if (lod != null) node.m_lodMesh = lod;
                 }
             HideFromMenus(copy);
@@ -204,8 +214,8 @@ namespace RealisticRoads
             }
             Mod.Log("Median ramp roads: " + name + " from " + road.name + " (" + (2f * road.m_halfWidth).ToString("F1") + " m, inner lane edge " +
                         cut.ToString("F1") + " m): " + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes, halves moved " +
-                        widen.ToString("+0.0;-0.0") + " m, a " + (2f * (cut + widen)).ToString("F1") + " m gap in the middle, " +
-                        (2f * copy.m_halfWidth).ToString("F1") + " m wide");
+                        widen.ToString("+0.0;-0.0") + " m" + (inside ? " into its sidewalks (now " + copy.m_pavementWidth.ToString("F1") + " m)" : " (the road wider)") +
+                        ", a " + (2f * (cut + widen)).ToString("F1") + " m gap in the middle, " + (2f * copy.m_halfWidth).ToString("F1") + " m wide");
             return copy;
         }
 
@@ -405,8 +415,10 @@ namespace RealisticRoads
             return string.Join(" ", parts.ToArray());
         }
 
-        // The lanes keep their width (at most) and the road is exactly 'half'
-        // either side: a shoulder fills the room to the parapet.
+        // The road is exactly 'half' either side (the parapet at its edge), the
+        // lanes filling it or a shoulder between (see below).
+        private const float MaxLaneStretch = 1.35f;   // a ramp's lanes at most this much wider than its road's
+
         private static NetInfo Narrow(NetInfo road, string name, float half)
         {
             // The carriageway: from the median's edge (0 without one) to the outer
@@ -423,12 +435,17 @@ namespace RealisticRoads
             if (drive <= 0f) return null;
             // Lanes no narrower than 85 % of the road's (a car still fits).
             float inner = Mathf.Max(half - RampBarrier, drive * 0.85f);
-            float scale = Mathf.Min(1f, inner / drive);
-            float laneEdge = drive * scale;
-            if (inner < laneEdge) inner = laneEdge;
             float roadHalf = road.m_halfWidth;
             // The carriageway's edge (past the outer lane: a gutter), where the sidewalk starts.
             float gutter = Mathf.Clamp(road.m_halfWidth - road.m_pavementWidth, keep, Mathf.Max(keep, roadHalf - RampBarrier));
+            // With a gutter, the lanes keep their width (at most) and the gutter
+            // becomes the shoulder to the parapet; without one (the sidewalk's
+            // kerb at the outer lane) the lanes widen to the parapet instead, so
+            // no sidewalk is drawn squeezed into a strip beside them.
+            bool hasGutter = gutter > keep + 0.3f;
+            float scale = hasGutter ? Mathf.Min(1f, inner / drive) : Mathf.Min(MaxLaneStretch, inner / drive);
+            float laneEdge = drive * scale;
+            if (inner < laneEdge) inner = laneEdge;
             var go = UnityEngine.Object.Instantiate(road.gameObject);
             go.name = name;
             if (road.transform != null && go.transform != null) go.transform.parent = road.transform.parent;
@@ -593,9 +610,11 @@ namespace RealisticRoads
         // skirt) moved 'widen' further out, unchanged; the middle stretched to
         // fill the wider gap and brought down to the road's surface (flat
         // paving under the ramp, no median kerbs).
-        internal static Mesh Widen(Mesh mesh, float cut, float widen, float surface)
+        // 'kerb' >= 0: the carriageway (to the kerb) moves, the sidewalk (kerb to
+        // 'edge') takes it up and the edge and past it stay (see Across).
+        internal static Mesh Widen(Mesh mesh, float cut, float widen, float surface, float kerb = -1f, float edge = 0f)
         {
-            var sliced = SliceAcross(mesh, new[] { -cut, cut });
+            var sliced = SliceAcross(mesh, kerb >= 0f ? new[] { -cut, cut, -kerb, kerb, -edge, edge } : new[] { -cut, cut });
             if (sliced == null) return null;
             var vertices = sliced.Vertices;
             var triangles = sliced.Triangles;
@@ -604,7 +623,7 @@ namespace RealisticRoads
             {
                 float x = vertices[i].x, a = Mathf.Abs(x), y = vertices[i].y;
                 float side = x < 0f ? -1f : 1f;
-                if (a >= cut - 0.01f) a += widen;
+                if (a >= cut - 0.01f) a = kerb >= 0f ? Across(a, cut, widen, kerb, edge) : a + widen;
                 else
                 {
                     a *= stretch;
@@ -613,6 +632,18 @@ namespace RealisticRoads
                 vertices[i] = new Vector3(side * a, y, vertices[i].z);
             }
             return sliced.Make(mesh, " (median)");
+        }
+
+        private const float MinSidewalk = 2f;   // a sidewalk the carriageway moves into keeps at least this
+
+        // Where something 'a' from the centre goes: from the gap's edge to the
+        // kerb moved by 'widen'; the sidewalk (kerb to edge) squeezed (or
+        // stretched) to fit; the edge and past it unchanged.
+        internal static float Across(float a, float cut, float widen, float kerb, float edge)
+        {
+            if (a <= kerb + 0.01f) return a + widen;
+            if (a >= edge) return a;
+            return kerb + widen + (a - kerb) * (edge - kerb - widen) / (edge - kerb);
         }
 
         // A model's parts, its triangles cut along lines across the road
