@@ -291,6 +291,104 @@ namespace RealisticRoads
             return ++lastGroup;
         }
 
+        // The node where a median ramp road's ramp leaves (or lands in) the
+        // road, set up the way the VOP overpasses set theirs (read from their
+        // assets): no traffic lights (the game's own setting, kept by marking
+        // them custom), and with TM:PE no pedestrian crossing on any road end
+        // there and entering a blocked junction allowed. Queued after the
+        // roads at it are built.
+        public static void MedianOrigin(ushort node)
+        {
+            if (node == 0) return;
+            SimulationManager.instance.AddAction(() =>
+            {
+                try
+                {
+                    var net = NetManager.instance;
+                    // By name: the game's flags (kept off by marking them custom, as its
+                    // own traffic light toggle does).
+                    var flags = net.m_nodes.m_buffer[node].m_flags;
+                    string lights = "traffic lights left to the game (its flags not found)";
+                    if (Enum.IsDefined(typeof(NetNode.Flags), "TrafficLights") && Enum.IsDefined(typeof(NetNode.Flags), "CustomTrafficLights"))
+                    {
+                        var on = (NetNode.Flags)Enum.Parse(typeof(NetNode.Flags), "TrafficLights");
+                        var custom = (NetNode.Flags)Enum.Parse(typeof(NetNode.Flags), "CustomTrafficLights");
+                        net.m_nodes.m_buffer[node].m_flags = (flags & ~on) | custom;
+                        lights = "traffic lights off";
+                    }
+                    var ends = new List<string>();
+                    int tmpeSet = 0;
+                    string tmpe = TmpeJunctions(out object restrictions);
+                    for (int i = 0; i < 8; i++)
+                    {
+                        ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
+                        if (s == 0) continue;
+                        bool start = net.m_segments.m_buffer[s].m_startNode == node;
+                        var info = net.m_segments.m_buffer[s].Info;
+                        ends.Add("#" + s + " " + (info != null ? info.name : "?") + (start ? " (start)" : " (end)"));
+                        if (restrictions == null) continue;
+                        if (TmpeSet(restrictions, "SetPedestrianCrossingAllowed", s, start, false)) tmpeSet++;
+                        TmpeSet(restrictions, "SetEnteringBlockedJunctionAllowed", s, start, true);
+                    }
+                    Mod.Log("Median ramp node #" + node + ": " + ends.Count + " road end(s): " + string.Join(", ", ends.ToArray()) +
+                            "; " + lights + "; " + (restrictions != null ? "TM:PE: pedestrian crossing off on " + tmpeSet + " of them" : "TM:PE: " + tmpe));
+                }
+                catch (Exception e)
+                {
+                    Mod.LogError("Setting up the median ramp node #" + node + " failed", e);
+                }
+            });
+        }
+
+        // TM:PE's junction restrictions manager, if TM:PE is loaded (found by
+        // name: RR doesn't need TM:PE). Null with why not.
+        private static string TmpeJunctions(out object manager)
+        {
+            manager = null;
+            try
+            {
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (assembly.GetName().Name != "TrafficManager") continue;
+                    var constants = assembly.GetType("TrafficManager.Constants");
+                    if (constants == null) return "TrafficManager.Constants not found";
+                    const System.Reflection.BindingFlags any = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+                                                               System.Reflection.BindingFlags.Static;
+                    var factoryProperty = constants.GetProperty("ManagerFactory", any);
+                    var factory = factoryProperty != null ? factoryProperty.GetValue(null, null) : null;
+                    if (factory == null) return "its manager factory not found";
+                    var managerProperty = factory.GetType().GetProperty("JunctionRestrictionsManager");
+                    manager = managerProperty != null ? managerProperty.GetValue(factory, null) : null;
+                    return manager != null ? null : "its junction restrictions manager not found";
+                }
+                return "not loaded";
+            }
+            catch (Exception e)
+            {
+                return e.GetType().Name + ": " + e.Message;
+            }
+        }
+
+        private static bool TmpeSet(object manager, string method, ushort segment, bool startNode, bool value)
+        {
+            try
+            {
+                foreach (var m in manager.GetType().GetMethods())
+                {
+                    if (m.Name != method) continue;
+                    var p = m.GetParameters();
+                    if (p.Length != 3 || p[0].ParameterType != typeof(ushort) || p[1].ParameterType != typeof(bool) || p[2].ParameterType != typeof(bool)) continue;
+                    var result = m.Invoke(manager, new object[] { segment, startNode, value });
+                    return !(result is bool) || (bool)result;
+                }
+            }
+            catch (Exception e)
+            {
+                Mod.Log("TM:PE " + method + " on #" + segment + " failed: " + e.GetType().Name + ": " + e.Message);
+            }
+            return false;
+        }
+
         public static void UndoLast()
         {
             SimulationManager.instance.AddAction(UndoNow);
