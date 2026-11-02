@@ -104,7 +104,7 @@ namespace RealisticRoads
                 }
                 // Its tapered start pieces: one for each ground road (its lanes
                 // slide out to that ground road's), each way along the segment.
-                int[] tapered = road.name == "Large Road" ? new[] { 1, 2 } : new int[0];
+                int[] tapered = road.name == "Large Road" ? new[] { 1, 2 } : road.name == "Medium Road" ? new[] { 1 } : new int[0];
                 foreach (int inner in tapered)
                     foreach (bool atEnd in new[] { false, true })
                         foreach (bool invert in new[] { false, true })
@@ -1121,15 +1121,23 @@ namespace RealisticRoads
             float widen = gapHalf - cut;
             float edge = road.m_halfWidth, kerb = road.m_halfWidth - road.m_pavementWidth;
             bool inside = kerb > cut + 0.5f && edge - (kerb + widen) >= MinSidewalk;
-            if (!inside || widen < 0.05f) return null;   // only outward, into the sidewalk (as the ground road)
+            if (!inside || Mathf.Abs(widen) < 0.05f) return null;   // the carriageway moves within the sidewalk (as the ground road)
             // The strip that stretches: the first ground lane's plain middle.
-            float laneOuter = float.MaxValue;
+            float laneOuter = float.MaxValue, median = float.MaxValue;
             foreach (var lane in road.m_lanes)
-                if (lane != null && (lane.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None && Mathf.Abs(lane.m_position) - lane.m_width * 0.5f >= cut - 0.01f)
-                    laneOuter = Mathf.Min(laneOuter, Mathf.Abs(lane.m_position) + lane.m_width * 0.5f);
+                if (lane != null && (lane.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None)
+                {
+                    median = Mathf.Min(median, Mathf.Abs(lane.m_position) - lane.m_width * 0.5f);
+                    if (Mathf.Abs(lane.m_position) - lane.m_width * 0.5f >= cut - 0.01f)
+                        laneOuter = Mathf.Min(laneOuter, Mathf.Abs(lane.m_position) + lane.m_width * 0.5f);
+                }
             if (laneOuter == float.MaxValue) return null;
+            // A median (the Four-Lane Road's) closes up: the inner lanes slide in
+            // onto the ramp's lanes, the median under them.
+            median = median > 0.05f && median < cut ? median : 0f;
+            float innerSlide = -median;
             float from = cut + TaperMarking, to = laneOuter - TaperMarking;
-            if (to - from < 0.5f) return null;
+            if (to - from < 0.5f || (to + widen) - (from + innerSlide) < 0.5f) return null;
             string name = StartPrefix + road.name + " Taper " + inner + (atEnd ? " End" : " Start") + (invert ? " Inverted" : "");
             var go = UnityEngine.Object.Instantiate(road.gameObject);
             go.name = name;
@@ -1141,14 +1149,22 @@ namespace RealisticRoads
                 return null;
             }
             OwnItems(copy);
+            var keptLanes = new List<NetInfo.Lane>();
             foreach (var lane in copy.m_lanes)
             {
-                if (lane == null || (lane.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None) continue;
+                if (lane == null) continue;
+                bool vehicle = (lane.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None;
                 float a = Mathf.Abs(lane.m_position);
-                if (a < kerb - 0.01f) continue;
-                float moved = Across(a, cut, widen, kerb, edge);
-                lane.m_position = lane.m_position < 0f ? -moved : moved;
+                // The median's own lanes (its lights and trees) go: it closes up.
+                if (!vehicle && a < cut - 0.01f) continue;
+                if (!vehicle && a >= kerb - 0.01f)
+                {
+                    float moved = Across(a, cut, widen, kerb, edge);
+                    lane.m_position = lane.m_position < 0f ? -moved : moved;
+                }
+                keptLanes.Add(lane);
             }
+            copy.m_lanes = keptLanes.ToArray();
             var flags = NetSegment.Flags.Created | (invert ? NetSegment.Flags.Invert : NetSegment.Flags.None);
             int turned = 0, models = 0;
             if (copy.m_segments != null)
@@ -1159,9 +1175,9 @@ namespace RealisticRoads
                     bool turnAround = TurnsAround(segment, flags);
                     if (turnAround) turned++;
                     bool atMaxZ = atEnd != turnAround;   // the model's +z towards the segment's end node
-                    var mesh = TaperMesh(segment.m_mesh, cut, widen, kerb, edge, from, to, atMaxZ);
+                    var mesh = TaperMesh(segment.m_mesh, cut, widen, kerb, edge, median, innerSlide, from, to, atMaxZ);
                     if (mesh != null) segment.m_mesh = mesh;
-                    var lod = TaperMesh(segment.m_lodMesh, cut, widen, kerb, edge, from, to, atMaxZ);
+                    var lod = TaperMesh(segment.m_lodMesh, cut, widen, kerb, edge, median, innerSlide, from, to, atMaxZ);
                     if (lod != null) segment.m_lodMesh = lod;
                 }
             SetUpStartPiece(copy);
@@ -1172,7 +1188,8 @@ namespace RealisticRoads
                 taperNames[TaperKey(road.name, inner, atEnd, invert)] = name;
                 taperRoads[name] = road.name;
             }
-            Mod.Log("Median ramp roads: " + name + ": outer lanes, kerb and sidewalk slide " + widen.ToString("+0.0;-0.0") + " m along it (stretching " +
+            Mod.Log("Median ramp roads: " + name + ": outer lanes, kerb and sidewalk slide " + widen.ToString("+0.0;-0.0") + " m along it" +
+                    (median > 0.05f ? ", inner lanes " + innerSlide.ToString("+0.0;-0.0") + " m (the median closes)" : "") + " (stretching " +
                     from.ToString("F2") + "-" + to.ToString("F2") + " m from the centre), " + models + " model(s), " + turned + " drawn turned round");
             return copy;
         }
@@ -1202,12 +1219,15 @@ namespace RealisticRoads
         }
 
         // A road model with its outer part slid by 'widen' at one end (none at the
-        // other, in proportion between): within 'from' of the centre unchanged;
-        // 'from' to 'to' stretched; past 'to' as the ground road has it (Across).
-        // 'atMaxZ': the full slide at the model's +z end.
-        private static Mesh TaperMesh(Mesh mesh, float cut, float widen, float kerb, float edge, float from, float to, bool atMaxZ)
+        // other, in proportion between): from 'median' to 'from' slid by 'inner'
+        // (0, or a median's width in: it closes up, squeezed to nothing);
+        // 'from' to 'to' stretched between the two; past 'to' as the ground road
+        // has it (Across). 'atMaxZ': the full slide at the model's +z end.
+        private static Mesh TaperMesh(Mesh mesh, float cut, float widen, float kerb, float edge, float median, float inner, float from, float to, bool atMaxZ)
         {
-            var sliced = SliceAcross(mesh, new[] { -from, from, -to, to, -kerb, kerb, -edge, edge });
+            var lines = new List<float> { -from, from, -to, to, -kerb, kerb, -edge, edge };
+            if (median > 0.05f) lines.AddRange(new[] { -median, median });
+            var sliced = SliceAcross(mesh, lines.ToArray());
             if (sliced == null) return null;
             var vertices = sliced.Vertices;
             float zMin = float.MaxValue, zMax = float.MinValue;
@@ -1223,8 +1243,9 @@ namespace RealisticRoads
                 float f = (vertices[i].z - zMin) / (zMax - zMin);
                 if (!atMaxZ) f = 1f - f;
                 float target;
-                if (a <= from) target = a;
-                else if (a < to) target = a + widen * (a - from) / (to - from);
+                if (median > 0.05f && a < median) target = a * (median + inner) / median;
+                else if (a <= from) target = a + inner;
+                else if (a < to) target = from + inner + (a - from) * ((to + widen) - (from + inner)) / (to - from);
                 else target = Across(a, cut, widen, kerb, edge);
                 a += f * (target - a);
                 vertices[i] = new Vector3(x < 0f ? -a : a, vertices[i].y, vertices[i].z);
