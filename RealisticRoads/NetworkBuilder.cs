@@ -300,8 +300,8 @@ namespace RealisticRoads
 
         // The node where a median ramp leaves (or lands in) the road, made with
         // start pieces: the full road's last StartLength there becomes its start
-        // piece ('fullStart') and the ground road's first becomes its
-        // ('groundStart'); neither draws anything at that junction, so
+        // piece ('fullStart'), the ground road's first becomes its
+        // ('groundStart') and the ramp's segment there its own; none draws anything at that junction, so
         // only the roads' own surfaces meet there, squared off edge to edge
         // (SplitRoadsCornerPatch). A longer segment is cut, the piece by the
         // node changed, the rest kept; a shorter one changes whole, unless its
@@ -329,7 +329,22 @@ namespace RealisticRoads
                     foreach (ushort s in at)
                     {
                         var info = segments[s].Info;
-                        if (SplitRoads.IsRamp(info)) continue;
+                        if (SplitRoads.IsRamp(info))
+                        {
+                            // The ramp's segment at the node becomes its start piece
+                            // (whole); the rest of the ramp stays a normal road.
+                            var rampStart = SplitRoads.RampStartFor(info);
+                            if (rampStart == null)
+                            {
+                                why = "the " + info.name + "'s start piece wasn't made when the city loaded";
+                                break;
+                            }
+                            if (rampStart == info) continue;
+                            float rampLength = segments[s].m_averageLength;
+                            SplitSegment(s, new float[0], new[] { rampStart }, build);
+                            made.Add(info.name + " #" + s + " whole (" + rampLength.ToString("F0") + " m)");
+                            continue;
+                        }
                         bool isGround = SplitRoads.IsSplit(info);
                         var target = isGround ? groundStart : fullStart;
                         if (isGround) ground = true; else full = true;
@@ -617,13 +632,22 @@ namespace RealisticRoads
                 args[0] = from;
                 args[1] = to;
                 args[2] = fromStartNode;
-                for (int i = 3; i < p.Length; i++)
-                    args[i] = p[i].IsOptional && p[i].DefaultValue != DBNull.Value ? p[i].DefaultValue
-                        : p[i].ParameterType.IsValueType ? Activator.CreateInstance(p[i].ParameterType) : null;
+                for (int i = 3; i < p.Length; i++) args[i] = TmpeArgument(p[i]);
+                if (!tmpeSignatureLogged)
+                {
+                    tmpeSignatureLogged = true;
+                    var shown = new List<string>();
+                    for (int i = 0; i < p.Length; i++) shown.Add(p[i].ParameterType.Name + (i >= 3 ? "=" + args[i] : ""));
+                    Mod.Log("TM:PE lane connections made with " + m.Name + "(" + string.Join(", ", shown.ToArray()) + ")");
+                }
                 try
                 {
                     var result = m.Invoke(manager, args);
-                    return !(result is bool) || (bool)result;
+                    if (result is bool && !(bool)result) return false;
+                    // Read back where TM:PE can say: a call that took no group
+                    // returns true and joins nothing.
+                    bool? there = TmpeConnected(manager, from, to, fromStartNode);
+                    return there ?? true;
                 }
                 catch (Exception e)
                 {
@@ -632,6 +656,51 @@ namespace RealisticRoads
                 }
             }
             return false;
+        }
+
+        private static bool tmpeSignatureLogged;
+
+        // An argument after (from, to, startNode): its default if it has one; a
+        // group of lanes (TM:PE's LaneEndTransitionGroup, a flags enum) is the
+        // road (car) group, so the connection is for cars (0 would be no group).
+        private static object TmpeArgument(System.Reflection.ParameterInfo p)
+        {
+            var type = p.ParameterType;
+            if (type.IsEnum)
+            {
+                foreach (string name in new[] { "Road", "Car", "Vehicle", "All" })
+                    if (Enum.IsDefined(type, name)) return Enum.Parse(type, name);
+                long all = 0;
+                foreach (var value in Enum.GetValues(type)) all |= Convert.ToInt64(value);
+                return Enum.ToObject(type, all);
+            }
+            if (p.IsOptional && p.DefaultValue != DBNull.Value) return p.DefaultValue;
+            return type.IsValueType ? Activator.CreateInstance(type) : null;
+        }
+
+        // Whether TM:PE has the connection (its AreLanesConnected); null if it can't say.
+        private static bool? TmpeConnected(object manager, uint from, uint to, bool fromStartNode)
+        {
+            foreach (var m in manager.GetType().GetMethods())
+            {
+                if (m.Name != "AreLanesConnected" || m.ReturnType != typeof(bool)) continue;
+                var p = m.GetParameters();
+                if (p.Length < 3 || p[0].ParameterType != typeof(uint) || p[1].ParameterType != typeof(uint) || p[2].ParameterType != typeof(bool)) continue;
+                var args = new object[p.Length];
+                args[0] = from;
+                args[1] = to;
+                args[2] = fromStartNode;
+                for (int i = 3; i < p.Length; i++) args[i] = TmpeArgument(p[i]);
+                try
+                {
+                    return (bool)m.Invoke(manager, args);
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+            return null;
         }
 
         private const int TmpeAttempts = 6;
@@ -732,6 +801,7 @@ namespace RealisticRoads
                               ", way out of the node " + V(dir) + ", square end " + SplitRoads.SquareEnd(s, node, dir));
                     lines.Add("    far node #" + far + " (" + (farNode.Info != null ? farNode.Info.name : "?") + ", flags " + farNode.m_flags + ") at " +
                               V(farNode.m_position) + ", " + Ground(farNode.m_position, farNode.m_position.y));
+                    lines.Add("    its piece: " + NodeModels(seg.Info, n.m_flags) + "; " + LaneEnds(s, node));
                     foreach (bool left in new[] { true, false })
                     {
                         Vector3 corner, cornerDir;
@@ -775,6 +845,128 @@ namespace RealisticRoads
             {
                 Mod.LogError("Node dump #" + node + " failed", e);
             }
+        }
+
+        // A road's junction pieces (node models) and how many of them the
+        // node's flags let it draw there; its corner offsets.
+        private static string NodeModels(NetInfo info, NetNode.Flags flags)
+        {
+            if (info == null) return "no info";
+            int all = 0, drawn = 0;
+            if (info.m_nodes != null)
+            {
+                var requiredField = typeof(NetInfo.Node).GetField("m_flagsRequired");
+                var forbiddenField = typeof(NetInfo.Node).GetField("m_flagsForbidden");
+                foreach (var model in info.m_nodes)
+                {
+                    if (model == null) continue;
+                    all++;
+                    if (requiredField == null || forbiddenField == null) continue;
+                    var required = (NetNode.Flags)requiredField.GetValue(model);
+                    var forbidden = (NetNode.Flags)forbiddenField.GetValue(model);
+                    if ((flags & (required | forbidden)) == required) drawn++;
+                }
+            }
+            return all + " junction piece(s), " + drawn + " drawn with these flags; corner offset " + info.m_minCornerOffset.ToString("F1") + "/" +
+                   info.m_maxCornerOffset.ToString("F1") + ", ends clipped " + info.m_clipSegmentEnds;
+        }
+
+        // A segment's car lanes at 'node': how many, and with TM:PE how many
+        // have lane connections of their own there.
+        private static string LaneEnds(ushort segment, ushort node)
+        {
+            var net = NetManager.instance;
+            var seg = net.m_segments.m_buffer[segment];
+            var info = seg.Info;
+            if (info == null || info.m_lanes == null) return "no lanes";
+            bool start = seg.m_startNode == node;
+            int cars = 0, connected = 0;
+            bool asked = false;
+            object manager = null;
+            System.Reflection.MethodInfo has = null;
+            TmpeManager("LaneConnectionManager", out manager);
+            if (manager != null)
+                foreach (var m in manager.GetType().GetMethods())
+                {
+                    if ((m.Name != "HasOutgoingConnections" && m.Name != "HasConnections") || m.ReturnType != typeof(bool)) continue;
+                    var p = m.GetParameters();
+                    if (p.Length >= 2 && p[0].ParameterType == typeof(uint) && p[1].ParameterType == typeof(bool)) { has = m; break; }
+                }
+            uint lane = seg.m_lanes;
+            for (int i = 0; i < info.m_lanes.Length && lane != 0; i++)
+            {
+                var laneInfo = info.m_lanes[i];
+                if ((laneInfo.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None &&
+                    (laneInfo.m_vehicleType & VehicleInfo.VehicleType.Car) != VehicleInfo.VehicleType.None)
+                {
+                    cars++;
+                    if (has != null)
+                    {
+                        var p = has.GetParameters();
+                        var args = new object[p.Length];
+                        args[0] = lane;
+                        args[1] = start;
+                        for (int k = 2; k < p.Length; k++) args[k] = TmpeArgument(p[k]);
+                        try
+                        {
+                            if ((bool)has.Invoke(manager, args)) connected++;
+                            asked = true;
+                        }
+                        catch { }
+                    }
+                }
+                lane = net.m_lanes.m_buffer[lane].m_nextLane;
+            }
+            return cars + " car lane(s)" + (asked ? ", " + connected + " with TM:PE lane connections out of here" : "");
+        }
+
+        // The Ctrl+Shift+D key in RR's tool: the node aimed at (else the nearest
+        // within NearReach of 'p'), and every node stacked with it (a deck's node
+        // over a road's), written to the log as the median ramp nodes are.
+        private const float NearReach = 20f;
+        private const float StackReach = 6f;
+
+        public static void DumpNodesNear(ushort aimed, Vector3 p)
+        {
+            SimulationManager.instance.AddAction(() =>
+            {
+                try
+                {
+                    var nodes = NetManager.instance.m_nodes.m_buffer;
+                    ushort best = aimed;
+                    if (best == 0 || (nodes[best].m_flags & NetNode.Flags.Created) == NetNode.Flags.None)
+                    {
+                        best = 0;
+                        float nearest = NearReach;
+                        for (int i = 1; i < nodes.Length; i++)
+                        {
+                            if ((nodes[i].m_flags & NetNode.Flags.Created) == NetNode.Flags.None) continue;
+                            float d = CurveMath.FlatDistance(nodes[i].m_position, p);
+                            if (d < nearest)
+                            {
+                                nearest = d;
+                                best = (ushort)i;
+                            }
+                        }
+                    }
+                    if (best == 0)
+                    {
+                        Mod.Log("Node dump asked at " + V(p) + ": no node within " + NearReach.ToString("F0") + " m");
+                        return;
+                    }
+                    Vector3 at = nodes[best].m_position;
+                    var stacked = new List<ushort> { best };
+                    for (int i = 1; i < nodes.Length; i++)
+                        if (i != best && (nodes[i].m_flags & NetNode.Flags.Created) != NetNode.Flags.None && CurveMath.FlatDistance(nodes[i].m_position, at) <= StackReach)
+                            stacked.Add((ushort)i);
+                    Mod.Log("Node dump asked at " + V(p) + ": " + stacked.Count + " node(s) there");
+                    foreach (ushort node in stacked) DumpNode(node);
+                }
+                catch (Exception e)
+                {
+                    Mod.LogError("Node dump asked at " + V(p) + " failed", e);
+                }
+            });
         }
 
         public static void PollMedianOrigins()

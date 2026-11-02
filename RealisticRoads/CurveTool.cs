@@ -211,7 +211,7 @@ namespace RealisticRoads
             {
                 // A median ramp road's piece (picked from one built) draws as the
                 // game's road it was made from: the pieces are never drawn alone.
-                if (SplitRoads.IsSplit(value)) value = SplitRoads.OriginalOf(value);
+                if (SplitRoads.IsSplit(value) || SplitRoads.IsFullStart(value)) value = SplitRoads.OriginalOf(value);
                 else if (SplitRoads.IsRamp(value))
                     value = PrefabCollection<NetInfo>.FindLoaded(SplitRoads.RampLanes(value) > 1 ? "Medium Road" : "Basic Road") ?? value;
                 if (pickingBeside && value != null && selectedNetwork != null && value != selectedNetwork)
@@ -1085,6 +1085,12 @@ namespace RealisticRoads
                 {
                     e.Use();
                     NetworkBuilder.UndoLast();
+                }
+                else if (e.keyCode == KeyCode.D && e.control && e.shift)
+                {
+                    // The node under the mouse (and any stacked with it) to the log.
+                    e.Use();
+                    NetworkBuilder.DumpNodesNear(aimNode, aimPosition);
                 }
                 else if (e.keyCode == KeyCode.PageUp || e.keyCode == KeyCode.PageDown)
                 {
@@ -2218,10 +2224,13 @@ namespace RealisticRoads
             if (waiting.AnyBuilt) NetworkBuilder.UndoLast();
         }
 
-        // The full road built before a median ramp's node on open ground: one
-        // start piece long (it becomes one whole). 20 m dug a
-        // trench in the owner's test, shorter than RR ever builds a road.
-        private const float LeadIn = SplitRoads.StartLength;
+        // The full road built before a median ramp's node on open ground: its
+        // StartLength by the node becomes the start piece (no junction pieces),
+        // and LeadInRest beyond it stays the plain road, so the free end has the
+        // road's own end and junction pieces when another road joins it there.
+        // (A lead-in only one start piece long left that end drawing nothing.)
+        private const float LeadInRest = 16f;
+        private const float LeadIn = SplitRoads.StartLength + LeadInRest;
 
         // The node of the full road (any road but a median ramp's pieces) at 'at'.
         private static ushort FullRoadEndAt(Vector3 at, NetInfo road)
