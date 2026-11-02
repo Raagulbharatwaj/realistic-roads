@@ -353,14 +353,24 @@ namespace RealisticRoads
             Mod.Log("Median ramp roads: " + piece.name + ": start piece (no node models, corner offset 0, ends not clipped)");
         }
 
-        // A ramp set up on the ground so it never raises
-        // or clips the ground, only lowers it (it runs in the ground road's gap,
-        // which already shapes the ground there), and its corners are at the node.
+        // A ramp set up on the ground so it never raises or clips the ground,
+        // only lowers it (it runs in the ground road's gap, which already shapes
+        // the ground there).
         private static void SetUpRampGround(NetInfo ramp)
         {
             ramp.m_flattenTerrain = false;
             ramp.m_lowerTerrain = true;
             ramp.m_clipTerrain = false;
+        }
+
+        // The ramp's start piece: only its segment at the node where it leaves
+        // (or lands in) the road is this (NetworkBuilder.MedianTransition). No
+        // junction pieces there and its corners at the node. The rest of the
+        // ramp keeps the road's own junction pieces and corners, so its far end
+        // joins a deck or road like any road does.
+        private static void SetUpRampStart(NetInfo ramp)
+        {
+            NoJunctionPieces(ramp);
             ramp.m_minCornerOffset = 0f;
             ramp.m_maxCornerOffset = 0f;
         }
@@ -436,6 +446,34 @@ namespace RealisticRoads
         }
 
         private static readonly List<string> allRampNames = new List<string>();   // every ramp road made (their pillars)
+        private const string RampStartTag = " Start";
+        private static readonly Dictionary<string, string> rampStartNames = new Dictionary<string, string>();   // ramp -> its start piece, by name
+        private static readonly Dictionary<NetInfo, NetInfo> rampStarts = new Dictionary<NetInfo, NetInfo>();
+
+        // A ramp's ground version's raised versions: its elevated one only.
+        private static void LinkVersions(NetInfo ground, NetInfo elevated)
+        {
+            var ai = ground.GetComponent<NetAI>();
+            foreach (var field in new[] { "m_elevatedInfo", "m_bridgeInfo", "m_slopeInfo", "m_tunnelInfo" })
+            {
+                var f = ai != null ? ai.GetType().GetField(field, BindingFlags.Public | BindingFlags.Instance) : null;
+                if (f != null && f.FieldType == typeof(NetInfo)) f.SetValue(ai, field == "m_elevatedInfo" || field == "m_bridgeInfo" ? elevated : null);
+            }
+        }
+
+        // The start piece of a ramp (the same version: ground or elevated); the
+        // piece itself if it is one; null if none.
+        public static NetInfo RampStartFor(NetInfo ramp)
+        {
+            if (ramp == null) return null;
+            lock (variants)
+            {
+                NetInfo start;
+                if (rampStarts.TryGetValue(ramp, out start)) return start;
+                foreach (var made in rampStarts.Values) if (made == ramp) return ramp;
+            }
+            return null;
+        }
 
         private static void MakeRamp(NetInfo road, int lanes, float half, List<NetInfo> made)
         {
@@ -447,23 +485,32 @@ namespace RealisticRoads
             var narrowElevated = Narrow(elevated, MedianRampPrefix + lanes + " Elevated", half);
             var narrow = Narrow(road, MedianRampPrefix + lanes, half);
             if (narrow == null || narrowElevated == null) return;
+            // Its start pieces (the segment at the ramp's node only).
+            var startElevated = Narrow(elevated, MedianRampPrefix + lanes + RampStartTag + " Elevated", half);
+            var start = Narrow(road, MedianRampPrefix + lanes + RampStartTag, half);
+            if (start == null || startElevated == null) return;
+            SetUpRampStart(startElevated);
+            SetUpRampStart(start);
             // The ground version's raised versions: the narrow elevated one (no bridge
             // trusses, no slope or tunnel: a ramp never goes below the ground).
-            var narrowAi = narrow.GetComponent<NetAI>();
-            foreach (var field in new[] { "m_elevatedInfo", "m_bridgeInfo", "m_slopeInfo", "m_tunnelInfo" })
-            {
-                var f = narrowAi != null ? narrowAi.GetType().GetField(field, BindingFlags.Public | BindingFlags.Instance) : null;
-                if (f != null && f.FieldType == typeof(NetInfo)) f.SetValue(narrowAi, field == "m_elevatedInfo" || field == "m_bridgeInfo" ? narrowElevated : null);
-            }
+            LinkVersions(narrow, narrowElevated);
+            LinkVersions(start, startElevated);
             string title = lanes + "-lane median ramp";
             Name(narrow, title, "A ramp rising out of a road's middle, built by Realistic Roads.");
             Name(narrowElevated, title + " (elevated)", "A ramp rising out of a road's middle, built by Realistic Roads.");
+            Name(start, title + " (start)", "A ramp rising out of a road's middle, built by Realistic Roads.");
+            Name(startElevated, title + " (start, elevated)", "A ramp rising out of a road's middle, built by Realistic Roads.");
             made.Add(narrowElevated);
             made.Add(narrow);
+            made.Add(startElevated);
+            made.Add(start);
             lock (variants)
             {
                 rampNames[lanes] = narrow.name;
                 allRampNames.Add(narrow.name);
+                allRampNames.Add(start.name);
+                rampStartNames[narrow.name] = start.name;
+                rampStartNames[narrowElevated.name] = startElevated.name;
             }
             Mod.Log("Median ramps: " + narrow.name + " made from " + road.name + ", " + (2f * narrow.m_halfWidth).ToString("F1") + " m wide (elevated " +
                     (2f * narrowElevated.m_halfWidth).ToString("F1") + " m), lanes " + LaneList(narrow));
@@ -561,7 +608,6 @@ namespace RealisticRoads
                     var lod = Squeeze(node.m_lodMesh, roadHalf, median, keep, scale, inner, surface, gutter);
                     if (lod != null) node.m_lodMesh = lod;
                 }
-            NoJunctionPieces(copy);
             SetUpRampGround(copy);
             HideFromMenus(copy);
             return copy;
@@ -904,6 +950,13 @@ namespace RealisticRoads
                     var info = PrefabCollection<NetInfo>.FindLoaded(pair.Value);
                     if (info != null) ramps[pair.Key] = info;
                 }
+                rampStarts.Clear();
+                foreach (var pair in rampStartNames)
+                {
+                    var ramp = PrefabCollection<NetInfo>.FindLoaded(pair.Key);
+                    var start = PrefabCollection<NetInfo>.FindLoaded(pair.Value);
+                    if (ramp != null && start != null) rampStarts[ramp] = start;
+                }
             }
             // The ramps' elevated versions on the highway ramp's slim pillar (the
             // road's own is made for its full width).
@@ -928,7 +981,7 @@ namespace RealisticRoads
                     }
                 }
             active = found > 0;
-            if (variants.Count > 0) Mod.Log("Median ramp roads: " + found + " ground road(s) and " + ramps.Count + " ramp(s) ready");
+            if (variants.Count > 0) Mod.Log("Median ramp roads: " + found + " ground road(s) and " + ramps.Count + " ramp(s) ready (" + rampStarts.Count + " ramp start piece(s))");
         }
 
         // Main thread, the city unloading: its copies go (made again for the next).
@@ -939,6 +992,7 @@ namespace RealisticRoads
             {
                 splitInfos.Clear();
                 ramps.Clear();
+                rampStarts.Clear();
                 fullStarts.Clear();
                 foreach (var list in variants.Values) foreach (var variant in list) variant.Info = null;
             }
