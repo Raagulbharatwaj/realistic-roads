@@ -15,7 +15,7 @@ namespace RealisticRoads
     {
         // Which source this build is from, in the log, to tell an old or second
         // copy of the mod from the current one. Changed with each tested feature.
-        public const string SourceTag = "median-ramp-deck-level";
+        public const string SourceTag = "median-ramp-taper";
 
         public string Name => "Realistic Roads (beta)";
         public string Description => "Plan your roads and add layers to your city: draw a whole route, choose how it crosses everything, stack decks over and under streets.";
@@ -33,7 +33,16 @@ namespace RealisticRoads
 
         // Tests of the median ramp node's geometry: RR's two changes to how the
         // game draws it can be switched off, to see what each one does.
-        private static bool squareRampEnds = false, hideRampJunctions = true;
+        private static bool squareRampEnds = false, hideRampJunctions = true, flipRampTaper = false;
+
+        // The full road's last stretch before a median ramp's node slants its
+        // outer lanes the other way along it (if the game draws its model the
+        // other way round from what RR expects). Read each time one is built.
+        public static bool FlipRampTaper
+        {
+            get { return flipRampTaper; }
+            set { flipRampTaper = value; SetSetting("RealisticRoads.FlipRampTaper", value); }
+        }
 
         // The roads at a median ramp's node end square at its centre (SplitRoadsCornerPatch).
         public static bool SquareRampEnds
@@ -56,6 +65,7 @@ namespace RealisticRoads
             // of 0 squares them; RR's own corner override is a test now.
             squareRampEnds = Setting("RealisticRoads.SquareRampEndsOverride", false);
             hideRampJunctions = Setting("RealisticRoads.HideRampJunctions", true);
+            flipRampTaper = Setting("RealisticRoads.FlipRampTaper", false);
         }
 
         private static bool Setting(string key, bool fallback)
@@ -150,6 +160,7 @@ namespace RealisticRoads
             var test = helper.AddGroup("Median ramp node tests");
             test.AddCheckbox("RR's own square ends at a median ramp's node (off: the game's corners with offset 0)", SquareRampEnds, value => SquareRampEnds = value);
             test.AddCheckbox("Ramp and start pieces draw no junction models (takes effect when a city loads)", HideRampJunctions, value => HideRampJunctions = value);
+            test.AddCheckbox("Flip the lane taper before a median ramp's node (if its lanes slant away from the ramp; for ramps built after)", FlipRampTaper, value => FlipRampTaper = value);
         }
 
         // Safe to call from any thread, including the simulation thread.

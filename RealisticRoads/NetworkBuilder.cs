@@ -348,9 +348,18 @@ namespace RealisticRoads
                         bool isGround = SplitRoads.IsSplit(info);
                         var target = isGround ? groundStart : fullStart;
                         if (isGround) ground = true; else full = true;
-                        if (info == target) continue;
+                        if (info == target || (!isGround && SplitRoads.IsFullStart(info))) continue;
                         float length = Mathf.Max(segments[s].m_averageLength, 1f);
                         bool fromStart = segments[s].m_startNode == node;
+                        if (!isGround)
+                        {
+                            // The full road's piece by the node widens to the ground
+                            // road's lanes along it (the slide all done at the node:
+                            // its end node if the node isn't its start).
+                            bool invert = (segments[s].m_flags & NetSegment.Flags.Invert) != NetSegment.Flags.None;
+                            var taper = SplitRoads.FullTaperFor(info, groundStart, fromStart == Mod.FlipRampTaper, invert);
+                            if (taper != null) target = taper;
+                        }
                         ushort far = fromStart ? segments[s].m_endNode : segments[s].m_startNode;
                         if (length <= SplitRoads.StartLength + MinPiece)
                         {

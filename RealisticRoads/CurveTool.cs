@@ -1703,10 +1703,16 @@ namespace RealisticRoads
         private const float DeckLevelStep = 8f;
         private const float DeckLevelBeyond = 30f;
 
+        // The lowest a median ramp levels off: the lowest deck in RR that every
+        // road's median lights and trees fit under (the deck over the Large Road
+        // with Median, 14.6 m), so any deck going on from its top joins level and
+        // nothing stands through it. Higher where the roads there need it.
+        public const float MinMedianRampLevel = 14.6f;
+
         private float MedianDeckLevel(List<Vector3> controls, ushort endNode, out string over)
         {
             over = null;
-            float best = Decks.Clearance;
+            float best = MinMedianRampLevel;
             float half = Net != null ? Net.m_halfWidth : 4f;
             var samples = new List<Vector3>();
             for (int i = 0; i < controls.Count; i++)

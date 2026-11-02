@@ -102,6 +102,21 @@ namespace RealisticRoads
                 {
                     Mod.LogError("Making the median ramp start piece of " + road.name + " failed", e);
                 }
+                // Its tapered start pieces: one for each ground road (its lanes
+                // slide out to that ground road's), each way along the segment.
+                int[] tapered = road.name == "Large Road" ? new[] { 1, 2 } : new int[0];
+                foreach (int inner in tapered)
+                    foreach (bool atEnd in new[] { false, true })
+                        foreach (bool invert in new[] { false, true })
+                            try
+                            {
+                                var taper = MakeTaper(road, inner, inner == 1 ? MedianGap2 : MedianGap4, atEnd, invert);
+                                if (taper != null) made.Add(taper);
+                            }
+                            catch (Exception e)
+                            {
+                                Mod.LogError("Making the median ramp taper of " + road.name + " (" + inner + ") failed", e);
+                            }
             }
             string collectionName = ((Component)collection).gameObject.name;
             try
@@ -950,6 +965,12 @@ namespace RealisticRoads
                     var info = PrefabCollection<NetInfo>.FindLoaded(pair.Value);
                     if (info != null) ramps[pair.Key] = info;
                 }
+                tapers.Clear();
+                foreach (var pair in taperNames)
+                {
+                    var info = PrefabCollection<NetInfo>.FindLoaded(pair.Value);
+                    if (info != null) tapers[pair.Key] = info;
+                }
                 rampStarts.Clear();
                 foreach (var pair in rampStartNames)
                 {
@@ -981,7 +1002,8 @@ namespace RealisticRoads
                     }
                 }
             active = found > 0;
-            if (variants.Count > 0) Mod.Log("Median ramp roads: " + found + " ground road(s) and " + ramps.Count + " ramp(s) ready (" + rampStarts.Count + " ramp start piece(s))");
+            if (variants.Count > 0) Mod.Log("Median ramp roads: " + found + " ground road(s) and " + ramps.Count + " ramp(s) ready (" + rampStarts.Count + " ramp start piece(s), " +
+                                            tapers.Count + " taper(s))");
         }
 
         // Main thread, the city unloading: its copies go (made again for the next).
@@ -993,6 +1015,7 @@ namespace RealisticRoads
                 splitInfos.Clear();
                 ramps.Clear();
                 rampStarts.Clear();
+                tapers.Clear();
                 fullStarts.Clear();
                 foreach (var list in variants.Values) foreach (var variant in list) variant.Info = null;
             }
@@ -1006,7 +1029,12 @@ namespace RealisticRoads
         // The road a split copy was made from (the road itself if it is none).
         public static NetInfo OriginalOf(NetInfo info)
         {
-            if (IsFullStart(info)) return PrefabCollection<NetInfo>.FindLoaded(info.name.Substring(StartPrefix.Length)) ?? info;
+            if (IsFullStart(info))
+            {
+                string roadName;
+                lock (variants) if (!taperRoads.TryGetValue(info.name, out roadName)) roadName = info.name.Substring(StartPrefix.Length);
+                return PrefabCollection<NetInfo>.FindLoaded(roadName) ?? info;
+            }
             if (!IsSplit(info)) return info;
             lock (variants)
                 foreach (var pair in variants)
@@ -1067,6 +1095,159 @@ namespace RealisticRoads
 
         private static readonly Dictionary<string, string> fullStartNames = new Dictionary<string, string>();   // by the road's name
         private static readonly Dictionary<string, NetInfo> fullStarts = new Dictionary<string, NetInfo>();
+
+        // --- the full road's taper before a median ramp's node --------------------
+        // The full road's start piece (StartLength by the node) with its outer
+        // lanes, their markings, the kerb and the sidewalk sliding out (or in) along
+        // it to where the ground road has them, so at the node they meet the
+        // ground road's edge to edge instead of jumping across there. Its inner
+        // lanes (those going up the ramp) stay. Its lanes for traffic stay the
+        // road's (vehicles move over at the node); its sidewalk lanes (and their
+        // lights) are where the ground road has them, inside the sidewalk all along.
+        // 'atEnd': the full shift at the segment's end node (else its start);
+        // 'invert': for a segment with the Invert flag (the game may draw some
+        // models turned round then: each model is slanted for how it is drawn).
+        private static readonly Dictionary<string, string> taperNames = new Dictionary<string, string>();   // by TaperKey
+        private static readonly Dictionary<string, NetInfo> tapers = new Dictionary<string, NetInfo>();
+        private static readonly Dictionary<string, string> taperRoads = new Dictionary<string, string>();   // taper's name -> its road's
+        private const float TaperMarking = 0.25f;   // the lane's edge (its marking) kept out of the stretched strip
+
+        private static string TaperKey(string road, int inner, bool atEnd, bool invert) => road + "|" + inner + "|" + atEnd + "|" + invert;
+
+        private static NetInfo MakeTaper(NetInfo road, int inner, float gapHalf, bool atEnd, bool invert)
+        {
+            float cut = CutFor(road, inner);
+            if (cut <= 0f) return null;
+            float widen = gapHalf - cut;
+            float edge = road.m_halfWidth, kerb = road.m_halfWidth - road.m_pavementWidth;
+            bool inside = kerb > cut + 0.5f && edge - (kerb + widen) >= MinSidewalk;
+            if (!inside || widen < 0.05f) return null;   // only outward, into the sidewalk (as the ground road)
+            // The strip that stretches: the first ground lane's plain middle.
+            float laneOuter = float.MaxValue;
+            foreach (var lane in road.m_lanes)
+                if (lane != null && (lane.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None && Mathf.Abs(lane.m_position) - lane.m_width * 0.5f >= cut - 0.01f)
+                    laneOuter = Mathf.Min(laneOuter, Mathf.Abs(lane.m_position) + lane.m_width * 0.5f);
+            if (laneOuter == float.MaxValue) return null;
+            float from = cut + TaperMarking, to = laneOuter - TaperMarking;
+            if (to - from < 0.5f) return null;
+            string name = StartPrefix + road.name + " Taper " + inner + (atEnd ? " End" : " Start") + (invert ? " Inverted" : "");
+            var go = UnityEngine.Object.Instantiate(road.gameObject);
+            go.name = name;
+            if (road.transform != null && go.transform != null) go.transform.parent = road.transform.parent;
+            var copy = go.GetComponent<NetInfo>();
+            if (copy == null)
+            {
+                UnityEngine.Object.Destroy(go);
+                return null;
+            }
+            OwnItems(copy);
+            foreach (var lane in copy.m_lanes)
+            {
+                if (lane == null || (lane.m_laneType & NetInfo.LaneType.Vehicle) != NetInfo.LaneType.None) continue;
+                float a = Mathf.Abs(lane.m_position);
+                if (a < kerb - 0.01f) continue;
+                float moved = Across(a, cut, widen, kerb, edge);
+                lane.m_position = lane.m_position < 0f ? -moved : moved;
+            }
+            var flags = NetSegment.Flags.Created | (invert ? NetSegment.Flags.Invert : NetSegment.Flags.None);
+            int turned = 0, models = 0;
+            if (copy.m_segments != null)
+                foreach (var segment in copy.m_segments)
+                {
+                    if (segment == null) continue;
+                    models++;
+                    bool turnAround = TurnsAround(segment, flags);
+                    if (turnAround) turned++;
+                    bool atMaxZ = atEnd != turnAround;   // the model's +z towards the segment's end node
+                    var mesh = TaperMesh(segment.m_mesh, cut, widen, kerb, edge, from, to, atMaxZ);
+                    if (mesh != null) segment.m_mesh = mesh;
+                    var lod = TaperMesh(segment.m_lodMesh, cut, widen, kerb, edge, from, to, atMaxZ);
+                    if (lod != null) segment.m_lodMesh = lod;
+                }
+            SetUpStartPiece(copy);
+            HideFromMenus(copy);
+            Name(copy, Title(road) + " (widening where a median ramp leaves it)", "Built by Realistic Roads where a ramp rises out of the road's middle.");
+            lock (variants)
+            {
+                taperNames[TaperKey(road.name, inner, atEnd, invert)] = name;
+                taperRoads[name] = road.name;
+            }
+            Mod.Log("Median ramp roads: " + name + ": outer lanes, kerb and sidewalk slide " + widen.ToString("+0.0;-0.0") + " m along it (stretching " +
+                    from.ToString("F2") + "-" + to.ToString("F2") + " m from the centre), " + models + " model(s), " + turned + " drawn turned round");
+            return copy;
+        }
+
+        // Whether the game draws this model turned round on a segment with 'flags'
+        // (its forward flags don't fit, its backward ones do).
+        private static bool TurnsAround(NetInfo.Segment segment, NetSegment.Flags flags)
+        {
+            try
+            {
+                var type = typeof(NetInfo.Segment);
+                long Get(string field)
+                {
+                    var f = type.GetField(field, BindingFlags.Public | BindingFlags.Instance);
+                    return f != null ? Convert.ToInt64(f.GetValue(segment)) : 0L;
+                }
+                long have = Convert.ToInt64(flags);
+                long fr = Get("m_forwardRequired"), ff = Get("m_forwardForbidden"), br = Get("m_backwardRequired"), bf = Get("m_backwardForbidden");
+                bool forward = (have & (fr | ff)) == fr;
+                bool backward = (have & (br | bf)) == br;
+                return !forward && backward;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // A road model with its outer part slid by 'widen' at one end (none at the
+        // other, in proportion between): within 'from' of the centre unchanged;
+        // 'from' to 'to' stretched; past 'to' as the ground road has it (Across).
+        // 'atMaxZ': the full slide at the model's +z end.
+        private static Mesh TaperMesh(Mesh mesh, float cut, float widen, float kerb, float edge, float from, float to, bool atMaxZ)
+        {
+            var sliced = SliceAcross(mesh, new[] { -from, from, -to, to, -kerb, kerb, -edge, edge });
+            if (sliced == null) return null;
+            var vertices = sliced.Vertices;
+            float zMin = float.MaxValue, zMax = float.MinValue;
+            foreach (var v in vertices)
+            {
+                zMin = Mathf.Min(zMin, v.z);
+                zMax = Mathf.Max(zMax, v.z);
+            }
+            if (zMax - zMin < 0.01f) return null;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                float x = vertices[i].x, a = Mathf.Abs(x);
+                float f = (vertices[i].z - zMin) / (zMax - zMin);
+                if (!atMaxZ) f = 1f - f;
+                float target;
+                if (a <= from) target = a;
+                else if (a < to) target = a + widen * (a - from) / (to - from);
+                else target = Across(a, cut, widen, kerb, edge);
+                a += f * (target - a);
+                vertices[i] = new Vector3(x < 0f ? -a : a, vertices[i].y, vertices[i].z);
+            }
+            return sliced.Make(mesh, " (taper)");
+        }
+
+        // The tapered start piece of 'road' for the ground road 'ground' (or its
+        // start piece), its full slide at the segment's end node ('atEnd') or start;
+        // null if none (that road keeps its plain start piece).
+        public static NetInfo FullTaperFor(NetInfo road, NetInfo ground, bool atEnd, bool invert)
+        {
+            if (road == null || ground == null) return null;
+            lock (variants)
+                foreach (var pair in variants)
+                {
+                    var match = pair.Value.Find(v => v.Info == ground);
+                    if (match == null) continue;
+                    NetInfo taper;
+                    return tapers.TryGetValue(TaperKey(road.name, match.Inner, atEnd, invert), out taper) ? taper : null;
+                }
+            return null;
+        }
 
         // A copy of the full road that draws nothing at a junction (a start piece).
         private static NetInfo MakeFullStart(NetInfo road)
