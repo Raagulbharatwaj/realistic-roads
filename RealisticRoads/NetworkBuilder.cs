@@ -192,8 +192,7 @@ namespace RealisticRoads
 
         // A median ramp road drawn along an existing road: that road, from the
         // ramp's node ('origin') on under the line ('line', from that node
-        // outward), becomes the median ramp road's ground road, the way VOP's
-        // part B replaces the road beside its ramp: whole segments while the
+        // outward), becomes the median ramp road's ground road, replacing the road beside the ramp: whole segments while the
         // road runs under the line (through junctions, which stay junctions),
         // and the one the line ends in is cut there (the rest stays the road
         // it was). Only the road the ramp rises out of: a ground road with
@@ -299,10 +298,10 @@ namespace RealisticRoads
             });
         }
 
-        // The node where a median ramp leaves (or lands in) the road, made like
-        // VOP's: the full road's last StartLength there becomes its start piece
-        // ('fullStart', VOP's part A) and the ground road's first becomes its
-        // ('groundStart', part B); neither draws anything at that junction, so
+        // The node where a median ramp leaves (or lands in) the road, made with
+        // start pieces: the full road's last StartLength there becomes its start
+        // piece ('fullStart') and the ground road's first becomes its
+        // ('groundStart'); neither draws anything at that junction, so
         // only the roads' own surfaces meet there, squared off edge to edge
         // (SplitRoadsCornerPatch). A longer segment is cut, the piece by the
         // node changed, the rest kept; a shorter one changes whole, unless its
@@ -412,8 +411,7 @@ namespace RealisticRoads
         }
 
         // The node where a median ramp road's ramp leaves (or lands in) the
-        // road, set up the way the VOP overpasses set theirs (read from their
-        // assets): no traffic lights (the game's own setting, kept by marking
+        // road, set up as a ramp junction: no traffic lights (the game's own setting, kept by marking
         // them custom), and with TM:PE no pedestrian crossing on any road end
         // there and entering a blocked junction allowed. Queued after the
         // roads at it are built.
@@ -440,7 +438,7 @@ namespace RealisticRoads
                     int tmpeSet = 0;
                     string tmpe = TmpeManager("JunctionRestrictionsManager", out object restrictions);
                     // With TM:PE its own traffic light setting rules the node (it puts
-                    // the game's back): off there too, as VOP's assets have it.
+                    // the game's back): off there too.
                     TmpeManager("TrafficLightManager", out object trafficLights);
                     bool tmpeLightsOff = trafficLights != null && TmpeLightsOff(trafficLights, node);
                     for (int i = 0; i < 8; i++)
@@ -476,8 +474,8 @@ namespace RealisticRoads
             });
         }
 
-        // The lanes at a median ramp's node joined the way VOP's assets join
-        // them (their TM:PE lane connections): the full road's inner lanes each
+        // The lanes at a median ramp's node joined with TM:PE lane
+        // connections: the full road's inner lanes each
         // way to the ramp's lanes, its outer ones to the ground road's, and back
         // the same way. Lanes are told apart by where they end at the node
         // across the ramp's direction there (which side, how far out), so it

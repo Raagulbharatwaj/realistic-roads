@@ -24,7 +24,7 @@ namespace RealisticRoads
         // for a 4-lane one) and its parapets stay clear of the ground lanes.
         public const string MedianPrefix = "RR Median Ground ";
         // The pieces at the node where a median ramp leaves (or lands in) the
-        // road, like VOP's parts A and B: the full road's last stretch and the
+        // road: the full road's last stretch and the
         // ground road's first, copies that draw nothing at a junction, so
         // there only the three roads' own surfaces meet (no crosswalks, kerbs
         // or junction corners).
@@ -236,7 +236,7 @@ namespace RealisticRoads
                     var lod = Widen(node.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
                     if (lod != null) node.m_lodMesh = lod;
                 }
-            if (start) VopStartPiece(copy);
+            if (start) SetUpStartPiece(copy);
             HideFromMenus(copy);
             Name(copy, Title(road) + " (" + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes beside a median ramp" + (start ? ", where it starts" : "") + ")",
                 "Built by Realistic Roads beside a ramp in the road's middle.");
@@ -339,25 +339,24 @@ namespace RealisticRoads
         // would wrap across that road's lanes. The other roads' junction
         // pieces and the ramp's square end meet there instead. Its own joins
         // (two ramp segments, a bend) keep theirs. By name: the game's fields.
-        // A start piece set up as VOP's parts A and B are (read from their
-        // assets): no node models at all, corners at the node itself (no corner
+        // A start piece: no node models at all, corners at the node itself (no corner
         // offset; the game itself squares the ends of the roads meeting there),
         // segment ends not clipped, junctions flat. Their ground settings stay
-        // the road's (A and B flatten and clip the ground, like the Six-Lane Road).
-        private static void VopStartPiece(NetInfo piece)
+        // the road's (they flatten and clip the ground, like the Six-Lane Road).
+        private static void SetUpStartPiece(NetInfo piece)
         {
             piece.m_nodes = new NetInfo.Node[0];
             piece.m_minCornerOffset = 0f;
             piece.m_maxCornerOffset = 0f;
             piece.m_clipSegmentEnds = false;
             piece.m_flatJunctions = true;
-            Mod.Log("Median ramp roads: " + piece.name + ": VOP start piece (no node models, corner offset 0, ends not clipped)");
+            Mod.Log("Median ramp roads: " + piece.name + ": start piece (no node models, corner offset 0, ends not clipped)");
         }
 
-        // A ramp set up on the ground as VOP's Two-Lane ramp is: it never raises
+        // A ramp set up on the ground so it never raises
         // or clips the ground, only lowers it (it runs in the ground road's gap,
         // which already shapes the ground there), and its corners are at the node.
-        private static void VopRamp(NetInfo ramp)
+        private static void SetUpRampGround(NetInfo ramp)
         {
             ramp.m_flattenTerrain = false;
             ramp.m_lowerTerrain = true;
@@ -563,7 +562,7 @@ namespace RealisticRoads
                     if (lod != null) node.m_lodMesh = lod;
                 }
             NoJunctionPieces(copy);
-            VopRamp(copy);
+            SetUpRampGround(copy);
             HideFromMenus(copy);
             return copy;
         }
@@ -1015,7 +1014,7 @@ namespace RealisticRoads
         private static readonly Dictionary<string, string> fullStartNames = new Dictionary<string, string>();   // by the road's name
         private static readonly Dictionary<string, NetInfo> fullStarts = new Dictionary<string, NetInfo>();
 
-        // A copy of the full road that draws nothing at a junction (VOP's part A).
+        // A copy of the full road that draws nothing at a junction (a start piece).
         private static NetInfo MakeFullStart(NetInfo road)
         {
             string name = StartPrefix + road.name;
@@ -1029,7 +1028,7 @@ namespace RealisticRoads
                 return null;
             }
             OwnItems(copy);
-            VopStartPiece(copy);
+            SetUpStartPiece(copy);
             HideFromMenus(copy);
             Name(copy, Title(road) + " (where a median ramp leaves it)", "Built by Realistic Roads where a ramp rises out of the road's middle.");
             lock (variants) fullStartNames[road.name] = name;

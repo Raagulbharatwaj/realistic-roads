@@ -15,7 +15,7 @@ namespace RealisticRoads
     {
         // Which source this build is from, in the log, to tell an old or second
         // copy of the mod from the current one. Changed with each tested feature.
-        public const string SourceTag = "median-vop-parts-a-b";
+        public const string SourceTag = "median-start-pieces";
 
         public string Name => "Realistic Roads (beta)";
         public string Description => "Plan your roads and add layers to your city: draw a whole route, choose how it crosses everything, stack decks over and under streets.";
@@ -52,7 +52,7 @@ namespace RealisticRoads
         private static void LoadSettings()
         {
             debugLogging = Setting("RealisticRoads.DebugLogging", false);
-            // Off by default: like VOP, the start pieces' and ramp's corner offset
+            // Off by default: the start pieces' and ramp's corner offset
             // of 0 squares them; RR's own corner override is a test now.
             squareRampEnds = Setting("RealisticRoads.SquareRampEndsOverride", false);
             hideRampJunctions = Setting("RealisticRoads.HideRampJunctions", true);
@@ -148,7 +148,7 @@ namespace RealisticRoads
             var group = helper.AddGroup("Realistic Roads");
             group.AddCheckbox("Detailed logging (every segment the game creates)", DebugLogging, value => DebugLogging = value);
             var test = helper.AddGroup("Median ramp node tests");
-            test.AddCheckbox("RR's own square ends at a median ramp's node (off, like VOP: the game's corners with offset 0)", SquareRampEnds, value => SquareRampEnds = value);
+            test.AddCheckbox("RR's own square ends at a median ramp's node (off: the game's corners with offset 0)", SquareRampEnds, value => SquareRampEnds = value);
             test.AddCheckbox("Ramp and start pieces draw no junction models (takes effect when a city loads)", HideRampJunctions, value => HideRampJunctions = value);
         }
 

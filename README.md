@@ -101,8 +101,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      from the two roads and are planned like any curve (crossings, the usual grades, up to 4.5 % where there is no
      room). Drawn against a one-way road's traffic, or with an end not on a road, the panel says so;
    - **Median ramp roads** (three buttons next to Ramp; pressed again: off). You draw one line and get three parallel
-     parts: a ground carriageway each side and a ramp in the middle, built the way the Vanilla Overpass Project builds
-     its overpasses:
+     parts: a ground carriageway each side and a ramp in the middle, with one node where the ramp leaves
+     the road:
      - **six-lane road + 2-lane ramp**: 2 ground lanes each way + a 9 m ramp with 1 lane each way;
      - **six-lane road + 4-lane ramp**: 1 ground lane each way + a 15 m ramp with 2 lanes each way;
      - **four-lane road + 2-lane ramp**: 1 ground lane each way + a 9 m ramp with 1 lane each way.
@@ -119,11 +119,10 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      problems too, and nothing is built while it has any. They run along the whole line on the ground and join the roads they cross there as normal
      junctions, under the ramp. **Where the ramp leaves (or lands)**, one node joins the full road, the ground road and the
      ramp: the full road's outer lanes go on along the ground, its inner ones up the ramp. Starting on the end of a road of
-     the choice's kind, that road is the full road; elsewhere 40 m of it is built there. At that node, as in VOP (its parts A
-     and B), the full road's last 40 m and the ground road's first 40 m are start pieces that draw nothing at the junction:
+     the choice's kind, that road is the full road; elsewhere 40 m of it is built there. At that node the full road's last 40 m and the ground road's first 40 m are start pieces that draw nothing at the junction:
      only the three roads' own surfaces meet there, squared off edge to edge, with no crosswalks, kerbs or junction corners.
      If they can't be made (the full road reaches another junction within 48 m), nothing is built. That node gets
-     no traffic lights and, with TM:PE, no pedestrian crossing, and its lanes joined as in VOP's assets: the full road's
+     no traffic lights and, with TM:PE, no pedestrian crossing, and its lanes joined: the full road's
      inner lanes each way to the ramp, its outer ones to the ground road, and back (the log lists each one joined). It is
      built part by part (ramp, then the road there, then the ground road, then that node), each only once the one before
      is built; if any part fails, every part built is removed again and changed roads are put back. One Ctrl+Z removes it

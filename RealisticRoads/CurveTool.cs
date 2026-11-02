@@ -2053,14 +2053,13 @@ namespace RealisticRoads
         // A median ramp road is one construction, built part by part, each
         // only once the one before it has been (each tells FinishParallel):
         //   1. the ramp;
-        //   2. where the ramp leaves (or lands in) the road, the way the VOP
-        //      overpasses join it: one node shared by the full road, the ground
+        //   2. where the ramp leaves (or lands in) the road, with one node shared by the full road, the ground
         //      road (its outer lanes) and the ramp (its inner lanes). Along an
         //      existing road, that road under the line becomes the ground road
         //      (cut where the line ends in it); off a road, LeadIn of the full
         //      road is built there; on a road's end, that road is the full road;
         //   3. the ground road along the rest of the line;
-        //   4. that node set up like VOP's (no traffic lights, no pedestrian
+        //   4. that node set up (no traffic lights, no pedestrian
         //      crossing, the lanes joined inner to the ramp and outer to the
         //      ground road; with TM:PE).
         // If any part can't be planned or built, every part built before it is
@@ -2174,7 +2173,7 @@ namespace RealisticRoads
             NetworkBuilder.BuildCurve(waiting.Ground, ground.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
         }
 
-        // VOP's parts A and B at the ramp's node: the full road's last stretch
+        // The start pieces at the ramp's node: the full road's last stretch
         // and the ground road's first become start pieces that draw nothing at
         // that junction (NetworkBuilder.MedianTransition). Without them it would
         // be an ordinary junction (crosswalks, kerbs across the road): the whole
@@ -2220,7 +2219,7 @@ namespace RealisticRoads
         }
 
         // The full road built before a median ramp's node on open ground: one
-        // start piece long (it becomes one whole). 20 m (VOP's part A) dug a
+        // start piece long (it becomes one whole). 20 m dug a
         // trench in the owner's test, shorter than RR ever builds a road.
         private const float LeadIn = SplitRoads.StartLength;
 
