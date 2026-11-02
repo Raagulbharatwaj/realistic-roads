@@ -415,16 +415,28 @@ namespace RealisticRoads
                             // road's lanes along it (the slide all done at the node:
                             // its end node if the node isn't its start).
                             bool invert = (segments[s].m_flags & NetSegment.Flags.Invert) != NetSegment.Flags.None;
-                            var taper = SplitRoads.FullTaperFor(info, groundStart, fromStart == Mod.FlipRampTaper, invert);
+                            // The full road's own taper, else (a road like it: with a median, trees)
+                            // the one of the road its start piece is made from.
+                            var taper = SplitRoads.FullTaperFor(info, groundStart, fromStart == Mod.FlipRampTaper, invert) ??
+                                        SplitRoads.FullTaperFor(SplitRoads.OriginalOf(fullStart), groundStart, fromStart == Mod.FlipRampTaper, invert);
                             if (taper != null) target = taper;
                         }
                         ushort far = fromStart ? segments[s].m_endNode : segments[s].m_startNode;
                         if (length <= SplitRoads.StartLength + MinPiece)
                         {
+                            if (SegmentCount(far) > 2 && length >= MinStartPiece + MinPiece)
+                            {
+                                // A junction close by: a shorter start piece, the road's own
+                                // piece left at that junction (its junction pieces drawn there).
+                                float shortT = fromStart ? (length - MinPiece) / length : MinPiece / length;
+                                SplitSegment(s, new[] { shortT }, fromStart ? new[] { target, info } : new[] { info, target }, build);
+                                made.Add(info.name + " #" + s + " (its " + (length - MinPiece).ToString("F0") + " m by the node: a junction " + length.ToString("F0") + " m away)");
+                                continue;
+                            }
                             if (SegmentCount(far) > 2)
                             {
                                 why = "the " + info.name + " at the ramp's node is only " + length.ToString("F0") + " m to the next junction (at least " +
-                                      (SplitRoads.StartLength + MinPiece).ToString("F0") + " m needed for its start piece)";
+                                      (MinStartPiece + MinPiece).ToString("F0") + " m needed for its start piece)";
                                 break;
                             }
                             SplitSegment(s, new float[0], new[] { target }, build);
@@ -1428,7 +1440,8 @@ namespace RealisticRoads
             }
         }
 
-        private const float MinPiece = 8f;   // no road piece shorter than this is left between cuts
+        private const float MinPiece = 8f;
+        private const float MinStartPiece = 20f;   // a start piece no shorter than this (when a junction is close)   // no road piece shorter than this is left between cuts
         private const float MinRailPiece = 30f;   // on rail: as few nodes as possible, no short pieces
 
         private static float MinPieceOf(NetInfo info) => RoadPlanner.IsRail(info) ? MinRailPiece : MinPiece;

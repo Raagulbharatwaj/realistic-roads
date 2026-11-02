@@ -19,6 +19,8 @@ namespace RealisticRoads
         private const int ScanFrames = 90;
         private const float DrawDistance = 4000f;
         private const float Inset = 0.4f;          // the walls stand this far inside the ramp's edges
+        private const float WallThickness = 0.3f;  // their inner face this far inside the outer one
+        private const float PierInset = 0.3f;      // a wall pillar's sides this far inside the walls' inner faces (not in their plane)
         private const float UnderSurface = 0.3f;   // their top this far under the road's surface (under the deck)
         private const float IntoGround = 1f;       // their foot this far into the ground
         private const float MinWall = 0.3f;        // lower than this: no wall there
@@ -305,9 +307,11 @@ namespace RealisticRoads
                     Vector3 bottom0 = new Vector3(top0.x, foot0, top0.z), bottom1 = new Vector3(top1.x, foot1, top1.z);
                     Vector3 run = CurveMath.FlatNormal(top1 - top0);
                     Vector3 outward = CurveMath.Rotate(run, side == 0 ? 90f : -90f);
-                    // Both faces: seen from beside the ramp and from under it.
+                    // Its outer face, and its inner face a wall's thickness inside it (the
+                    // two in one plane flickered through each other: the game draws both).
                     Quad(vertices, normals, uvs, triangles, texture, bottom0 - origin, bottom1 - origin, top1 - origin, top0 - origin, outward);
-                    Quad(vertices, normals, uvs, triangles, texture, bottom0 - origin, bottom1 - origin, top1 - origin, top0 - origin, -outward);
+                    Vector3 inside = -outward * WallThickness;
+                    Quad(vertices, normals, uvs, triangles, texture, bottom0 + inside - origin, bottom1 + inside - origin, top1 + inside - origin, top0 + inside - origin, -outward);
                 }
             if (vertices.Count == 0) return null;
             return new Part
@@ -348,7 +352,7 @@ namespace RealisticRoads
             Vector3 across = CurveMath.Rotate(along, 90f);
             Vector3 at = n.m_position;
             float top = at.y - PierUnderside;
-            float width = 2f * Mathf.Max(half - Inset, 0.5f);
+            float width = 2f * Mathf.Max(half - Inset - WallThickness - PierInset, 0.5f);
             float ground = TerrainManager.instance.SampleRawHeightSmooth(at) - IntoGround;
             var terrain = TerrainManager.instance;
             // The lowest ground under its width (it stands on a slope too).

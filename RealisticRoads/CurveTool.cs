@@ -52,8 +52,10 @@ namespace RealisticRoads
         private const float WaterJoin = 60f;          // wet patches closer than this are one water crossing, if both are as wide as the gap
         private const float WaterJoinShort = 24f;     // closer than this: always one crossing
         private const float MinWaterWidth = 4f;       // narrower wet patches are ignored
-        private const float RaisedSpacing = 90f;      // node (pillar) spacing on raised road stretches: long spans, few nodes
-        private const float RailRaisedSpacing = 96f;  // rail: as few nodes as possible, long spans
+        // Node (pillar) spacing on raised stretches: a pillar this often, as a real
+        // viaduct has (90 m left long spans with nothing under them).
+        private const float RaisedSpacing = 45f;
+        private const float RailRaisedSpacing = 60f;
         private const float DeckTurnRadius = 50f;      // a deck following roads turns at a junction no tighter than this
         private const float RailDeckTurnRadius = 90f;
         private const float MaxDroppedSpan = 160f;     // longer than this, a node over a crossed road is kept (pillarless)
@@ -969,6 +971,18 @@ namespace RealisticRoads
             ushort midSegment;
             Vector3 roadHit;
             ushort node = FindSnapNode(out midSegment, out roadHit);
+            // A median cut starts (or ends) on a track's end, which may be in a
+            // tunnel under the road the mouse is on: that end is taken first.
+            if (MedianCut && (node == 0 || !OnCutTrack(node, 0)))
+            {
+                Vector3 near = node != 0 ? NetManager.instance.m_nodes.m_buffer[node].m_position : midSegment != 0 ? roadHit : ground;
+                ushort trackEnd = (node != 0 || midSegment != 0 || onGround) ? CutTrackEndNear(near) : (ushort)0;
+                if (trackEnd != 0)
+                {
+                    Vector3 at = NetManager.instance.m_nodes.m_buffer[trackEnd].m_position;
+                    return new Hover { Valid = true, Node = trackEnd, Position = at, Marker = at };
+                }
+            }
             if (node == 0 && midSegment != 0)
             {
                 // On the middle of a road: join it there (cut at build time).
