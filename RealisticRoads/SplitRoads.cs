@@ -765,6 +765,14 @@ namespace RealisticRoads
         }
 
         // One of the ramp roads (either version).
+        // Any piece RR makes for its median ramp roads and median cuts (by name).
+        public static bool IsOwnPiece(PrefabInfo info)
+        {
+            if (info == null || info.name == null) return false;
+            string name = info.name;
+            return name.StartsWith(MedianPrefix) || name.StartsWith(MedianRampPrefix) || name.StartsWith(StartPrefix);
+        }
+
         public static bool IsRamp(NetInfo info)
         {
             return info != null && info.name != null && info.name.StartsWith(MedianRampPrefix);
