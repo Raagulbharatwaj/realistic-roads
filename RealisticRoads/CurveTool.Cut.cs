@@ -32,6 +32,37 @@ namespace RealisticRoads
             return false;
         }
 
+        // Simulation thread. The end of a track of the median cut's kind (a node
+        // with only that track at it, raised, on the ground or in a tunnel)
+        // within CutSnap of 'p' across (any depth), the nearest; 0 if none.
+        private const float CutSnap = 16f;
+
+        private ushort CutTrackEndNear(Vector3 p)
+        {
+            var track = CutTrack;
+            if (track == null) return 0;
+            var net = NetManager.instance;
+            var segments = net.m_segments.m_buffer;
+            var nodes = net.m_nodes.m_buffer;
+            ushort best = 0;
+            float bestDistance = CutSnap;
+            foreach (ushort s in RoadPlanner.NearbySegments(p, 120f))
+            {
+                if ((segments[s].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !IsTrackOf(segments[s].Info, track)) continue;
+                foreach (ushort n in new[] { segments[s].m_startNode, segments[s].m_endNode })
+                {
+                    float d = CurveMath.FlatDistance(nodes[n].m_position, p);
+                    if (d >= bestDistance) continue;
+                    int roads = 0;
+                    for (int i = 0; i < 8; i++) if (nodes[n].GetSegment(i) != 0) roads++;
+                    if (roads != 1) continue;
+                    best = n;
+                    bestDistance = d;
+                }
+            }
+            return best;
+        }
+
         private static bool IsTrackOf(NetInfo info, NetInfo track)
         {
             return info != null && info.m_class != null && track != null && track.m_class != null &&
@@ -39,8 +70,11 @@ namespace RealisticRoads
         }
 
         // The road a median cut is made in, under 'p' and running along
-        // 'heading' (within 30 degrees): a two-way six-lane or four-lane road
-        // with median cut roads made for it. Null if none ('segment' 0).
+        // 'heading' (within 30 degrees): any two-way six-lane or four-lane road
+        // on the ground (with or without a median, trees, ...). Returned as the
+        // road its ground road is made from (the Six-Lane or Four-Lane Road,
+        // whose median cut roads replace it along the line). Null if none
+        // ('segment' 0).
         private static NetInfo CutRoadUnder(Vector3 p, Vector3 heading, out ushort segment, out float t)
         {
             segment = 0;
@@ -52,7 +86,7 @@ namespace RealisticRoads
             foreach (ushort s in RoadPlanner.NearbySegments(p, 40f))
             {
                 if ((segments[s].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
-                var info = segments[s].Info;
+                var info = BaseRoad(segments[s].Info);
                 if (info == null || SplitRoads.WidestCut(info) <= 0f) continue;
                 Vector3 onRoad;
                 float at = CrossingFinder.ClosestT(s, p, out onRoad);
@@ -67,6 +101,19 @@ namespace RealisticRoads
                 t = at;
             }
             return found;
+        }
+
+        // A two-way road on the ground with three or two lanes each way: the
+        // Six-Lane or Four-Lane Road (its median cut roads are made from those);
+        // the road itself if it has cut roads of its own; else null.
+        private static NetInfo BaseRoad(NetInfo info)
+        {
+            if (info == null || SplitRoads.IsSplit(info) || SplitRoads.IsOwnPiece(info)) return null;
+            if (SplitRoads.WidestCut(info) > 0f) return info;
+            if (info.m_netAI == null || info.m_netAI.GetType().Name != "RoadAI") return null;
+            int forward = info.m_forwardVehicleLaneCount, backward = info.m_backwardVehicleLaneCount;
+            if (forward != backward) return null;
+            return forward == 3 ? PrefabCollection<NetInfo>.FindLoaded("Large Road") : forward == 2 ? PrefabCollection<NetInfo>.FindLoaded("Medium Road") : null;
         }
 
         // The median cut's profile: down from the raised track it starts on at
