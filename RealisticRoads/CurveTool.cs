@@ -49,7 +49,8 @@ namespace RealisticRoads
         private const float GuideWidth = 1.5f;
         public const float BridgeSpacing = 100f;     // spans over water (elevated pieces, pillars at each node)
         public const float BridgeMinSpacing = 40f;
-        private const float WaterJoin = 60f;          // wet patches closer than this are one water crossing
+        private const float WaterJoin = 60f;          // wet patches closer than this are one water crossing, if both are as wide as the gap
+        private const float WaterJoinShort = 24f;     // closer than this: always one crossing
         private const float MinWaterWidth = 4f;       // narrower wet patches are ignored
         private const float RaisedSpacing = 90f;      // node (pillar) spacing on raised road stretches: long spans, few nodes
         private const float RailRaisedSpacing = 96f;  // rail: as few nodes as possible, long spans
@@ -57,7 +58,13 @@ namespace RealisticRoads
         private const float RailDeckTurnRadius = 90f;
         private const float MaxDroppedSpan = 160f;     // longer than this, a node over a crossed road is kept (pillarless)
         private const float MinPillarHeight = 3f;      // a raised node lower than this over the ground gets no pillar
-        private const float HeightStep = 5f;
+        private const float HeightStep = LiftStep;   // a crossing's +/- (the same as Page Up / Page Down)
+
+        // A +/- click's step: 1 m with Shift held, like Page Up / Page Down.
+        private static float ClickStep()
+        {
+            return Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift) ? 1f : HeightStep;
+        }
         private const float MaxExtraHeight = 60f;
         private const float IconSize = 34f;
 
@@ -79,6 +86,10 @@ namespace RealisticRoads
         private readonly Dictionary<int, float> parallelWaterExtra = new Dictionary<int, float>();
         private readonly Dictionary<int, bool> parallelWaterTunnel = new Dictionary<int, bool>();
         private readonly List<KeyValuePair<int, Vector3>> parallelWaterPlaces = new List<KeyValuePair<int, Vector3>>();
+        // Where each road crossing was last seen (by key), the curve's and the parallel line's.
+        private readonly List<KeyValuePair<int, Vector3>> crossingPlaces = new List<KeyValuePair<int, Vector3>>();
+        private readonly List<KeyValuePair<int, Vector3>> parallelCrossingPlaces = new List<KeyValuePair<int, Vector3>>();
+        private const float CrossingMatch = 40f;   // a road crossing is the one of that road remembered this close
         private int lastWaterKey;
         private const float WaterMatch = 80f;   // a water crossing is the one remembered this close to its middle
 
@@ -224,6 +235,7 @@ namespace RealisticRoads
                     parallelWaterExtra.Clear();
                     parallelWaterTunnel.Clear();
                     parallelWaterPlaces.Clear();
+                    parallelCrossingPlaces.Clear();
                     choicesVersion++;
                     Mod.Log("Parallel line: " + value.name + " beside the " + selectedNetwork.name);
                     return;
@@ -279,6 +291,9 @@ namespace RealisticRoads
             public Dictionary<int, bool> WaterTunnel;
             public Dictionary<int, float> WaterExtra;
             public List<KeyValuePair<int, Vector3>> WaterPlaces;
+            // Where each road crossing (by Crossing.Key) was last seen, so its
+            // choice stays with it while the curve is edited (null: by order).
+            public List<KeyValuePair<int, Vector3>> CrossingPlaces;
             public List<HeightPin> Pins;
             public List<ForcedStretch> Stretches;
             // Choices found by where the crossing is: the parallel line is planned
@@ -303,7 +318,7 @@ namespace RealisticRoads
             return new LineSetup
             {
                 Info = DrawNetwork, Types = crossingTypes, Extra = crossingExtra, WaterTunnel = waterTunnel, WaterExtra = waterExtra,
-                WaterPlaces = waterPlaces,
+                WaterPlaces = waterPlaces, CrossingPlaces = crossingPlaces,
                 Pins = heightPins, Stretches = stretches,
             };
         }
@@ -1963,7 +1978,8 @@ namespace RealisticRoads
         {
             string road = SelectedNetwork != null ? Title(SelectedNetwork) : "the picked road";
             model.Mode = "UPGRADE: click a road where the upgrade starts, then where it ends; the roads between become " + road +
-                         " (same shape, same junctions). Check mark / Enter: upgrade. Right-click: take back a point. Upgrade button: back to drawing.";
+                         " (same shape, same junctions). Whole segments only: every segment the two points touch changes from end to end. " +
+                         "A cheaper road costs nothing and gives no refund. Check mark / Enter: upgrade. Right-click: take back a point. Upgrade button: back to drawing.";
             model.HasPoints = upgradePoints.Count > 0;
             var plan = upgradePlan;
             if (plan == null)
@@ -2036,7 +2052,7 @@ namespace RealisticRoads
                 Setup = new LineSetup
                 {
                     Info = info, Types = parallelTypes, Extra = parallelExtra, WaterTunnel = parallelWaterTunnel, WaterExtra = parallelWaterExtra,
-                    WaterPlaces = parallelWaterPlaces,
+                    WaterPlaces = parallelWaterPlaces, CrossingPlaces = parallelCrossingPlaces,
                     Pins = heightPins, Stretches = stretches,
                 },
             };
@@ -2064,6 +2080,7 @@ namespace RealisticRoads
                 WaterTunnel = new Dictionary<int, bool>(setup.WaterTunnel),
                 WaterExtra = new Dictionary<int, float>(setup.WaterExtra),
                 WaterPlaces = new List<KeyValuePair<int, Vector3>>(setup.WaterPlaces),
+                CrossingPlaces = setup.CrossingPlaces != null ? new List<KeyValuePair<int, Vector3>>(setup.CrossingPlaces) : null,
                 Pins = new List<HeightPin>(),
                 Stretches = new List<ForcedStretch>(),
                 ByPlace = new List<PlacedChoice>(),
@@ -2426,7 +2443,8 @@ namespace RealisticRoads
             line = new LineSetup
             {
                 Info = spec.Info, Types = spec.Setup.Types, Extra = spec.Setup.Extra, WaterTunnel = spec.Setup.WaterTunnel,
-                WaterExtra = spec.Setup.WaterExtra, WaterPlaces = spec.Setup.WaterPlaces, Pins = pins, Stretches = forced, ByPlace = spec.Setup.ByPlace,
+                WaterExtra = spec.Setup.WaterExtra, WaterPlaces = spec.Setup.WaterPlaces, CrossingPlaces = spec.Setup.CrossingPlaces,
+                Pins = pins, Stretches = forced, ByPlace = spec.Setup.ByPlace,
             };
             var division = DivideAlong(polyline, controlAt, corners, Vector3.zero, Vector3.zero, startNode, endNode, lifts,
                 new List<bool>(), new List<bool>(), new HashSet<ushort>());
@@ -2584,6 +2602,7 @@ namespace RealisticRoads
             parallelWaterExtra.Clear();
             parallelWaterTunnel.Clear();
             parallelWaterPlaces.Clear();
+            parallelCrossingPlaces.Clear();
             choicesVersion++;
         }
 
@@ -2613,6 +2632,7 @@ namespace RealisticRoads
             parallelWaterExtra.Clear();
             parallelWaterTunnel.Clear();
             parallelWaterPlaces.Clear();
+            parallelCrossingPlaces.Clear();
             choicesVersion++;
         }
 
@@ -2625,6 +2645,7 @@ namespace RealisticRoads
             parallelWaterExtra.Clear();
             parallelWaterTunnel.Clear();
             parallelWaterPlaces.Clear();
+            parallelCrossingPlaces.Clear();
             choicesVersion++;
             Mod.Log("Parallel line runs " + (parallelReverse ? "the other way" : "the same way"));
         }
@@ -3052,7 +3073,12 @@ namespace RealisticRoads
         }
 
         // Buildings whose footprint the new road's ground-level stretches run
-        // over. Raised and tunnelled stretches pass over or under them.
+        // over. Raised and tunnelled stretches pass over or under them. Each
+        // building grid cell is walked once; each building's footprint is its
+        // rectangle (its cells, turned as it stands), our road's half width round it.
+        private const float BuildingSample = 8f;
+        private const float BuildingTouch = 1f;   // overlapping a footprint by less than this isn't running through it
+
         private int BuildingsInTheWay(Division division)
         {
             var plan = division.Plan;
@@ -3062,36 +3088,54 @@ namespace RealisticRoads
             var grid = manager.m_buildingGrid;
             const int resolution = BuildingManager.BUILDINGGRID_RESOLUTION;
             const float cell = BuildingManager.BUILDINGGRID_CELL_SIZE;
-            var hit = new HashSet<ushort>();
             float half = Net.m_halfWidth;
+            var samples = new List<Vector3>();
+            var cells = new HashSet<int>();
             for (int i = 1; i < plan.Points.Count; i++)
             {
                 if (IsRaised(plan.Kinds[i - 1]) && IsRaised(plan.Kinds[i])) continue;
                 if (plan.Kinds[i - 1] == NodeKind.Tunnel && plan.Kinds[i] == NodeKind.Tunnel) continue;
                 var bezier = PieceBezier(division, i);
-                int steps = Mathf.Max(2, Mathf.RoundToInt(CurveMath.FlatDistance(bezier.a, bezier.d) / 8f));
+                int steps = Mathf.Max(2, Mathf.RoundToInt(CurveMath.FlatDistance(bezier.a, bezier.d) / BuildingSample));
                 for (int k = 0; k <= steps; k++)
                 {
                     Vector3 p = CurveMath.Bezier(bezier.a, bezier.b, bezier.c, bezier.d, k / (float)steps);
+                    samples.Add(p);
                     int gx = Mathf.Clamp((int)(p.x / cell + resolution / 2f), 0, resolution - 1);
                     int gz = Mathf.Clamp((int)(p.z / cell + resolution / 2f), 0, resolution - 1);
                     for (int z = Mathf.Max(gz - 1, 0); z <= Mathf.Min(gz + 1, resolution - 1); z++)
                         for (int x = Mathf.Max(gx - 1, 0); x <= Mathf.Min(gx + 1, resolution - 1); x++)
+                            cells.Add(z * resolution + x);
+                }
+            }
+            var hit = new HashSet<ushort>();
+            foreach (int index in cells)
+            {
+                ushort id = grid[index];
+                int guard = 0;
+                while (id != 0 && guard++ < 49152)
+                {
+                    var b = buildings[id];
+                    if ((b.m_flags & Building.Flags.Created) != Building.Flags.None && b.Info != null && !hit.Contains(id))
+                    {
+                        // The footprint: its width along (cos, sin) of its angle, its length across that.
+                        float angle = b.m_angle;
+                        Vector3 across = new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle));
+                        Vector3 along = new Vector3(across.z, 0f, -across.x);
+                        float w = b.Info.m_cellWidth * 4f + half - BuildingTouch, l = b.Info.m_cellLength * 4f + half - BuildingTouch;
+                        float reach = Mathf.Sqrt(w * w + l * l);
+                        foreach (var p in samples)
                         {
-                            ushort id = grid[z * resolution + x];
-                            int guard = 0;
-                            while (id != 0 && guard++ < 49152)
+                            float dx = p.x - b.m_position.x, dz = p.z - b.m_position.z;
+                            if (dx * dx + dz * dz > reach * reach) continue;
+                            if (Mathf.Abs(dx * across.x + dz * across.z) < w && Mathf.Abs(dx * along.x + dz * along.z) < l)
                             {
-                                var b = buildings[id];
-                                if ((b.m_flags & Building.Flags.Created) != Building.Flags.None && b.Info != null)
-                                {
-                                    // Footprint as a circle: cells are 8 m.
-                                    float radius = Mathf.Min(b.Info.m_cellWidth, b.Info.m_cellLength) * 4f;
-                                    if (CurveMath.FlatDistance(p, b.m_position) < half + radius * 0.8f) hit.Add(id);
-                                }
-                                id = b.m_nextGridBuilding;
+                                hit.Add(id);
+                                break;
                             }
                         }
+                    }
+                    id = b.m_nextGridBuilding;
                 }
             }
             return hit.Count;
@@ -3159,6 +3203,7 @@ namespace RealisticRoads
                 cuts.Add(new KeyValuePair<float, Crossing>(run.To, null));
             }
             var timesCrossed = new Dictionary<ushort, int>();
+            var takenKeys = new HashSet<int>();
             var snapped = new List<int>();
             var found = new List<Crossing>();
             var crossedSegments = NetManager.instance.m_segments.m_buffer;
@@ -3178,7 +3223,7 @@ namespace RealisticRoads
                 int times;
                 timesCrossed.TryGetValue(crossing.Segment, out times);
                 timesCrossed[crossing.Segment] = times + 1;
-                crossing.Occurrence = times;
+                crossing.Occurrence = line.CrossingPlaces != null ? PlaceOccurrence(line.CrossingPlaces, crossing, takenKeys) : times;
                 CrossingType type;
                 // Default: a junction where the two may join, else a bridge over the other.
                 // (Under a deck under the road: a tunnel, the only one allowed there.)
@@ -3467,9 +3512,9 @@ namespace RealisticRoads
             return most;
         }
 
-        // Stretches of the curve over water. Wet patches less than WaterJoin
-        // apart are one crossing: a stream with gravel banks, a river with an
-        // islet, the bottom of a gorge.
+        // Stretches of the curve over water. Wet patches a short way apart are
+        // one crossing: a stream with gravel banks, a river with an islet, the
+        // bottom of a gorge (see the joining below).
         private List<WaterRun> FindWater(List<Vector3> polyline)
         {
             var runs = new List<WaterRun>();
@@ -3485,17 +3530,27 @@ namespace RealisticRoads
                 if (wet && !wasWet)
                 {
                     float from = i > 0 ? (previous + along) * 0.5f : along;
-                    if (current != null && from - current.To < WaterJoin) current.To = along;
-                    else
-                    {
-                        current = new WaterRun { From = from, To = along };
-                        runs.Add(current);
-                    }
+                    current = new WaterRun { From = from, To = along };
+                    runs.Add(current);
                 }
                 else if (wet) current.To = along;
                 else if (wasWet) current.To = (previous + along) * 0.5f;
                 wasWet = wet;
                 previous = along;
+            }
+            // Wet patches with a short dry gap between are one crossing (gravel
+            // banks, a small islet): always within WaterJoinShort; up to WaterJoin
+            // only between two stretches of water each at least as wide as the gap
+            // (a river with an islet), not a pond and a ditch along a coast.
+            for (int i = runs.Count - 1; i > 0; i--)
+            {
+                var a = runs[i - 1];
+                var b = runs[i];
+                float gap = b.From - a.To;
+                bool join = gap < WaterJoinShort || (gap < WaterJoin && a.To - a.From >= gap && b.To - b.From >= gap);
+                if (!join) continue;
+                a.To = b.To;
+                runs.RemoveAt(i);
             }
             // A wet sample or two at a shore or a puddle isn't a crossing.
             runs.RemoveAll(run => run.To - run.From < MinWaterWidth);
@@ -3613,8 +3668,8 @@ namespace RealisticRoads
                         }
                         if (c.Type == CrossingType.Bridge)
                         {
-                            UseButton(used++, Icons.Plus, "+", "Higher (+" + HeightStep + " m)", new Vector2(x, y), false, () => AddExtra(d, c, HeightStep));
-                            UseButton(used++, Icons.Minus, "-", "Lower (-" + HeightStep + " m)", new Vector2(x + IconSize + 2f, y), false, () => AddExtra(d, c, -HeightStep));
+                            UseButton(used++, Icons.Plus, "+", "Higher (+" + HeightStep + " m, Shift: 1 m)", new Vector2(x, y), false, () => AddExtra(d, c, ClickStep()));
+                            UseButton(used++, Icons.Minus, "-", "Lower (-" + HeightStep + " m, Shift: 1 m)", new Vector2(x + IconSize + 2f, y), false, () => AddExtra(d, c, -ClickStep()));
                         }
                     }
                     else
@@ -3633,9 +3688,9 @@ namespace RealisticRoads
                         if (!r.Tunnel)
                         {
                             UseButton(used++, Icons.Plus, "+", "Bridge higher over the water (+" + HeightStep + " m)",
-                                new Vector2(left + 2f * (IconSize + 2f), y), false, () => AddWaterExtra(d, r, HeightStep));
+                                new Vector2(left + 2f * (IconSize + 2f), y), false, () => AddWaterExtra(d, r, ClickStep()));
                             UseButton(used++, Icons.Minus, "-", "Bridge lower over the water (-" + HeightStep + " m)",
-                                new Vector2(left + 3f * (IconSize + 2f), y), false, () => AddWaterExtra(d, r, -HeightStep));
+                                new Vector2(left + 3f * (IconSize + 2f), y), false, () => AddWaterExtra(d, r, -ClickStep()));
                         }
                     }
                 }
@@ -3769,6 +3824,40 @@ namespace RealisticRoads
             if (run != null) division.Setup.WaterTunnel[run.Key] = type == CrossingType.Tunnel;
             choicesVersion++;
             Mod.Log("Crossing with " + crossing.ExistingName + " (#" + crossing.Segment + "): " + crossing.Describe(type));
+        }
+
+        // Which time along our curve this crossing of its road counts as: the one
+        // of that road remembered nearest it (within CrossingMatch, each once per
+        // plan), so its choice follows it when the curve is edited, else a new
+        // one; the place remembered is moved to where it is now.
+        private static int PlaceOccurrence(List<KeyValuePair<int, Vector3>> places, Crossing crossing, HashSet<int> taken)
+        {
+            int nearest = -1;
+            float best = CrossingMatch;
+            for (int i = 0; i < places.Count; i++)
+            {
+                int key = places[i].Key;
+                if ((key >> 4) != crossing.Segment || taken.Contains(key)) continue;
+                float d = CurveMath.FlatDistance(places[i].Value, crossing.Point);
+                if (d >= best) continue;
+                best = d;
+                nearest = i;
+            }
+            int occurrence;
+            if (nearest >= 0)
+            {
+                occurrence = places[nearest].Key & 15;
+                places[nearest] = new KeyValuePair<int, Vector3>(places[nearest].Key, crossing.Point);
+            }
+            else
+            {
+                occurrence = 0;
+                while (occurrence < 15 && (taken.Contains((crossing.Segment << 4) | occurrence) || places.Exists(p => p.Key == ((crossing.Segment << 4) | occurrence))))
+                    occurrence++;
+                places.Add(new KeyValuePair<int, Vector3>((crossing.Segment << 4) | occurrence, crossing.Point));
+            }
+            taken.Add((crossing.Segment << 4) | occurrence);
+            return occurrence;
         }
 
         private void AddExtra(Division division, Crossing crossing, float step)
@@ -4223,10 +4312,12 @@ namespace RealisticRoads
             parallelWaterExtra.Clear();
             parallelWaterTunnel.Clear();
             parallelWaterPlaces.Clear();
+            parallelCrossingPlaces.Clear();
             second = null;
             waterExtra.Clear();
             waterTunnel.Clear();
             waterPlaces.Clear();
+            crossingPlaces.Clear();
             heightPins.Clear();
             stretches.Clear();
             draggedPin = null;

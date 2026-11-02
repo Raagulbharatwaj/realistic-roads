@@ -540,9 +540,33 @@ namespace RealisticRoads
             if (stale.Count > 0) Forget(stale);
         }
 
+        // This frame's camera (only it draws our meshes: not reflections or other
+        // views) and its view, to skip meshes outside it. Main thread.
+        private static Camera camera;
+        private static Plane[] view;
+
+        internal static void BeginFrame(RenderManager.CameraInfo cameraInfo)
+        {
+            camera = cameraInfo != null ? cameraInfo.m_camera : null;
+            view = null;
+            try
+            {
+                if (camera != null) view = GeometryUtility.CalculateFrustumPlanes(camera);
+            }
+            catch
+            {
+                view = null;
+            }
+        }
+
         // A mesh of ours in the pillar's material, lit like a building. Main thread.
         internal static void Draw(Mesh mesh, Vector3 position, string pillarName, Material material)
         {
+            if (view != null)
+            {
+                var bounds = mesh.bounds;
+                if (!GeometryUtility.TestPlanesAABB(view, new Bounds(bounds.center + position, bounds.size))) return;
+            }
             if (block == null) block = new MaterialPropertyBlock();
             block.Clear();
             block.SetVector(Shader.PropertyToID("_BuildingState"), new Vector4(0f, 1000f, 0f, 256f));
@@ -550,7 +574,7 @@ namespace RealisticRoads
             block.SetColor(Shader.PropertyToID("_Color"), new Color(1f, 1f, 1f, 1f));
             var pillar = PrefabCollection<BuildingInfo>.FindLoaded(pillarName);
             int layer = pillar != null ? pillar.m_prefabDataLayer : 0;
-            Graphics.DrawMesh(mesh, position, Quaternion.identity, material, layer, null, 0, block);
+            Graphics.DrawMesh(mesh, position, Quaternion.identity, material, layer, camera, 0, block);
         }
 
         // A mesh from faces, textured as Face mapped them.
@@ -910,6 +934,7 @@ namespace RealisticRoads
     {
         public static void Postfix(RenderManager.CameraInfo __0)
         {
+            DeckFrames.BeginFrame(__0);
             DeckFrames.Render(__0);
             RampSupports.Render(__0);
         }

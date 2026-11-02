@@ -84,6 +84,13 @@ namespace RealisticRoads
     // Build / Undo / Clear buttons. Main thread only.
     public class RoadPanel
     {
+        // A +/- click's step: 1 m with Shift held, like Page Up / Page Down.
+        private static float ShiftStep(float step)
+        {
+            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            return shift ? 1f : step;
+        }
+
         private const float Width = 340f;
         private const float Pad = 12f;
         private const float RowGap = 4f;
@@ -645,10 +652,10 @@ namespace RealisticRoads
                     {
                         if (item.Allowed.Count > 0) x += 8f;
                         string step = item.Step.ToString("0.#");
-                        IconButton(Icons.Plus, "+", "Higher (+" + step + " m)", new Vector2(x, y), false,
-                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(c.Step); });
-                        IconButton(Icons.Minus, "-", "Lower (-" + step + " m)", new Vector2(x + IconSize + 3f, y), false,
-                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(-c.Step); });
+                        IconButton(Icons.Plus, "+", "Higher (+" + step + " m, Shift: 1 m)", new Vector2(x, y), false,
+                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(ShiftStep(c.Step)); });
+                        IconButton(Icons.Minus, "-", "Lower (-" + step + " m, Shift: 1 m)", new Vector2(x + IconSize + 3f, y), false,
+                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(-ShiftStep(c.Step)); });
                     }
                     if (item.Allowed.Count > 0 || item.HeightButtons) y += IconSize;
                     y += RowGap + 6f;
