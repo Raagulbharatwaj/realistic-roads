@@ -80,6 +80,13 @@ namespace RealisticRoads
             Mode = false;
         }
 
+        // Main thread, every frame: the curve tool's construction in parts goes on
+        // whether the tool is active or not (CurveTool.PumpPending).
+        public static void PumpBuilds()
+        {
+            if (curveTool != null) curveTool.PumpPending();
+        }
+
         public static void ToggleCurveTool()
         {
             if (curveTool == null) return;
@@ -336,6 +343,7 @@ namespace RealisticRoads
         public override void OnUpdate(float realTimeDelta, float simulationTimeDelta)
         {
             ToolActivator.Update();
+            ToolActivator.PumpBuilds();
             if (!Input.GetKeyDown(KeyCode.C)) return;
             var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             var shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);

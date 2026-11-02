@@ -450,8 +450,9 @@ namespace RealisticRoads
             for (int choice = 1; choice < medianButtons.Length; choice++) Select(medianButtons[choice], model.MedianChoice == choice);
             if (toolsLabel != null)
             {
-                string tools = (model.Upgrade ? "Upgrading a road" : model.Ramp ? "Drawing a ramp"
-                                   : model.MedianRamp != null ? "Drawing a " + model.MedianRamp : "Drawing") +
+                // Short: the road row below names the median ramp road or cut in full.
+                string tools = (model.Upgrade ? "Upgrading" : model.Ramp ? "Slip ramp"
+                                   : model.MedianChoice >= 4 ? "Median cut" : model.MedianChoice > 0 ? "Median ramp" : "Drawing") +
                                (model.Parallel ? "\nParallel " + (model.ParallelLeft ? "left: " : "right: ") + model.Beside : "");
                 if (toolsLabel.text != tools) toolsLabel.text = tools;
             }

@@ -20,10 +20,14 @@ namespace RealisticRoads
         private const float DrawDistance = 4000f;
         private const float Inset = 0.4f;          // the walls stand this far inside the ramp's edges
         private const float WallThickness = 0.3f;  // their inner face this far inside the outer one
-        private const float PierInset = 0.3f;      // a wall pillar's sides this far inside the walls' inner faces (not in their plane)
+        private const float PierProud = 0.05f;     // a wall pillar's sides this far outside the walls' outer faces (not in their plane)
         private const float UnderSurface = 0.3f;   // their top this far under the road's surface (under the deck)
         private const float IntoGround = 1f;       // their foot this far into the ground
         private const float MinWall = 0.3f;        // lower than this: no wall there
+        // The walls go up to where the ramp is this high over the ground (the
+        // owner's choice: a solid abutment low down, open on wall pillars above,
+        // as a real ramp has); there an end face closes them.
+        private const float MaxWallHeight = 5.5f;
         private const float Step = 4f;             // metres between the walls' pieces along the ramp
         private const float PierDepth = 1.6f;      // a wall pillar's thickness along the ramp
         private const float PierUnderside = 1.2f;  // its top this far under the node (the deck's underside)
@@ -136,8 +140,9 @@ namespace RealisticRoads
                 foreach (ushort node in new[] { segments[s].m_startNode, segments[s].m_endNode })
                 {
                     if (pierNodes.Contains(node) || !Holds(node)) continue;
-                    // A pillar where the ramp is open on either side of the node.
-                    bool open = false;
+                    // A pillar where the ramp is open on either side of the node, or
+                    // higher than its walls go.
+                    bool open = nodes[node].m_position.y - TerrainManager.instance.SampleRawHeightSmooth(nodes[node].m_position) > MaxWallHeight;
                     for (int i = 0; i < 8; i++)
                     {
                         ushort other = nodes[node].GetSegment(i);
@@ -273,6 +278,8 @@ namespace RealisticRoads
             var terrain = TerrainManager.instance;
             var tops = new List<Vector3>[2];
             var feet = new List<float>[2];
+            var low = new List<bool>();          // the ramp no higher than MaxWallHeight there: walled
+            var alongs = new List<Vector3>();
             for (int side = 0; side < 2; side++)
             {
                 tops[side] = new List<Vector3>();
@@ -285,6 +292,8 @@ namespace RealisticRoads
                 Vector3 along = CurveMath.FlatNormal(CurveMath.BezierDerivative(a, b, c, d, t));
                 if (along == Vector3.zero) along = CurveMath.FlatNormal(d - a);
                 Vector3 across = CurveMath.Rotate(along, 90f);
+                low.Add(p.y - terrain.SampleRawHeightSmooth(p) <= MaxWallHeight);
+                alongs.Add(along);
                 for (int side = 0; side < 2; side++)
                 {
                     Vector3 edge = p + across * (side == 0 ? half : -half);
@@ -301,6 +310,7 @@ namespace RealisticRoads
             for (int side = 0; side < 2; side++)
                 for (int k = 0; k < steps; k++)
                 {
+                    if (!low[k] || !low[k + 1]) continue;   // higher than the walls go: open, on pillars
                     Vector3 top0 = tops[side][k], top1 = tops[side][k + 1];
                     float foot0 = Mathf.Min(feet[side][k], top0.y), foot1 = Mathf.Min(feet[side][k + 1], top1.y);
                     if (top0.y - foot0 < MinWall && top1.y - foot1 < MinWall) continue;
@@ -313,6 +323,23 @@ namespace RealisticRoads
                     Vector3 inside = -outward * WallThickness;
                     Quad(vertices, normals, uvs, triangles, texture, bottom0 + inside - origin, bottom1 + inside - origin, top1 + inside - origin, top0 + inside - origin, -outward);
                 }
+            // Where the walls stop (the ramp higher on), an end face across the ramp
+            // between them closes the abutment.
+            for (int k = 0; k <= steps; k++)
+            {
+                if (!low[k]) continue;
+                foreach (int toward in new[] { 1, -1 })
+                {
+                    int next = k + toward;
+                    if (next < 0 || next > steps || low[next]) continue;
+                    Vector3 left = tops[0][k], right = tops[1][k];
+                    float leftFoot = Mathf.Min(feet[0][k], left.y), rightFoot = Mathf.Min(feet[1][k], right.y);
+                    if (left.y - leftFoot < MinWall && right.y - rightFoot < MinWall) continue;
+                    Vector3 facing = alongs[k] * toward;
+                    Quad(vertices, normals, uvs, triangles, texture, new Vector3(left.x, leftFoot, left.z) - origin, new Vector3(right.x, rightFoot, right.z) - origin,
+                        right - origin, left - origin, facing);
+                }
+            }
             if (vertices.Count == 0) return null;
             return new Part
             {
@@ -352,7 +379,9 @@ namespace RealisticRoads
             Vector3 across = CurveMath.Rotate(along, 90f);
             Vector3 at = n.m_position;
             float top = at.y - PierUnderside;
-            float width = 2f * Mathf.Max(half - Inset - WallThickness - PierInset, 0.5f);
+            // Just past the walls' outer faces (not in their plane): at the end of a
+            // walled stretch it covers the walls' open ends, a solid block.
+            float width = 2f * Mathf.Max(half - Inset + PierProud, 0.5f);
             float ground = TerrainManager.instance.SampleRawHeightSmooth(at) - IntoGround;
             var terrain = TerrainManager.instance;
             // The lowest ground under its width (it stands on a slope too).
@@ -366,10 +395,14 @@ namespace RealisticRoads
             var texture = material.Value;
             Vector3 center = new Vector3(0f, (top + ground) * 0.5f - at.y, 0f);
             Vector3 x = across * (width * 0.5f), y = Vector3.up * ((top - ground) * 0.5f), z = along * (PierDepth * 0.5f);
-            DeckFrames.Face(vertices, normals, uvs, triangles, texture, center + z, y, x, along);
-            DeckFrames.Face(vertices, normals, uvs, triangles, texture, center - z, y, x, -along);
-            DeckFrames.Face(vertices, normals, uvs, triangles, texture, center + x, y, z, across);
-            DeckFrames.Face(vertices, normals, uvs, triangles, texture, center - x, y, z, -across);
+            // Its four sides with the concrete's texture upright (however wide the
+            // pillar is: DeckFrames.Face lays it along the longer side), and its top.
+            foreach (var side in new[] { z, -z, x, -x })
+            {
+                Vector3 run = side == z || side == -z ? x : z;
+                Vector3 c = center + side;
+                Quad(vertices, normals, uvs, triangles, texture, c - run - y, c + run - y, c + run + y, c - run + y, side.normalized);
+            }
             DeckFrames.Face(vertices, normals, uvs, triangles, texture, center + y, x, z, Vector3.up);
             return new Part
             {

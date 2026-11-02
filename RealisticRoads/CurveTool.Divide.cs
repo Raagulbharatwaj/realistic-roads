@@ -175,6 +175,13 @@ namespace RealisticRoads
                 cuts.Add(new KeyValuePair<float, Crossing>(run.From, null));
                 cuts.Add(new KeyValuePair<float, Crossing>(run.To, null));
             }
+            // A median cut's track: a node where it reaches the ground and one where
+            // it reaches the tunnel's depth (the open cut between them is one piece).
+            if (cutFrom >= 0f && !planningGround)
+            {
+                cuts.Add(new KeyValuePair<float, Crossing>(cutFrom, null));
+                cuts.Add(new KeyValuePair<float, Crossing>(cutTo, null));
+            }
             var timesCrossed = new Dictionary<ushort, int>();
             var takenKeys = new HashSet<int>();
             var snapped = new List<int>();
@@ -187,7 +194,7 @@ namespace RealisticRoads
                 // A median cut's track runs along its road (not across it), and its
                 // ground road runs either side of the track.
                 if (MedianCut && !planningGround && RunsAlong(polyline, crossing)) continue;
-                if (MedianCut && planningGround && RoadPlanner.IsRail(crossedSegments[crossing.Segment].Info)) continue;
+                if ((MedianCut || buildingCut) && planningGround && RoadPlanner.IsRail(crossedSegments[crossing.Segment].Info)) continue;
                 if (crossing.Distance < MinSpacing * 0.5f || crossing.Distance > division.Length - MinSpacing * 0.5f) continue;
                 if (InDeck(division.DeckRanges, crossing.Distance))
                 {
@@ -277,7 +284,12 @@ namespace RealisticRoads
                 bool overWater = InWater(division.WaterRuns, (from + to) * 0.5f);
                 List<Vector3> slicePoints, sliceTangents;
                 bool ignored;
-                if (overWater)
+                if (cutFrom >= 0f && !planningGround && Mathf.Abs(from - cutFrom) < 0.5f && Mathf.Abs(to - cutTo) < 0.5f)
+                {
+                    // The open cut: one piece, the game's slope piece (OneSlope checks its bend).
+                    CurveMath.Divide(slice, 1, out slicePoints, out sliceTangents);
+                }
+                else if (overWater)
                 {
                     // Bridges: equal spans so the bridge model repeats evenly.
                     int count = CurveMath.ChoosePieceCount(slice, BridgeSpacing, BridgeMinSpacing, MaxBend, out ignored);

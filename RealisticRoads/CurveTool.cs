@@ -254,6 +254,11 @@ namespace RealisticRoads
         // A curve cut into buildable pieces.
         private class Division
         {
+            // A median cut's: where its road has the open gap along the line (from
+            // its elevated end to just past the tunnel's mouth), and where the open
+            // cut is (from the ground to the tunnel's depth): see CutStops.
+            public float GapFrom, GapTo = -1f;
+            public float CutFrom = -1f, CutTo = -1f;
             public List<Vector3> Points;
             public List<Vector3> Tangents;      // leaving each point
             public List<Vector3> InTangents;    // arriving at it (differs at a sharp corner)
@@ -482,8 +487,8 @@ namespace RealisticRoads
             if (dragIndex >= 0) UpdateDrag();
             // A height dragged or a stretch selected in the side view.
             panel.Poll();
-            // The curve just built: now the line beside it.
-            if (pending != null && pending.State != 0) FinishParallel();
+            // (The next part of a build in parts is started by PumpPending, every
+            // frame whether this tool is active or not.)
             if (upgradeMode)
             {
                 UpdateUpgrade();
@@ -541,7 +546,7 @@ namespace RealisticRoads
             second = parallelMode && !liveDeck.Contains(true) ? DivideParallel(preview, CurrentParallel()) : null;
             // A median ramp road: its ground road beside the ramp.
             if (medianRamp != 0 && preview.Plan != null && !preview.Plan.MedianAlong)
-                second = DivideGround(preview, MedianGroundSplit);
+                second = MedianCut ? DivideGround(preview, MedianGroundSplit, 0, preview.GapFrom, preview.GapTo) : DivideGround(preview, MedianGroundSplit);
             cursorText = CursorText(withHover);
             ShowPanel();
             PlaceButtons();
@@ -1780,7 +1785,7 @@ namespace RealisticRoads
         // highest RR's own deck is over the roads along and beyond the line:
         // MedianDeckLevel). Null if
         // fine, else why it can't be built.
-        private string MedianProfile(List<Vector3> controls, List<ushort> nodes, List<ushort> segments, int n, float length, out bool down)
+        private string MedianProfile(List<Vector3> controls, List<Vector3> line, List<ushort> nodes, List<ushort> segments, int n, float length, out bool down)
         {
             medianProfile = null;
             medianSummary = null;
@@ -1797,7 +1802,7 @@ namespace RealisticRoads
                 float from = startOnRoad ? start.y : startGround;
                 bool joinsDeck = nodes[n] != 0 && end.y - endGround >= DeckJoinHeight;
                 string over = null;
-                float target = joinsDeck ? end.y : from + MedianDeckLevel(controls, nodes[n], out over);
+                float target = joinsDeck ? end.y : from + MedianDeckLevel(line, nodes[n], out over);
                 string what = joinsDeck ? "the deck it joins" : "the first deck level" + (over != null ? " (" + over + ")" : "");
                 if (target - from < 1f) return "No deck level to climb to here (" + what + " is " + (target - from).ToString("F1") + " m up)";
                 float climb = (target - from) / grade;
@@ -1837,19 +1842,22 @@ namespace RealisticRoads
         // nothing stands through it. Higher where the roads there need it.
         public const float MinMedianRampLevel = 14.6f;
 
-        private float MedianDeckLevel(List<Vector3> controls, ushort endNode, out string over)
+        // 'line': the curve as drawn (sampled along its bends and the roads it
+        // follows, not the straight chords between its points).
+        private float MedianDeckLevel(List<Vector3> line, ushort endNode, out string over)
         {
             over = null;
             float best = MinMedianRampLevel;
             float half = Net != null ? Net.m_halfWidth : 4f;
             var samples = new List<Vector3>();
-            for (int i = 0; i < controls.Count; i++)
+            float total = CurveMath.Length(line);
+            for (float d = 0f; d < total; d += DeckLevelStep)
             {
-                samples.Add(controls[i]);
-                if (i + 1 >= controls.Count) break;
-                float length = CurveMath.FlatDistance(controls[i], controls[i + 1]);
-                for (float d = DeckLevelStep; d < length; d += DeckLevelStep) samples.Add(Vector3.Lerp(controls[i], controls[i + 1], d / length));
+                Vector3 p, tangent;
+                CurveMath.PointAt(line, d, out p, out tangent);
+                samples.Add(p);
             }
+            if (line.Count > 0) samples.Add(line[line.Count - 1]);
             if (endNode != 0)
             {
                 var net = NetManager.instance;
@@ -2208,6 +2216,39 @@ namespace RealisticRoads
 
         // The curve was built (or not): plan the parallel line again against
         // the roads as they are now, and build it, undone together with the curve.
+        // Main thread, every frame (HotkeyHandler), whether this tool is active or
+        // not: a construction built in parts (a curve and its parallel line, a
+        // median ramp road, a median cut) goes on to its next part as soon as the
+        // one before is built, or is undone whole if a part fails, even after the
+        // player has switched to another tool. A part that throws undoes it too.
+        private bool buildingCut;   // planning a median cut's road now (whatever mode the tool is in)
+
+        public void PumpPending()
+        {
+            var waiting = pending;
+            if (waiting == null || waiting.State == 0) return;
+            try
+            {
+                buildingCut = waiting.Cut;
+                FinishParallel();
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Building the next part failed", e);
+                if (pending == waiting) pending = null;
+                if (waiting.Ground != null)
+                {
+                    Mod.WarnNow(waiting.Cut ? "Median cut not built" : "Median ramp road not built",
+                                "Building its next part failed (the log says why). Nothing of it was left built.");
+                    NetworkBuilder.UndoLast();
+                }
+            }
+            finally
+            {
+                buildingCut = false;
+            }
+        }
+
         private void FinishParallel()
         {
             var waiting = pending;
@@ -2275,11 +2316,12 @@ namespace RealisticRoads
             {
                 case MedianStage.Ramp:
                 {
-                    Vector3 at = down ? ramp.Polyline[ramp.Polyline.Count - 1] : ramp.Polyline[0];
+                    // Where the ramp was planned to leave (land): its first (last) node, at its height.
+                    Vector3 at = down ? ramp.Plan.Points[ramp.Plan.Points.Count - 1] : ramp.Plan.Points[0];
                     waiting.Origin = RampNodeAt(at);
                     if (waiting.Origin == 0)
                     {
-                        FailMedian(waiting, "the ramp's " + (down ? "last" : "first") + " node wasn't found");
+                        FailMedian(waiting, "the ramp's " + (down ? "last" : "first") + " node wasn't found (or more than one ramp end is there)");
                         return;
                     }
                     if (ramp.Plan.MedianAlong)
@@ -2419,46 +2461,53 @@ namespace RealisticRoads
         private const float LeadInRest = 16f;
         private const float LeadIn = SplitRoads.StartLength + LeadInRest;
 
-        // The node of the full road (any road but a median ramp's pieces) at 'at'.
+        // The node of the full road just built at 'at': an end of a segment of
+        // 'road' itself, NodeMatch across and NodeRise up or down from 'at' (a
+        // road crossing above or below, at a stacked interchange, isn't it).
+        // 0 if none, or if more than one node is there (no guessing).
+        private const float NodeMatch = 2f;
+        private const float NodeRise = 4f;
+
         private static ushort FullRoadEndAt(Vector3 at, NetInfo road)
         {
-            var net = NetManager.instance;
-            ushort found = 0;
-            float best = 2f;
-            foreach (ushort s in RoadPlanner.NearbySegments(at, 66f))
-            {
-                var seg = net.m_segments.m_buffer[s];
-                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || SplitRoads.IsRamp(seg.Info) || SplitRoads.IsSplit(seg.Info)) continue;
-                foreach (ushort end in new[] { seg.m_startNode, seg.m_endNode })
-                {
-                    float d = CurveMath.FlatDistance(net.m_nodes.m_buffer[end].m_position, at);
-                    if (d >= best) continue;
-                    best = d;
-                    found = end;
-                }
-            }
-            return found;
+            return NodeAt(at, info => info == road);
         }
 
-        // The node of a median ramp road's ramp nearest 'at' (within EndSnap).
+        // The node of a median ramp road's ramp (any of its pieces) at 'at', as
+        // FullRoadEndAt.
         private static ushort RampNodeAt(Vector3 at)
         {
+            return NodeAt(at, SplitRoads.IsRamp);
+        }
+
+        private static int SegmentsAt(ushort node)
+        {
+            int count = 0;
+            for (int i = 0; i < 8; i++) if (NetManager.instance.m_nodes.m_buffer[node].GetSegment(i) != 0) count++;
+            return count;
+        }
+
+        private static ushort NodeAt(Vector3 at, Func<NetInfo, bool> wanted)
+        {
             var net = NetManager.instance;
-            ushort found = 0;
-            float best = EndSnap;
-            foreach (ushort s in RoadPlanner.NearbySegments(at, EndSnap + 64f))
+            var found = new HashSet<ushort>();
+            foreach (ushort s in RoadPlanner.NearbySegments(at, NodeMatch + 64f))
             {
                 var seg = net.m_segments.m_buffer[s];
-                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !SplitRoads.IsRamp(seg.Info)) continue;
+                if ((seg.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !wanted(seg.Info)) continue;
                 foreach (ushort end in new[] { seg.m_startNode, seg.m_endNode })
                 {
-                    float d = CurveMath.FlatDistance(net.m_nodes.m_buffer[end].m_position, at);
-                    if (d >= best) continue;
-                    best = d;
-                    found = end;
+                    Vector3 p = net.m_nodes.m_buffer[end].m_position;
+                    if (CurveMath.FlatDistance(p, at) <= NodeMatch && Mathf.Abs(p.y - at.y) <= NodeRise) found.Add(end);
                 }
             }
-            return found;
+            if (found.Count != 1)
+            {
+                if (found.Count > 1) Mod.Log("  " + found.Count + " nodes match at " + at + ": none is taken");
+                return 0;
+            }
+            foreach (ushort node in found) return node;
+            return 0;
         }
 
         // LeadIn of the full road, straight from 'at' (where the ramp will leave
@@ -2592,11 +2641,14 @@ namespace RealisticRoads
         // it starts (going down: ends) at, 'originAlong' along the line from
         // where the ramp leaves (lands in) the road (past a stretch of road
         // that became the ground road).
-        private Division DivideGround(Division ramp, NetInfo split, ushort origin = 0, float originAlong = 0f)
+        // 'until' (> 0): the ground road ends that far along the line (a median
+        // cut's gap ends before its line does).
+        private Division DivideGround(Division ramp, NetInfo split, ushort origin = 0, float originAlong = 0f, float until = -1f)
         {
             if (ramp == null || split == null || ramp.Polyline == null || ramp.Polyline.Count < 2 || ramp.Length < 1f) return null;
             bool down = ramp.Plan != null && ramp.Plan.MedianDown;
-            float from = down ? 0f : originAlong, until = down ? ramp.Length - originAlong : ramp.Length;
+            float from = down ? 0f : originAlong;
+            until = down ? ramp.Length - originAlong : until > 0f ? Mathf.Min(until, ramp.Length) : ramp.Length;
             var polyline = CurveMath.Slice(ramp.Polyline, from, until);
             if (CurveMath.Length(polyline) < 1f) return null;
             ushort startNode, endNode, startSegment, endSegment;
@@ -2781,6 +2833,15 @@ namespace RealisticRoads
 
         private void BuildCurrent()
         {
+            // One construction at a time: the parts of one built in parts are
+            // started one after another (PumpPending), and a second would take
+            // its place half built.
+            if (pending != null)
+            {
+                Mod.Log("Not built: the last one is still being built, part by part");
+                Mod.WarnNow("Still building", "The last road is still being built, part by part. Build this once it is done.");
+                return;
+            }
             if (upgradeMode)
             {
                 BuildUpgrade();
@@ -3039,8 +3100,34 @@ namespace RealisticRoads
             division.Lifts = lifts;
             // A median ramp's own height profile (up to its target and level, or down).
             bool down = false;
-            string profileProblem = MedianCut ? CutProfile(controls, nodes, n, division.Length, out down)
-                : medianRamp != 0 ? MedianProfile(controls, nodes, segments, n, division.Length, out down) : null;
+            string profileProblem = MedianCut ? CutProfile(controls, division.Polyline, nodes, n, division.Length, out down)
+                : medianRamp != 0 ? MedianProfile(controls, division.Polyline, nodes, segments, n, division.Length, out down) : null;
+            if (MedianCut && profileProblem == null && CutStops(division, down))
+            {
+                // Divided again with a stop where the track reaches the ground and one
+                // where it reaches the tunnel's depth, nothing between: the open cut
+                // is one slope piece, planned as it is built.
+                cutFrom = division.CutFrom;
+                cutTo = division.CutTo;
+                try
+                {
+                    var again = DivideShaped(controls, division.Continues ? startDir : Vector3.zero, division.Continues ? endDir : Vector3.zero,
+                        nodes[0], nodes[n], lifts, straight, deck, below, paths, under);
+                    if (again.Ok)
+                    {
+                        again.Continues = division.Continues;
+                        again.GapFrom = division.GapFrom;
+                        again.GapTo = division.GapTo;
+                        again.CutFrom = division.CutFrom;
+                        again.CutTo = division.CutTo;
+                        division = again;
+                    }
+                }
+                finally
+                {
+                    cutFrom = cutTo = -1f;
+                }
+            }
             if (MedianCut) TypeCutCrossings(division);
             if (medianRamp == 0) medianProfile = null;
             PlanDivision(division, nodes[0], nodes[n], startSegment, ts[0], endSegment, ts[n], raisedPoints);
@@ -3085,6 +3172,10 @@ namespace RealisticRoads
                 float onT;
                 if (medianRamp != 0 && nodes[joinAt] == 0) EndOn(ref joinPoint, MedianGroundRoad, EndSnap, out onNode, out onSegment, out onT, true);
                 else onNode = onSegment = 0;
+                // Never at a junction: its other roads would be at the ramp's node.
+                if (nodes[joinAt] != 0 && SegmentsAt(nodes[joinAt]) > 2)
+                    division.Plan.Problems.Insert(0, (down ? "End" : "Start") + " the " + MedianRampNames[medianRamp] + " on a road's end or along its middle, " +
+                                                     "not at a junction (its other roads would meet the ramp there)");
                 if (!division.Plan.MedianAlong && (onNode != 0 || onSegment != 0))
                     division.Plan.Problems.Insert(0, (down ? "End" : "Start") + " the " + MedianRampNames[medianRamp] + " on the end node of the road " +
                                                      "(it snaps to it), or on open ground: here it would be built through the road");
