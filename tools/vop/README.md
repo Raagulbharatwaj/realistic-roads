@@ -13,3 +13,7 @@ Scripts used to read how the Vanilla Overpass Project intersection assets
   the asset.
 
 Run them with `python3 -I`.
+- `netinfo.py FILE...`: a road asset's (`NetInfo`) settings: widths, corner
+  offsets, terrain flags, and how many segment and node models it has. VOP's
+  parts A and B have no node models and a corner offset of 0; its Two-Lane
+  ramp lowers the ground but never flattens or clips it.

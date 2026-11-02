@@ -15,7 +15,7 @@ namespace RealisticRoads
     {
         // Which source this build is from, in the log, to tell an old or second
         // copy of the mod from the current one. Changed with each tested feature.
-        public const string SourceTag = "median-node-dump";
+        public const string SourceTag = "median-vop-parts-a-b";
 
         public string Name => "Realistic Roads (beta)";
         public string Description => "Plan your roads and add layers to your city: draw a whole route, choose how it crosses everything, stack decks over and under streets.";
@@ -33,13 +33,13 @@ namespace RealisticRoads
 
         // Tests of the median ramp node's geometry: RR's two changes to how the
         // game draws it can be switched off, to see what each one does.
-        private static bool squareRampEnds = true, hideRampJunctions = true;
+        private static bool squareRampEnds = false, hideRampJunctions = true;
 
         // The roads at a median ramp's node end square at its centre (SplitRoadsCornerPatch).
         public static bool SquareRampEnds
         {
             get { return squareRampEnds; }
-            set { squareRampEnds = value; SetSetting("RealisticRoads.SquareRampEnds", value); }
+            set { squareRampEnds = value; SetSetting("RealisticRoads.SquareRampEndsOverride", value); }
         }
 
         // The ramp and the start pieces draw no junction models (read when a city loads).
@@ -52,7 +52,9 @@ namespace RealisticRoads
         private static void LoadSettings()
         {
             debugLogging = Setting("RealisticRoads.DebugLogging", false);
-            squareRampEnds = Setting("RealisticRoads.SquareRampEnds", true);
+            // Off by default: like VOP, the start pieces' and ramp's corner offset
+            // of 0 squares them; RR's own corner override is a test now.
+            squareRampEnds = Setting("RealisticRoads.SquareRampEndsOverride", false);
             hideRampJunctions = Setting("RealisticRoads.HideRampJunctions", true);
         }
 
@@ -146,7 +148,7 @@ namespace RealisticRoads
             var group = helper.AddGroup("Realistic Roads");
             group.AddCheckbox("Detailed logging (every segment the game creates)", DebugLogging, value => DebugLogging = value);
             var test = helper.AddGroup("Median ramp node tests");
-            test.AddCheckbox("Roads at a median ramp's node end square (off: the game's own corners)", SquareRampEnds, value => SquareRampEnds = value);
+            test.AddCheckbox("RR's own square ends at a median ramp's node (off, like VOP: the game's corners with offset 0)", SquareRampEnds, value => SquareRampEnds = value);
             test.AddCheckbox("Ramp and start pieces draw no junction models (takes effect when a city loads)", HideRampJunctions, value => HideRampJunctions = value);
         }
 

@@ -236,7 +236,7 @@ namespace RealisticRoads
                     var lod = Widen(node.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
                     if (lod != null) node.m_lodMesh = lod;
                 }
-            if (start) NoJunctionPieces(copy);
+            if (start) VopStartPiece(copy);
             HideFromMenus(copy);
             Name(copy, Title(road) + " (" + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes beside a median ramp" + (start ? ", where it starts" : "") + ")",
                 "Built by Realistic Roads beside a ramp in the road's middle.");
@@ -339,6 +339,33 @@ namespace RealisticRoads
         // would wrap across that road's lanes. The other roads' junction
         // pieces and the ramp's square end meet there instead. Its own joins
         // (two ramp segments, a bend) keep theirs. By name: the game's fields.
+        // A start piece set up as VOP's parts A and B are (read from their
+        // assets): no node models at all, corners at the node itself (no corner
+        // offset; the game itself squares the ends of the roads meeting there),
+        // segment ends not clipped, junctions flat. Their ground settings stay
+        // the road's (A and B flatten and clip the ground, like the Six-Lane Road).
+        private static void VopStartPiece(NetInfo piece)
+        {
+            piece.m_nodes = new NetInfo.Node[0];
+            piece.m_minCornerOffset = 0f;
+            piece.m_maxCornerOffset = 0f;
+            piece.m_clipSegmentEnds = false;
+            piece.m_flatJunctions = true;
+            Mod.Log("Median ramp roads: " + piece.name + ": VOP start piece (no node models, corner offset 0, ends not clipped)");
+        }
+
+        // A ramp set up on the ground as VOP's Two-Lane ramp is: it never raises
+        // or clips the ground, only lowers it (it runs in the ground road's gap,
+        // which already shapes the ground there), and its corners are at the node.
+        private static void VopRamp(NetInfo ramp)
+        {
+            ramp.m_flattenTerrain = false;
+            ramp.m_lowerTerrain = true;
+            ramp.m_clipTerrain = false;
+            ramp.m_minCornerOffset = 0f;
+            ramp.m_maxCornerOffset = 0f;
+        }
+
         private static void NoJunctionPieces(NetInfo ramp)
         {
             if (ramp.m_nodes == null) return;
@@ -536,6 +563,7 @@ namespace RealisticRoads
                     if (lod != null) node.m_lodMesh = lod;
                 }
             NoJunctionPieces(copy);
+            VopRamp(copy);
             HideFromMenus(copy);
             return copy;
         }
@@ -1001,7 +1029,7 @@ namespace RealisticRoads
                 return null;
             }
             OwnItems(copy);
-            NoJunctionPieces(copy);
+            VopStartPiece(copy);
             HideFromMenus(copy);
             Name(copy, Title(road) + " (where a median ramp leaves it)", "Built by Realistic Roads where a ramp rises out of the road's middle.");
             lock (variants) fullStartNames[road.name] = name;
