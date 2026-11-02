@@ -25,9 +25,9 @@ namespace RealisticRoads
         private const float IntoGround = 1f;       // their foot this far into the ground
         private const float MinWall = 0.3f;        // lower than this: no wall there
         // The walls go up to where the ramp is this high over the ground (the
-        // owner's choice: a solid abutment low down, open on wall pillars above,
-        // as a real ramp has); there an end face closes them.
-        private const float MaxWallHeight = 5.5f;
+        // owner's choice, 11 m: a solid abutment, open on wall pillars above);
+        // there an end face closes them.
+        private const float MaxWallHeight = 11f;
         private const float Step = 4f;             // metres between the walls' pieces along the ramp
         private const float PierDepth = 1.6f;      // a wall pillar's thickness along the ramp
         private const float PierUnderside = 1.2f;  // its top this far under the node (the deck's underside)

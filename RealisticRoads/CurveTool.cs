@@ -403,6 +403,7 @@ namespace RealisticRoads
             public string RampLog;       // the ramp's "Building ..." line, logged when its build starts
             public string StartsWhy;     // why the start pieces couldn't be made
             public bool Cut;             // a median cut (see FinishCut)
+            public bool TriedLineStart;  // and its road was looked for where the line starts too
         }
 
         private enum MedianStage { LeadIn, Ramp, Convert, Ground, Starts, CutTrack, CutSplit, CutConvert, CutLeadIn, CutGround, CutStarts, CutEndStarts }
