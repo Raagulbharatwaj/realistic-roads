@@ -379,9 +379,10 @@ namespace RealisticRoads
             public Vector3 LeadAt;       // where that full road ends (the ramp's node)
             public bool AnyBuilt;        // a part is built (a failure removes what is)
             public string RampLog;       // the ramp's "Building ..." line, logged when its build starts
+            public string StartsWhy;     // why the start pieces couldn't be made
         }
 
-        private enum MedianStage { LeadIn, Ramp, Convert, Ground }
+        private enum MedianStage { LeadIn, Ramp, Convert, Ground, Starts }
 
         private bool parallelMode;
         private float parallelGap = DefaultGap;  // metres between the two roads' edges
@@ -2052,14 +2053,13 @@ namespace RealisticRoads
         // A median ramp road is one construction, built part by part, each
         // only once the one before it has been (each tells FinishParallel):
         //   1. the ramp;
-        //   2. where the ramp leaves (or lands in) the road, the way the VOP
-        //      overpasses join it: one node shared by the full road, the ground
+        //   2. where the ramp leaves (or lands in) the road, with one node shared by the full road, the ground
         //      road (its outer lanes) and the ramp (its inner lanes). Along an
         //      existing road, that road under the line becomes the ground road
         //      (cut where the line ends in it); off a road, LeadIn of the full
         //      road is built there; on a road's end, that road is the full road;
         //   3. the ground road along the rest of the line;
-        //   4. that node set up like VOP's (no traffic lights, no pedestrian
+        //   4. that node set up (no traffic lights, no pedestrian
         //      crossing, the lanes joined inner to the ramp and outer to the
         //      ground road; with TM:PE).
         // If any part can't be planned or built, every part built before it is
@@ -2075,6 +2075,7 @@ namespace RealisticRoads
                 FailMedian(waiting, waiting.Stage == MedianStage.Ramp ? "the ramp couldn't be built" :
                                     waiting.Stage == MedianStage.Convert ? "the road under it couldn't be turned into its ground road" :
                                     waiting.Stage == MedianStage.LeadIn ? "the " + LeadIn.ToString("F0") + " m of " + Title(waiting.Full) + " couldn't be built" :
+                                    waiting.Stage == MedianStage.Starts ? "the start pieces at its node couldn't be made: " + waiting.StartsWhy :
                                     "the ground road couldn't be built");
                 return;
             }
@@ -2123,7 +2124,7 @@ namespace RealisticRoads
                     }
                     // The line goes on past the road: the ground road from where it left it.
                     if (waiting.StopAlong < ramp.Length - MinSpacing) BuildMedianGround(waiting, waiting.Stop, waiting.StopAlong);
-                    else FinishMedianOrigin(waiting);
+                    else MakeMedianStarts(waiting);
                     return;
                 case MedianStage.LeadIn:
                 {
@@ -2143,6 +2144,9 @@ namespace RealisticRoads
                     return;
                 }
                 case MedianStage.Ground:
+                    MakeMedianStarts(waiting);
+                    return;
+                case MedianStage.Starts:
                     FinishMedianOrigin(waiting);
                     return;
             }
@@ -2169,6 +2173,29 @@ namespace RealisticRoads
             NetworkBuilder.BuildCurve(waiting.Ground, ground.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
         }
 
+        // The start pieces at the ramp's node: the full road's last stretch
+        // and the ground road's first become start pieces that draw nothing at
+        // that junction (NetworkBuilder.MedianTransition). Without them it would
+        // be an ordinary junction (crosswalks, kerbs across the road): the whole
+        // median ramp road is removed instead.
+        private void MakeMedianStarts(PendingParallel waiting)
+        {
+            var full = SplitRoads.FullStartFor(waiting.Full);
+            var ground = SplitRoads.StartFor(waiting.Ground);
+            if (full == null || ground == null)
+            {
+                FailMedian(waiting, "its start pieces weren't made when the city loaded (the log's 'Median ramp roads' lines say why)");
+                return;
+            }
+            Mod.Log("Median ramp road, next: the start pieces at node #" + waiting.Origin + " (" + full.name + ", " + ground.name + ")");
+            NextMedian(waiting, MedianStage.Starts);
+            NetworkBuilder.MedianTransition(waiting.Origin, full, ground, waiting.Group, (ok, why) =>
+            {
+                waiting.StartsWhy = why;
+                waiting.State = ok ? 1 : 2;
+            });
+        }
+
         private void FinishMedianOrigin(PendingParallel waiting)
         {
             Mod.Log("Median ramp road, last: all parts built; setting up node #" + waiting.Origin + " where they meet (one Ctrl+Z removes it all)");
@@ -2191,7 +2218,10 @@ namespace RealisticRoads
             if (waiting.AnyBuilt) NetworkBuilder.UndoLast();
         }
 
-        private const float LeadIn = 20f;   // the full road before a median ramp's node off a road (VOP's part A is 20 m)
+        // The full road built before a median ramp's node on open ground: one
+        // start piece long (it becomes one whole). 20 m dug a
+        // trench in the owner's test, shorter than RR ever builds a road.
+        private const float LeadIn = SplitRoads.StartLength;
 
         // The node of the full road (any road but a median ramp's pieces) at 'at'.
         private static ushort FullRoadEndAt(Vector3 at, NetInfo road)
@@ -2834,25 +2864,32 @@ namespace RealisticRoads
             RoadPlanner.MedianRamp = medianRamp != 0 && !planningGround;
             RoadPlanner.HoldStart = medianRamp != 0 && !planningGround && startNode == 0 && startSegment == 0;
             RoadPlanner.Profile = medianRamp != 0 && !planningGround ? medianProfile : null;
-            FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
-            division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
-                division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
-                startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
-                division.Heights, division.Forced);
-            // Raised stretches get a node (and pillar) every RaisedSpacing, like the
-            // vanilla tool's elevated roads; plan again with them.
-            if (AddRaisedNodes(division))
+            try
             {
                 FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
                 division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
                     division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
                     startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
-                    division.Heights, division.Forced);
+                    division.Heights, division.Forced, NodeDistances(division));
+                // Raised stretches get a node (and pillar) every RaisedSpacing, like the
+                // vanilla tool's elevated roads; plan again with them.
+                if (AddRaisedNodes(division))
+                {
+                    FindDecks(division, Net != null ? Net.m_halfWidth : 8f, joined);
+                    division.Plan = RoadPlanner.Make(Net, division.Points, division.Tangents,
+                        division.Crossings, division.CrossingIndex, division.WaterRuns, startNode, endNode,
+                        startSegment, startT, endSegment, endT, raisedPoints, division.InTangents, division.OnDeck, division.Below, division.UnderDeck,
+                        division.Heights, division.Forced, NodeDistances(division));
+                }
             }
-            RoadPlanner.Ramp = false;
-            RoadPlanner.MedianRamp = false;
-            RoadPlanner.HoldStart = false;
-            RoadPlanner.Profile = null;
+            finally
+            {
+                // Never left set for the next plan (a parallel line, the next curve).
+                RoadPlanner.Ramp = false;
+                RoadPlanner.MedianRamp = false;
+                RoadPlanner.HoldStart = false;
+                RoadPlanner.Profile = null;
+            }
             DropNodesOverCrossings(division);
             division.NodeAlong = NodeDistances(division);
             division.Cost = NetworkBuilder.Cost(Net, division.Plan);
@@ -3124,6 +3161,9 @@ namespace RealisticRoads
             cuts.Sort((p, q) => p.Key.CompareTo(q.Key));
 
             var stops = new List<KeyValuePair<float, Crossing>> { new KeyValuePair<float, Crossing>(0f, null) };
+            // A crossing too close to another one for a node of its own shares that
+            // one's node: its height still holds there (it is never dropped).
+            var sharing = new Dictionary<Crossing, List<Crossing>>();
             foreach (var cut in cuts)
             {
                 if (cut.Key < 4f || cut.Key > division.Length - 4f) continue;
@@ -3132,6 +3172,13 @@ namespace RealisticRoads
                     // Too close to the previous stop: keep the crossing if there is one,
                     // else a sharp corner (the road turns there, so it needs the node).
                     var previous = stops[stops.Count - 1];
+                    if (cut.Value != null && previous.Value != null)
+                    {
+                        List<Crossing> list;
+                        if (!sharing.TryGetValue(previous.Value, out list)) sharing[previous.Value] = list = new List<Crossing>();
+                        list.Add(cut.Value);
+                        continue;
+                    }
                     bool better = cut.Value != null || (IsCornerAt(corners, cut.Key) && !IsCornerAt(corners, previous.Key));
                     if (better && previous.Value == null && stops.Count > 1)
                         stops[stops.Count - 1] = cut;
@@ -3196,6 +3243,13 @@ namespace RealisticRoads
                         }
                         division.Crossings.Add(stops[c].Value);
                         division.CrossingIndex.Add(index);
+                        List<Crossing> sharers;
+                        if (sharing.TryGetValue(stops[c].Value, out sharers))
+                            foreach (var sharer in sharers)
+                            {
+                                division.Crossings.Add(sharer);
+                                division.CrossingIndex.Add(index);
+                            }
                     }
                 }
             }

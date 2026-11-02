@@ -451,7 +451,9 @@ namespace RealisticRoads
         public static bool Beam(DeckBelow below, float ourHalfWidth, bool median, out Vector3 a, out Vector3 b)
         {
             Vector3 across = CurveMath.Rotate(below.Along, 90f);
-            float half = median ? Mathf.Max(ourHalfWidth - CapInset, MaxMedianColumn)
+            // The cap: at least as wide as the column under it (MaxMedianColumn is
+            // a full width), never wider than our deck.
+            float half = median ? Mathf.Min(Mathf.Max(ourHalfWidth - CapInset, MaxMedianColumn * 0.5f), ourHalfWidth)
                 : Mathf.Max(below.HalfWidth, ourHalfWidth) + ColumnMargin;
             a = below.Center + across * half;
             b = below.Center - across * half;
@@ -885,7 +887,7 @@ namespace RealisticRoads
     {
         public static IEnumerable<MethodBase> TargetMethods()
         {
-            foreach (var type in typeof(NetAI).Assembly.GetTypes())
+            foreach (var type in Patcher.Types(typeof(NetAI).Assembly))
             {
                 if (type != typeof(NetAI) && !type.IsSubclassOf(typeof(NetAI))) continue;
                 var method = type.GetMethod("GetNodeBuilding", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);

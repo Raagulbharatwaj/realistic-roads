@@ -84,6 +84,8 @@ namespace RealisticRoads
 
         private static UITextureAtlas Create()
         {
+            // The game's UI not up yet: try again next time (not a failure).
+            if (UIView.GetAView() == null || UIView.GetAView().defaultAtlas == null) return null;
             try
             {
                 var assembly = typeof(Icons).Assembly;

@@ -24,7 +24,7 @@ namespace RealisticRoads
             int failures = 0;
             // One class at a time, so a patch that can't find its target (e.g.
             // after a game update) only switches off that one feature.
-            foreach (var type in typeof(Patcher).Assembly.GetTypes())
+            foreach (var type in Types(typeof(Patcher).Assembly))
             {
                 if (type.GetCustomAttributes(typeof(HarmonyPatch), false).Length == 0) continue;
                 try
@@ -40,6 +40,23 @@ namespace RealisticRoads
             patched = true;
             foreach (var method in harmony.GetPatchedMethods()) Mod.Log("Patched " + Describe(method));
             Mod.Log("Harmony patches applied" + (failures > 0 ? " (" + failures + " failed)" : ""));
+        }
+
+        // An assembly's types; one that can't load (a missing reference) is left
+        // out instead of losing them all.
+        internal static IEnumerable<Type> Types(System.Reflection.Assembly assembly)
+        {
+            try
+            {
+                return assembly.GetTypes();
+            }
+            catch (System.Reflection.ReflectionTypeLoadException e)
+            {
+                var loaded = new List<Type>();
+                foreach (var type in e.Types) if (type != null) loaded.Add(type);
+                Mod.Log("Some types of " + assembly.GetName().Name + " didn't load (" + (e.Types.Length - loaded.Count) + "); the rest are used");
+                return loaded;
+            }
         }
 
         public static void UnpatchAll()

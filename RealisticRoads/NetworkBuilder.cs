@@ -192,8 +192,7 @@ namespace RealisticRoads
 
         // A median ramp road drawn along an existing road: that road, from the
         // ramp's node ('origin') on under the line ('line', from that node
-        // outward), becomes the median ramp road's ground road, the way VOP's
-        // part B replaces the road beside its ramp: whole segments while the
+        // outward), becomes the median ramp road's ground road, replacing the road beside the ramp: whole segments while the
         // road runs under the line (through junctions, which stay junctions),
         // and the one the line ends in is cut there (the rest stays the road
         // it was). Only the road the ramp rises out of: a ground road with
@@ -299,6 +298,82 @@ namespace RealisticRoads
             });
         }
 
+        // The node where a median ramp leaves (or lands in) the road, made with
+        // start pieces: the full road's last StartLength there becomes its start
+        // piece ('fullStart') and the ground road's first becomes its
+        // ('groundStart'); neither draws anything at that junction, so
+        // only the roads' own surfaces meet there, squared off edge to edge
+        // (SplitRoadsCornerPatch). A longer segment is cut, the piece by the
+        // node changed, the rest kept; a shorter one changes whole, unless its
+        // other end is a junction too (it would draw nothing there either): then
+        // the build fails. One build in 'group' (undone with the rest); 'done' is
+        // told (simulation thread) whether every piece was made.
+        public static void MedianTransition(ushort node, NetInfo fullStart, NetInfo groundStart, int group, Action<bool, string> done)
+        {
+            SimulationManager.instance.AddAction(() =>
+            {
+                var build = new Build { Group = group };
+                string why = null;
+                var made = new List<string>();
+                try
+                {
+                    var net = NetManager.instance;
+                    var segments = net.m_segments.m_buffer;
+                    var at = new List<ushort>();
+                    for (int i = 0; i < 8; i++)
+                    {
+                        ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
+                        if (s != 0) at.Add(s);
+                    }
+                    bool full = false, ground = false;
+                    foreach (ushort s in at)
+                    {
+                        var info = segments[s].Info;
+                        if (SplitRoads.IsRamp(info)) continue;
+                        bool isGround = SplitRoads.IsSplit(info);
+                        var target = isGround ? groundStart : fullStart;
+                        if (isGround) ground = true; else full = true;
+                        if (info == target) continue;
+                        float length = Mathf.Max(segments[s].m_averageLength, 1f);
+                        bool fromStart = segments[s].m_startNode == node;
+                        ushort far = fromStart ? segments[s].m_endNode : segments[s].m_startNode;
+                        if (length <= SplitRoads.StartLength + MinPiece)
+                        {
+                            if (SegmentCount(far) > 2)
+                            {
+                                why = "the " + info.name + " at the ramp's node is only " + length.ToString("F0") + " m to the next junction (at least " +
+                                      (SplitRoads.StartLength + MinPiece).ToString("F0") + " m needed for its start piece)";
+                                break;
+                            }
+                            SplitSegment(s, new float[0], new[] { target }, build);
+                            made.Add(info.name + " #" + s + " whole (" + length.ToString("F0") + " m)");
+                            continue;
+                        }
+                        float t = fromStart ? SplitRoads.StartLength / length : 1f - SplitRoads.StartLength / length;
+                        SplitSegment(s, new[] { t }, fromStart ? new[] { target, info } : new[] { info, target }, build);
+                        made.Add(info.name + " #" + s + " (its " + SplitRoads.StartLength.ToString("F0") + " m by the node)");
+                    }
+                    if (why == null && (!full || !ground)) why = "the ramp's node #" + node + " has no " + (full ? "ground road" : "full road");
+                    if (why != null)
+                    {
+                        Remove(build);
+                        Mod.Log("Median ramp node #" + node + ": start pieces not made: " + why);
+                        if (done != null) done(false, why);
+                        return;
+                    }
+                    if (build.Splits.Count > 0) Keep(build);
+                    Mod.Log("Median ramp node #" + node + ": start pieces (no junction pieces drawn there): " + string.Join("; ", made.ToArray()));
+                    if (done != null) done(true, null);
+                }
+                catch (Exception e)
+                {
+                    Mod.LogError("Making the median ramp node #" + node + "'s start pieces failed; put back", e);
+                    Remove(build);
+                    if (done != null) done(false, "making its start pieces failed (" + e.Message + ")");
+                }
+            });
+        }
+
         private const float LineCover = 3f;   // a road this close to the drawn line (flat) runs under it
 
         // Off the line (further than LineCover from it); 'along': how far along it the nearest place is.
@@ -336,8 +411,7 @@ namespace RealisticRoads
         }
 
         // The node where a median ramp road's ramp leaves (or lands in) the
-        // road, set up the way the VOP overpasses set theirs (read from their
-        // assets): no traffic lights (the game's own setting, kept by marking
+        // road, set up as a ramp junction: no traffic lights (the game's own setting, kept by marking
         // them custom), and with TM:PE no pedestrian crossing on any road end
         // there and entering a blocked junction allowed. Queued after the
         // roads at it are built.
@@ -364,7 +438,7 @@ namespace RealisticRoads
                     int tmpeSet = 0;
                     string tmpe = TmpeManager("JunctionRestrictionsManager", out object restrictions);
                     // With TM:PE its own traffic light setting rules the node (it puts
-                    // the game's back): off there too, as VOP's assets have it.
+                    // the game's back): off there too.
                     TmpeManager("TrafficLightManager", out object trafficLights);
                     bool tmpeLightsOff = trafficLights != null && TmpeLightsOff(trafficLights, node);
                     for (int i = 0; i < 8; i++)
@@ -387,6 +461,7 @@ namespace RealisticRoads
                         return;
                     }
                     string laneLinks = TmpeConnectLanes(node);
+                    lock (dumps) dumps.Add(new KeyValuePair<ushort, int>(node, DumpAfterFrames));
                     Mod.Log("Median ramp node #" + node + ": " + ends.Count + " road end(s): " + string.Join(", ", ends.ToArray()) +
                             "; " + lights + (trafficLights != null ? (tmpeLightsOff ? ", TM:PE traffic light off" : ", TM:PE traffic light NOT taken off") : "") +
                             "; " + (restrictions != null ? "TM:PE: pedestrian crossing off on " + tmpeSet + " of them" +
@@ -399,8 +474,8 @@ namespace RealisticRoads
             });
         }
 
-        // The lanes at a median ramp's node joined the way VOP's assets join
-        // them (their TM:PE lane connections): the full road's inner lanes each
+        // The lanes at a median ramp's node joined with TM:PE lane
+        // connections: the full road's inner lanes each
         // way to the ramp's lanes, its outer ones to the ground road's, and back
         // the same way. Lanes are told apart by where they end at the node
         // across the ramp's direction there (which side, how far out), so it
@@ -566,8 +641,145 @@ namespace RealisticRoads
 
         // Main thread, every frame the tool runs: a median ramp node TM:PE
         // wasn't ready for is set up again after TmpeRetryFrames.
+        // A median ramp node's geometry, written to the log a little after it is
+        // built (the game has redrawn it and dug the ground by then): the node,
+        // each road at it (its piece, its end there, its corners as the game
+        // draws them, heights along it) and the ground around it, as heights
+        // above or below the node: what the game actually made there.
+        private const int DumpAfterFrames = 120;
+        private static readonly List<KeyValuePair<ushort, int>> dumps = new List<KeyValuePair<ushort, int>>();
+
+        private static void PollDumps()
+        {
+            var due = new List<ushort>();
+            lock (dumps)
+            {
+                for (int i = dumps.Count - 1; i >= 0; i--)
+                {
+                    int left = dumps[i].Value - 1;
+                    if (left > 0) dumps[i] = new KeyValuePair<ushort, int>(dumps[i].Key, left);
+                    else
+                    {
+                        due.Add(dumps[i].Key);
+                        dumps.RemoveAt(i);
+                    }
+                }
+            }
+            foreach (ushort node in due) SimulationManager.instance.AddAction(() => DumpNode(node));
+        }
+
+        private static System.Reflection.MethodInfo detailHeight;
+        private static bool detailHeightLooked;
+
+        // The ground's height as the game draws it (roads' digging included), if
+        // the game has SampleDetailHeight; NaN if not.
+        private static float FinalHeight(Vector3 p)
+        {
+            if (!detailHeightLooked)
+            {
+                detailHeightLooked = true;
+                detailHeight = typeof(TerrainManager).GetMethod("SampleDetailHeight", new[] { typeof(Vector3) });
+                if (detailHeight == null) Mod.Log("Node dump: the game has no SampleDetailHeight(Vector3); drawn ground heights not shown");
+            }
+            if (detailHeight == null) return float.NaN;
+            try
+            {
+                return (float)detailHeight.Invoke(TerrainManager.instance, new object[] { p });
+            }
+            catch
+            {
+                return float.NaN;
+            }
+        }
+
+        private static string V(Vector3 v) => "(" + v.x.ToString("F1") + ", " + v.y.ToString("F2") + ", " + v.z.ToString("F1") + ")";
+
+        // Heights at 'p' against 'level': the raw ground, the ground as drawn.
+        private static string Ground(Vector3 p, float level)
+        {
+            float raw = TerrainManager.instance.SampleRawHeightSmooth(p), drawn = FinalHeight(p);
+            return "ground " + (raw - level).ToString("+0.00;-0.00") + (float.IsNaN(drawn) ? "" : " / drawn " + (drawn - level).ToString("+0.00;-0.00"));
+        }
+
+        private static void DumpNode(ushort node)
+        {
+            try
+            {
+                var net = NetManager.instance;
+                var n = net.m_nodes.m_buffer[node];
+                if ((n.m_flags & NetNode.Flags.Created) == NetNode.Flags.None)
+                {
+                    Mod.Log("Node dump #" + node + ": gone");
+                    return;
+                }
+                var lines = new List<string>();
+                Vector3 at = n.m_position;
+                lines.Add("Node dump #" + node + ": info " + (n.Info != null ? n.Info.name : "?") + ", flags " + n.m_flags + ", elevation " + n.m_elevation +
+                          ", at " + V(at) + ", " + Ground(at, at.y) + " (heights below are against the node's)");
+                Vector3 axis = Vector3.zero;
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort s = n.GetSegment(i);
+                    if (s == 0) continue;
+                    var seg = net.m_segments.m_buffer[s];
+                    bool start = seg.m_startNode == node;
+                    ushort far = start ? seg.m_endNode : seg.m_startNode;
+                    Vector3 dir = start ? seg.m_startDirection : seg.m_endDirection;
+                    if (axis == Vector3.zero && SplitRoads.IsRamp(seg.Info)) axis = CurveMath.FlatNormal(dir);
+                    var farNode = net.m_nodes.m_buffer[far];
+                    lines.Add("  segment #" + s + " " + (seg.Info != null ? seg.Info.name : "?") + " (half width " + (seg.Info != null ? seg.Info.m_halfWidth.ToString("F1") : "?") +
+                              "), its " + (start ? "start" : "end") + " here, " + seg.m_averageLength.ToString("F1") + " m long, flags " + seg.m_flags +
+                              ", way out of the node " + V(dir) + ", square end " + SplitRoads.SquareEnd(s, node, dir));
+                    lines.Add("    far node #" + far + " (" + (farNode.Info != null ? farNode.Info.name : "?") + ", flags " + farNode.m_flags + ") at " +
+                              V(farNode.m_position) + ", " + Ground(farNode.m_position, farNode.m_position.y));
+                    foreach (bool left in new[] { true, false })
+                    {
+                        Vector3 corner, cornerDir;
+                        bool smooth;
+                        seg.CalculateCorner(s, true, start, left, out corner, out cornerDir, out smooth);
+                        lines.Add("    corner " + (left ? "left " : "right") + " " + V(corner) + " (" + CurveMath.FlatDistance(corner, at).ToString("F1") + " m from the node), way " +
+                                  V(cornerDir) + ", " + Ground(corner, corner.y));
+                    }
+                    Vector3 a, b, c, d;
+                    CrossingFinder.SegmentBezier(s, out a, out b, out c, out d);
+                    var along = new List<string>();
+                    foreach (float metres in new[] { 2f, 5f, 10f, 20f, 40f })
+                    {
+                        if (metres >= seg.m_averageLength) break;
+                        float t = metres / Mathf.Max(seg.m_averageLength, 1f);
+                        Vector3 p = CurveMath.Bezier(a, b, c, d, start ? t : 1f - t);
+                        along.Add(metres.ToString("F0") + " m: road " + (p.y - at.y).ToString("+0.00;-0.00") + ", " + Ground(p, at.y));
+                    }
+                    lines.Add("    along it: " + string.Join("; ", along.ToArray()));
+                }
+                // The ground in a cross through the node: along the ramp's way and across it.
+                if (axis != Vector3.zero)
+                {
+                    Vector3 across = new Vector3(axis.z, 0f, -axis.x);
+                    foreach (var line in new[] { new KeyValuePair<string, Vector3>("along the ramp", axis), new KeyValuePair<string, Vector3>("across it", across) })
+                    {
+                        var samples = new List<string>();
+                        for (int k = -8; k <= 8; k++)
+                        {
+                            Vector3 p = at + line.Value * (k * 5f);
+                            float raw = TerrainManager.instance.SampleRawHeightSmooth(p), drawn = FinalHeight(p);
+                            samples.Add((k * 5).ToString("+0;-0") + ":" + (float.IsNaN(drawn) ? (raw - at.y).ToString("+0.0;-0.0") : (drawn - at.y).ToString("+0.0;-0.0")));
+                        }
+                        lines.Add("  ground " + line.Key + " (m: height vs node, " + (float.IsNaN(FinalHeight(at)) ? "raw" : "as drawn") + "): " + string.Join(" ", samples.ToArray()));
+                    }
+                }
+                // One log line each (the log is read by its "[RealisticRoads]" lines).
+                foreach (var line in lines) Mod.Log(line);
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Node dump #" + node + " failed", e);
+            }
+        }
+
         public static void PollMedianOrigins()
         {
+            PollDumps();
             List<KeyValuePair<ushort, int>> due;
             lock (tmpeRetries)
             {
@@ -797,7 +1009,12 @@ namespace RealisticRoads
                     }
                     else
                     {
-                        BridgeOver(plan, crossing, info.m_halfWidth / crossing.Skew + UnderpassBridgeExtra, touched, build);
+                        // Over our cutting and its banks, measured along the road crossed;
+                        // at an angle that road's own edge reaches further along the
+                        // cutting too (its half width x cot of the angle).
+                        float skew = Mathf.Clamp(crossing.Skew, 0.2f, 1f);
+                        float edge = crossing.ExistingHalfWidth * Mathf.Sqrt(1f - skew * skew) / skew;
+                        BridgeOver(plan, crossing, info.m_halfWidth / skew + UnderpassBridgeExtra + edge, touched, build);
                     }
                 }
 
@@ -822,8 +1039,10 @@ namespace RealisticRoads
                     }
                     if (kind == NodeKind.Tunnel) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Underground;
                     // Like the vanilla tool: nodes on (or dug into) the ground follow the terrain.
-                    // Not on an embankment or in a shallow cut: there the game would snap the
-                    // node back onto the terrain, while the road itself reshapes the ground.
+                    // Not on an embankment (above the ground): there the game would snap the
+                    // node back onto the terrain. A cutting's node does get it, as the vanilla
+                    // tool, Network Multitool and Move It build them: its road digs the
+                    // ground down to it, so the node stays on (dug) terrain.
                     bool onTerrain = Mathf.Abs(points[i].y - TerrainManager.instance.SampleRawHeightSmooth(points[i])) < 0.5f;
                     if ((kind == NodeKind.Ground && onTerrain) || kind == NodeKind.Cut) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.OnGround;
                     if (plan.Middle != null && plan.Middle[i]) net.m_nodes.m_buffer[node].m_flags |= NetNode.Flags.Double;
@@ -1191,8 +1410,9 @@ namespace RealisticRoads
 
             var s = net.m_segments.m_buffer[next];
             NetInfo existing = s.Info;
-            NetInfo bridge = RoadPlanner.Variant(existing, "m_elevatedInfo") ?? RoadPlanner.Variant(existing, "m_bridgeInfo");
-            if (bridge == null) return;
+            // The road on beyond has no raised piece: the underpass deck would stop
+            // short over the cutting, so the build fails (and is put back) instead.
+            NetInfo bridge = UnderpassBridge(existing);
             float length = Mathf.Max(s.m_averageLength, 1f);
             if (metres > length - MinPieceOf(existing))
             {
