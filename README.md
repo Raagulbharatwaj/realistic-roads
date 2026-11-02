@@ -108,7 +108,7 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      - **four-lane road + 2-lane ramp**: 1 ground lane each way + a 9 m ramp with 1 lane each way.
 
      **Up**: the ramp starts on the ground and climbs at exactly 8 % to its target (the deck you end it on, else the first
-     deck level: the height RR's own deck has over the road where it starts), then stays level however far you draw,
+     deck level: the highest RR's own deck is over the roads along the line, at its end and on a road going on from its end, so a deck going on from the ramp over a road with median lights or trees is at the same height), then stays level however far you draw,
      flying over every road it crosses. **Down**: start on a deck's end; it comes down at exactly 8 % to the ground. If the
      line is too short to climb or come down at 8 %, or the profile doesn't clear something it crosses, the panel says so
      and nothing is built. It starts (or lands) on the end of a road, on open ground, or along the middle of a two-way
