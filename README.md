@@ -108,14 +108,14 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      - **four-lane road + 2-lane ramp**: 1 ground lane each way + a 9 m ramp with 1 lane each way.
 
      **Up**: the ramp starts on the ground and climbs at exactly 8 % to its target (the deck you end it on, else the first
-     deck level: the height RR's own deck has over the road where it starts), then stays level however far you draw,
+     deck level: at least 14.6 m, the lowest RR deck that every road's median lights and trees fit under, and higher where RR's own deck is higher over the roads along the line, at its end or on a road going on from its end; so a deck going on from the ramp joins it level and nothing stands through it), then stays level however far you draw,
      flying over every road it crosses. **Down**: start on a deck's end; it comes down at exactly 8 % to the ground. If the
      line is too short to climb or come down at 8 %, or the profile doesn't clear something it crosses, the panel says so
      and nothing is built. It starts (or lands) on the end of a road, on open ground, or along the middle of a two-way
      road with the lanes it is for (six or four): that road is split where the ramp leaves it and, under the line, becomes
      the ground road (cut where the line ends in it); the rest of it stays as it was. The **ground carriageways** are one road with the ramp's gap in its middle (the Six-Lane or
      Four-Lane Road without its inner lanes, each carriageway moved into its sidewalk so the gap is exactly the ramp's
-     width and the road keeps its own width; the lane markings move with the lanes). The panel shows the ground road's
+     width and the road keeps its own width; the lane markings move with the lanes). On the six-lane road, the full road's last 40 m before the ramp's node widens into that: its outer lanes, their markings, the kerb and the sidewalk slide out along it, so they meet the ground road's at the node instead of jumping across there (traffic moves over at the node; if the lanes slant the wrong way, tick "Flip the lane taper" under Options > Mod Settings > Median ramp node tests). The panel shows the ground road's
      problems too, and nothing is built while it has any. They run along the whole line on the ground and join the roads they cross there as normal
      junctions, under the ramp. **Where the ramp leaves (or lands)**, one node joins the full road, the ground road and the
      ramp: the full road's outer lanes go on along the ground, its inner ones up the ramp. Starting on the end of a road of

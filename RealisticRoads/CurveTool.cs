@@ -1649,7 +1649,8 @@ namespace RealisticRoads
         // height, or the ground) at 8 % to its target, then level; or down from
         // the deck it starts on at 8 % to the road (or ground) it lands on. The
         // target going up: the deck it ends on, else the first deck level (the
-        // height RR's own deck has over the road where it starts). Null if
+        // highest RR's own deck is over the roads along and beyond the line:
+        // MedianDeckLevel). Null if
         // fine, else why it can't be built.
         private string MedianProfile(List<Vector3> controls, List<ushort> nodes, List<ushort> segments, int n, float length, out bool down)
         {
@@ -1667,8 +1668,9 @@ namespace RealisticRoads
             {
                 float from = startOnRoad ? start.y : startGround;
                 bool joinsDeck = nodes[n] != 0 && end.y - endGround >= DeckJoinHeight;
-                float target = joinsDeck ? end.y : from + FirstDeckLevel(start);
-                string what = joinsDeck ? "the deck it joins" : "the first deck level";
+                string over = null;
+                float target = joinsDeck ? end.y : from + MedianDeckLevel(controls, nodes[n], out over);
+                string what = joinsDeck ? "the deck it joins" : "the first deck level" + (over != null ? " (" + over + ")" : "");
                 if (target - from < 1f) return "No deck level to climb to here (" + what + " is " + (target - from).ToString("F1") + " m up)";
                 float climb = (target - from) / grade;
                 if (length < climb - 1f)
@@ -1692,13 +1694,62 @@ namespace RealisticRoads
             return null;
         }
 
-        // How high RR's own deck is over the road at 'p' (its clearance over that
-        // road and what stands on it), or over the ground where there is none.
-        private float FirstDeckLevel(Vector3 p)
+        // A median ramp's first deck level: the highest RR's deck is over any
+        // road along the drawn line, at its end, or on a road going on from the
+        // node it ends on (a deck going on from the ramp's top over a road with
+        // lights or trees in its median is that high: the ramp climbs to it, so
+        // the deck goes on level instead of climbing through the lights).
+        // 'over': the road that sets it (null: the plain clearance).
+        private const float DeckLevelStep = 8f;
+        private const float DeckLevelBeyond = 30f;
+
+        // The lowest a median ramp levels off: the lowest deck in RR that every
+        // road's median lights and trees fit under (the deck over the Large Road
+        // with Median, 14.6 m), so any deck going on from its top joins level and
+        // nothing stands through it. Higher where the roads there need it.
+        public const float MinMedianRampLevel = 14.6f;
+
+        private float MedianDeckLevel(List<Vector3> controls, ushort endNode, out string over)
         {
-            var below = Decks.Under(p, Net != null ? Net.m_halfWidth : 4f);
-            if (below.Segment == 0) return Decks.Clearance;
-            return Decks.Floor(p, below) - below.Center.y;
+            over = null;
+            float best = MinMedianRampLevel;
+            float half = Net != null ? Net.m_halfWidth : 4f;
+            var samples = new List<Vector3>();
+            for (int i = 0; i < controls.Count; i++)
+            {
+                samples.Add(controls[i]);
+                if (i + 1 >= controls.Count) break;
+                float length = CurveMath.FlatDistance(controls[i], controls[i + 1]);
+                for (float d = DeckLevelStep; d < length; d += DeckLevelStep) samples.Add(Vector3.Lerp(controls[i], controls[i + 1], d / length));
+            }
+            if (endNode != 0)
+            {
+                var net = NetManager.instance;
+                for (int i = 0; i < 8; i++)
+                {
+                    ushort s = net.m_nodes.m_buffer[endNode].GetSegment(i);
+                    if (s == 0) continue;
+                    Vector3 a, b, c, d;
+                    CrossingFinder.SegmentBezier(s, out a, out b, out c, out d);
+                    bool start = net.m_segments.m_buffer[s].m_startNode == endNode;
+                    float t = Mathf.Clamp01(DeckLevelBeyond / Mathf.Max(net.m_segments.m_buffer[s].m_averageLength, 1f));
+                    samples.Add(CurveMath.Bezier(a, b, c, d, start ? t : 1f - t));
+                }
+            }
+            var segments = NetManager.instance.m_segments.m_buffer;
+            foreach (var p in samples)
+            {
+                var below = Decks.Under(p, half);
+                if (below.Segment == 0) continue;
+                float level = Decks.Floor(p, below) - below.Center.y;
+                if (level > best + 0.05f)
+                {
+                    best = level;
+                    var info = segments[below.Segment].Info;
+                    over = "the deck level over " + (info != null ? info.name : "the road") + ", clear of what stands on it";
+                }
+            }
+            return best;
         }
 
         // Drawing a median ramp down: it started on a raised deck.
