@@ -147,3 +147,47 @@ namespace RealisticRoads
         }
     }
 }
+
+namespace RealisticRoads
+{
+    // The game's build menus (its panels of roads and tracks) leave RR's own
+    // pieces out (the median ramp roads' ground roads, ramps, start pieces and
+    // tapers, the median cuts' roads): RR's tools build them, they are never
+    // picked by hand. They are also marked procedural like the game's own
+    // elevated and tunnel versions, which not every game version's menu checks.
+    [HarmonyPatch]
+    public static class MenuHidePatch
+    {
+        private static bool logged;
+
+        public static IEnumerable<MethodBase> TargetMethods()
+        {
+            foreach (var type in Patcher.Types(typeof(NetInfo).Assembly))
+            {
+                if (type.Name != "GeneratedScrollPanel" && !IsPanel(type)) continue;
+                foreach (var method in type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                {
+                    if (method.Name != "IsPlacementRelevant" || method.ReturnType != typeof(bool) || method.IsAbstract) continue;
+                    var parameters = method.GetParameters();
+                    if (parameters.Length == 1 && parameters[0].ParameterType.IsAssignableFrom(typeof(NetInfo))) yield return method;
+                }
+            }
+        }
+
+        private static bool IsPanel(Type type)
+        {
+            for (var t = type.BaseType; t != null; t = t.BaseType)
+                if (t.Name == "GeneratedScrollPanel") return true;
+            return false;
+        }
+
+        public static void Postfix(PrefabInfo __0, ref bool __result)
+        {
+            if (!__result || !SplitRoads.IsOwnPiece(__0)) return;
+            __result = false;
+            if (logged) return;
+            logged = true;
+            Mod.Log("Build menus: RR's own pieces (" + __0.name + " and the like) are left out");
+        }
+    }
+}

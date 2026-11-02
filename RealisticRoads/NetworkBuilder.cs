@@ -298,6 +298,64 @@ namespace RealisticRoads
             });
         }
 
+        // A median cut's road node at 'p': the road there (a ground road with
+        // 'lanes' lanes, running along 'heading' within 30 degrees) split at it,
+        // or its end node if 'p' is by one. One build in 'group'; 'done' is told
+        // (simulation thread) the node, 0 if no such road is there.
+        public static void RoadNodeAt(Vector3 p, Vector3 heading, int lanes, int group, Action<ushort> done)
+        {
+            SimulationManager.instance.AddAction(() =>
+            {
+                var build = new Build { Group = group };
+                ushort result = 0;
+                try
+                {
+                    var net = NetManager.instance;
+                    var segments = net.m_segments.m_buffer;
+                    Vector3 way = CurveMath.FlatNormal(heading);
+                    float ahead = Mathf.Cos(30f * Mathf.Deg2Rad);
+                    ushort best = 0;
+                    float bestDistance = float.MaxValue, bestT = 0f;
+                    foreach (ushort s in RoadPlanner.NearbySegments(p, 40f))
+                    {
+                        if ((segments[s].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
+                        var info = segments[s].Info;
+                        if (!ConvertsToGround(info, lanes)) continue;
+                        Vector3 onRoad;
+                        float t = CrossingFinder.ClosestT(s, p, out onRoad);
+                        float distance = CurveMath.FlatDistance(onRoad, p);
+                        if (distance > info.m_halfWidth || distance >= bestDistance) continue;
+                        Vector3 a, b, c, d;
+                        CrossingFinder.SegmentBezier(s, out a, out b, out c, out d);
+                        if (way != Vector3.zero && Mathf.Abs(Vector3.Dot(CurveMath.FlatNormal(CurveMath.BezierDerivative(a, b, c, d, t)), way)) < ahead) continue;
+                        best = s;
+                        bestDistance = distance;
+                        bestT = t;
+                    }
+                    if (best != 0)
+                    {
+                        float length = Mathf.Max(segments[best].m_averageLength, 1f);
+                        if (bestT * length < Crossing.NodeSnap) result = segments[best].m_startNode;
+                        else if ((1f - bestT) * length < Crossing.NodeSnap) result = segments[best].m_endNode;
+                        else
+                        {
+                            var cut = SplitSegment(best, new[] { bestT }, null, build);
+                            if (cut != null && cut.Nodes.Count > 0) result = cut.Nodes[0];
+                            Keep(build);
+                        }
+                    }
+                    Mod.Log("  Median cut: the road under its start " + (result != 0 ? "is split at node #" + result : "wasn't found"));
+                }
+                catch (Exception e)
+                {
+                    Mod.LogError("Splitting the road under the median cut's start failed; put back", e);
+                    Remove(build);
+                    result = 0;
+                }
+                if (done != null) done(result);
+            });
+        }
+
         // The node where a median ramp leaves (or lands in) the road, made with
         // start pieces: the full road's last StartLength there becomes its start
         // piece ('fullStart'), the ground road's first becomes its

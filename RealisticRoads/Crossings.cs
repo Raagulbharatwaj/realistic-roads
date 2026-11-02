@@ -93,6 +93,29 @@ namespace RealisticRoads
 
     public static class CrossingFinder
     {
+        // A road's name as the game shows it (its localized title), kept per road.
+        private static readonly Dictionary<string, string> titles = new Dictionary<string, string>();
+
+        public static string Title(NetInfo info)
+        {
+            if (info == null) return "road";
+            string key = info.name ?? "";
+            lock (titles)
+            {
+                string known;
+                if (titles.TryGetValue(key, out known)) return known;
+            }
+            string title = null;
+            try
+            {
+                title = info.GetUncheckedLocalizedTitle();
+            }
+            catch { }
+            if (string.IsNullOrEmpty(title)) title = key;
+            lock (titles) titles[key] = title;
+            return title;
+        }
+
         private const float GridCell = 64f;     // NetManager segment grid: 270 x 270 cells of 64 m
         private const int GridSize = 270;
         private const int ExistingSamples = 12;
@@ -142,6 +165,10 @@ namespace RealisticRoads
             {
                 for (int gx = x0; gx <= x1; gx++)
                 {
+                    // Only cells near the path itself (not the whole box round a
+                    // long diagonal curve). A segment is filed under the cell of its
+                    // middle, so cells as far as a long segment's half reach count.
+                    if (!NearPath(boxes, gx, gz)) continue;
                     ushort segment = net.m_segmentGrid[gz * GridSize + gx];
                     int guard = 0;
                     while (segment != 0 && guard++ < 32768)
@@ -185,7 +212,7 @@ namespace RealisticRoads
                             }
                             else crossing.ExistingElevation = crossing.Point.y - terrain.SampleRawHeightSmooth(crossing.Point);
                             crossing.ExistingHalfWidth = existing.m_halfWidth;
-                            crossing.ExistingName = crossing.ShipPath ? "ship route" : existing.name;
+                            crossing.ExistingName = crossing.ShipPath ? "ship route" : Title(existing);
                             crossing.OverRail = !crossing.ShipPath && RoadPlanner.IsRail(existing) && crossing.ExistingAtGround;
                             result.Add(crossing);
                         }
@@ -335,6 +362,17 @@ namespace RealisticRoads
         {
             const float margin = 1f;
             return a.x <= b.z + margin && b.x <= a.z + margin && a.y <= b.w + margin && b.y <= a.w + margin;
+        }
+
+        private const float CellReach = GridCell + 100f;   // a cell's segments reach this far past it (half a long segment)
+
+        private static bool NearPath(Vector4[] boxes, int gx, int gz)
+        {
+            float minX = (gx - GridSize / 2f) * GridCell - CellReach, maxX = (gx + 1 - GridSize / 2f) * GridCell + CellReach;
+            float minZ = (gz - GridSize / 2f) * GridCell - CellReach, maxZ = (gz + 1 - GridSize / 2f) * GridCell + CellReach;
+            foreach (var box in boxes)
+                if (box.x <= maxX && box.z >= minX && box.y <= maxZ && box.w >= minZ) return true;
+            return false;
         }
 
         private static int Cell(float coordinate)

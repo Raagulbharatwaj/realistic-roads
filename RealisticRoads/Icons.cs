@@ -50,13 +50,15 @@ namespace RealisticRoads
         public const string Median62 = "median62";
         public const string Median64 = "median64";
         public const string Median42 = "median42";
+        public const string CutMetro = "cutMetro";
+        public const string CutTrain = "cutTrain";
 
         private static readonly string[] Names =
         {
             Junction, Bridge, Overpass, Underpass, Tunnel, Plus, Minus, Background, BackgroundHover, BackgroundSelected,
             Logo, LogoSmall, ButtonBackground, ButtonBackgroundHover, ButtonBackgroundPressed,
             Build, BuildOff, Undo, UndoOff, GameTool, BackgroundOff, PageBack, PageNext, Curve, Straight, Snap, Deck, Under,
-            Elevated, Auto, Reset, Parallel, Side, Beside, Upgrade, Direction, Ramp, Median62, Median64, Median42,
+            Elevated, Auto, Reset, Parallel, Side, Beside, Upgrade, Direction, Ramp, Median62, Median64, Median42, CutMetro, CutTrain,
         };
 
         private static UITextureAtlas atlas;

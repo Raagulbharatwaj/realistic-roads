@@ -109,13 +109,15 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
 
      **Up**: the ramp starts on the ground and climbs at exactly 8 % to its target (the deck you end it on, else the first
      deck level: at least 14.6 m, the lowest RR deck that every road's median lights and trees fit under, and higher where RR's own deck is higher over the roads along the line, at its end or on a road going on from its end; so a deck going on from the ramp joins it level and nothing stands through it), then stays level however far you draw,
-     flying over every road it crosses. **Down**: start on a deck's end; it comes down at exactly 8 % to the ground. If the
+     flying over every road it crosses. Where it climbs and no road passes under it, it is closed underneath: concrete walls
+     from under its edges down into the ground. Where it is open (level, or over a road) it stands on concrete wall pillars
+     as wide as the ramp. **Down**: start on a deck's end; it comes down at exactly 8 % to the ground. If the
      line is too short to climb or come down at 8 %, or the profile doesn't clear something it crosses, the panel says so
      and nothing is built. It starts (or lands) on the end of a road, on open ground, or along the middle of a two-way
      road with the lanes it is for (six or four): that road is split where the ramp leaves it and, under the line, becomes
      the ground road (cut where the line ends in it); the rest of it stays as it was. The **ground carriageways** are one road with the ramp's gap in its middle (the Six-Lane or
      Four-Lane Road without its inner lanes, each carriageway moved into its sidewalk so the gap is exactly the ramp's
-     width and the road keeps its own width; the lane markings move with the lanes). On the six-lane road, the full road's last 40 m before the ramp's node widens into that: its outer lanes, their markings, the kerb and the sidewalk slide out along it, so they meet the ground road's at the node instead of jumping across there (traffic moves over at the node; if the lanes slant the wrong way, tick "Flip the lane taper" under Options > Mod Settings > Median ramp node tests). The panel shows the ground road's
+     width and the road keeps its own width; the lane markings move with the lanes). The full road's last 40 m before the ramp's node slides into that: its outer lanes, their markings, the kerb and the sidewalk slide out (six-lane) or in (four-lane, whose median closes up as its inner lanes slide onto the ramp's) along it, so they meet the ground road's at the node instead of jumping across there (traffic moves over at the node; if the lanes slant the wrong way, tick "Flip the lane taper" under Options > Mod Settings > Median ramp node tests). The panel shows the ground road's
      problems too, and nothing is built while it has any. They run along the whole line on the ground and join the roads they cross there as normal
      junctions, under the ramp. **Where the ramp leaves (or lands)**, one node joins the full road, the ground road and the
      ramp: the full road's outer lanes go on along the ground, its inner ones up the ramp. Starting on the end of a road of
@@ -132,6 +134,16 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      city saved with them needs this mod to load them. Where the ground road and the ramp leave a node together, they and
      the road coming in end square there. The earlier split copies of every road and the first ramp roads are gone: a
      city saved with those pieces loses them when it loads;
+   - **Median cuts** (the two buttons after the median ramp roads: metro, train; pressed again: off). A metro or train track
+     goes between a raised track and a tunnel through an open cut in a road's middle. **Down**: start on the end of a raised
+     track; it comes down at its grade (metro 5 %, train 3.5 %), through one slope piece (the game's own, with its portal)
+     into a tunnel 9 m under the ground, and on in the tunnel as far as you draw. **Up**: start on the end of a tunnel; it
+     comes up through the cut to the first deck level (or the raised track you end on). Drawn along a six-lane or four-lane
+     road, that road under the line becomes its ground road with an open gap for the track (12, 15 or 18 m, the narrowest
+     the track and its cut fit in; the six-lane road keeps two lanes each way beside a 12 m gap, the four-lane road one);
+     its inner lanes end where the gap begins, where the road's last 40 m slide out to it. On open ground, 56 m of the
+     six-lane road is built before it and its ground road along the line. A road crossing the open cut stops it being
+     built; roads over the tunnel or under the raised track are fine. Built track first, then the road, one Ctrl+Z for all;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,
