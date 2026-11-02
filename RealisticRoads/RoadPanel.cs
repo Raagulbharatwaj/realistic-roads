@@ -168,7 +168,7 @@ namespace RealisticRoads
         public Action ToggleUpgrade, ToggleRamp;
         public Action<int> PickMedianRamp;
         private UIButton upgradeButton, rampButton;
-        private readonly UIButton[] medianButtons = new UIButton[4];
+        private readonly UIButton[] medianButtons = new UIButton[6];
         private UILabel toolsLabel;
         public Action<string, string> Typed;
         public Action TypedSubmit;
@@ -334,7 +334,21 @@ namespace RealisticRoads
                 medianButtons[choice] = BarButton(icons[choice], letters[choice], titles[choice] + how,
                     Pad + (choice + 1) * (IconSize + 3f), y, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
             }
-            toolsLabel = BarLabel("", Pad + 5f * (IconSize + 3f) + 4f, y + 1f, Width - 2f * Pad - 5f * (IconSize + 3f) - 4f);
+            // The two median cuts (pressed again: off).
+            const string cutHow = "\nDown: start on the end of a raised track; it comes down at its grade (metro 5 %, train 3.5 %) into an open cut " +
+                                  "in the road's middle and on into a tunnel.\nUp: start on the end of a tunnel; it comes up through the cut to the deck level " +
+                                  "(or the raised track you end on).\nDrawn along a six-lane or four-lane road, that road gets an open gap for it along the line " +
+                                  "(its inner lanes end where the gap begins); on open ground, the six-lane road is built around it";
+            string[] cutIcons = { Icons.CutMetro, Icons.CutTrain };
+            string[] cutTitles = { "Metro median cut", "Train median cut" };
+            string[] cutLetters = { "MC", "TC" };
+            for (int k = 0; k < 2; k++)
+            {
+                int picked = 4 + k;
+                medianButtons[picked] = BarButton(cutIcons[k], cutLetters[k], cutTitles[k] + cutHow,
+                    Pad + (picked + 1) * (IconSize + 3f), y, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
+            }
+            toolsLabel = BarLabel("", Pad + 7f * (IconSize + 3f) + 4f, y + 1f, Width - 2f * Pad - 7f * (IconSize + 3f) - 4f);
             toolsLabel.wordWrap = true;
             toolsLabel.size = new Vector2(toolsLabel.size.x, 30f);
             toolsLabel.textScale = 0.7f;
@@ -433,7 +447,7 @@ namespace RealisticRoads
             Select(besideButton, model.Parallel && model.BesideOther);
             Select(upgradeButton, model.Upgrade);
             Select(rampButton, model.Ramp);
-            for (int choice = 1; choice <= 3; choice++) Select(medianButtons[choice], model.MedianChoice == choice);
+            for (int choice = 1; choice < medianButtons.Length; choice++) Select(medianButtons[choice], model.MedianChoice == choice);
             if (toolsLabel != null)
             {
                 string tools = (model.Upgrade ? "Upgrading a road" : model.Ramp ? "Drawing a ramp"

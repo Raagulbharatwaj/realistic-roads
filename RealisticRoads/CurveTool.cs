@@ -23,7 +23,7 @@ namespace RealisticRoads
     // overpass (existing lowered, ours over at ground), underpass (existing
     // on a short bridge, ours lowered), tunnel (ours under). Bridges and
     // water crossings get +/- to set their height.
-    public class CurveTool : ToolBase
+    public partial class CurveTool : ToolBase
     {
         public const float Spacing = 120f;      // target segment length (CS1 segments look best long)
         public const float MinSpacing = 30f;    // shortest segment used to fit a tight bend
@@ -395,9 +395,10 @@ namespace RealisticRoads
             public bool AnyBuilt;        // a part is built (a failure removes what is)
             public string RampLog;       // the ramp's "Building ..." line, logged when its build starts
             public string StartsWhy;     // why the start pieces couldn't be made
+            public bool Cut;             // a median cut (see FinishCut)
         }
 
-        private enum MedianStage { LeadIn, Ramp, Convert, Ground, Starts }
+        private enum MedianStage { LeadIn, Ramp, Convert, Ground, Starts, CutTrack, CutSplit, CutConvert, CutLeadIn, CutGround, CutStarts, CutEndStarts }
 
         private bool parallelMode;
         private float parallelGap = DefaultGap;  // metres between the two roads' edges
@@ -992,15 +993,18 @@ namespace RealisticRoads
         {
             segmentHit = 0;
             hit = Vector3.zero;
+            // A median cut starts (or ends) on a track's end, which may be in a
+            // tunnel: the metro (and train) tunnels' layer is looked through too.
+            var layers = MedianCut ? ItemClass.Layer.Default | ItemClass.Layer.MetroTunnels : ItemClass.Layer.Default;
             var input = new RaycastInput(simRay, simRayLength);
-            input.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
+            input.m_netService = new RaycastService { m_itemLayers = layers };
             input.m_ignoreTerrain = true;
             input.m_ignoreNodeFlags = NetNode.Flags.None;
             RaycastOutput output;
             if (RayCast(input, out output) && output.m_netNode != 0) return output.m_netNode;
 
             input = new RaycastInput(simRay, simRayLength);
-            input.m_netService = new RaycastService { m_itemLayers = ItemClass.Layer.Default };
+            input.m_netService = new RaycastService { m_itemLayers = layers };
             input.m_ignoreTerrain = true;
             input.m_ignoreSegmentFlags = NetSegment.Flags.None;
             if (!RayCast(input, out output) || output.m_netSegment == 0) return 0;
@@ -1617,15 +1621,98 @@ namespace RealisticRoads
         // deck level at 8 %, the road's outer lanes on the ground beside it (its
         // ground road) along the whole line. 1: six-lane road with a 2-lane ramp,
         // 2: six-lane with a 4-lane ramp, 3: four-lane with a 2-lane ramp.
+        // 4, 5: a median cut (a metro or train track through an open cut in the
+        // road's middle into a tunnel, or up out of one), the road beside it on
+        // the ground with an open gap (see CutProfile, FinishCut).
         private int medianRamp;
         private static readonly string[] MedianRampNames =
-            { null, "six-lane road + 2-lane median ramp", "six-lane road + 4-lane median ramp", "four-lane road + 2-lane median ramp" };
+            { null, "six-lane road + 2-lane median ramp", "six-lane road + 4-lane median ramp", "four-lane road + 2-lane median ramp",
+              "metro median cut", "train median cut" };
         private int MedianRampLanes => medianRamp == 2 ? 4 : 2;
-        private NetInfo MedianGroundRoad => medianRamp == 0 ? null : PrefabCollection<NetInfo>.FindLoaded(medianRamp == 3 ? "Medium Road" : "Large Road");
-        // The ground road beside the ramp (the road without its inner lanes).
-        private NetInfo MedianGroundSplit => SplitRoads.For(MedianGroundRoad, MedianRampLanes / 2);
-        // The road the curve is drawn with: a median ramp's ramp road, else the one picked.
-        private NetInfo DrawNetwork => medianRamp != 0 && SplitRoads.RampRoad(MedianRampLanes) != null ? SplitRoads.RampRoad(MedianRampLanes) : SelectedNetwork;
+        private bool MedianCut => medianRamp >= 4;
+        // A median cut's road: the one under the line where it starts (Divide),
+        // else the six-lane road (built on open ground).
+        private NetInfo cutRoad;
+        private NetInfo MedianGroundRoad => medianRamp == 0 ? null
+            : MedianCut ? cutRoad ?? PrefabCollection<NetInfo>.FindLoaded("Large Road")
+            : PrefabCollection<NetInfo>.FindLoaded(medianRamp == 3 ? "Medium Road" : "Large Road");
+        // The ground road beside the ramp (the road without its inner lanes), or
+        // beside a median cut (its gap open and as wide as the track's cut).
+        private NetInfo MedianGroundSplit
+        {
+            get
+            {
+                if (!MedianCut) return SplitRoads.For(MedianGroundRoad, MedianRampLanes / 2);
+                float gap;
+                return SplitRoads.CutRoadFor(MedianGroundRoad, TrackHalf(CutTrack), out gap);
+            }
+        }
+        // The road the curve is drawn with: a median ramp's ramp road, a median
+        // cut's track, else the one picked.
+        private NetInfo DrawNetwork => MedianCut ? CutTrack ?? SelectedNetwork
+            : medianRamp != 0 && SplitRoads.RampRoad(MedianRampLanes) != null ? SplitRoads.RampRoad(MedianRampLanes) : SelectedNetwork;
+
+        // A median cut's track: the game's metro or train track (its ground
+        // version, whose raised, slope and tunnel versions it is built with).
+        private NetInfo CutTrack => medianRamp == 4 ? TrackFor(true) : medianRamp == 5 ? TrackFor(false) : null;
+        private static NetInfo metroTrack, trainTrack;
+
+        private static NetInfo TrackFor(bool metro)
+        {
+            var known = metro ? metroTrack : trainTrack;
+            if (known != null) return known;
+            NetInfo found = null;
+            foreach (string name in metro ? new[] { "Metro Track Ground", "Metro Track" } : new[] { "Train Track" })
+            {
+                var info = PrefabCollection<NetInfo>.FindLoaded(name);
+                if (IsCutTrack(info, metro)) { found = info; break; }
+            }
+            if (found == null)
+            {
+                int count = PrefabCollection<NetInfo>.LoadedCount();
+                for (uint i = 0; i < count && found == null; i++)
+                {
+                    var info = PrefabCollection<NetInfo>.GetLoaded(i);
+                    if (info == null || info.name == null || !IsCutTrack(info, metro)) continue;
+                    string n = info.name;
+                    if (n.Contains("Elevated") || n.Contains("Bridge") || n.Contains("Slope") || n.Contains("Tunnel") || n.Contains("Station")) continue;
+                    found = info;
+                }
+            }
+            if (found != null)
+            {
+                Mod.Log("Median cut: the " + (metro ? "metro" : "train") + " track is " + found.name + " (" + (2f * TrackHalf(found)).ToString("F1") +
+                        " m wide with its raised, slope and tunnel versions)");
+                if (metro) metroTrack = found; else trainTrack = found;
+            }
+            return found;
+        }
+
+        // A two-way track of that kind with raised, slope and tunnel versions.
+        private static bool IsCutTrack(NetInfo info, bool metro)
+        {
+            if (info == null || info.m_class == null || info.m_class.m_service != ItemClass.Service.PublicTransport) return false;
+            var sub = metro ? ItemClass.SubService.PublicTransportMetro : ItemClass.SubService.PublicTransportTrain;
+            if (info.m_class.m_subService != sub) return false;
+            return RoadPlanner.InfoFor(info, NodeKind.Elevated) != null && RoadPlanner.InfoFor(info, NodeKind.Slope) != null &&
+                   RoadPlanner.InfoFor(info, NodeKind.Tunnel) != null;
+        }
+
+        // How far the track (any of its versions: the slope's walls) reaches
+        // either side of its middle, with a little room.
+        private const float CutRoom = 0.5f;
+
+        private static float TrackHalf(NetInfo track)
+        {
+            if (track == null) return 0f;
+            float half = track.m_halfWidth;
+            foreach (var kind in new[] { NodeKind.Elevated, NodeKind.Slope, NodeKind.Tunnel })
+            {
+                var version = RoadPlanner.InfoFor(track, kind);
+                if (version != null && kind != NodeKind.Tunnel) half = Mathf.Max(half, version.m_halfWidth);
+            }
+            return half + CutRoom;
+        }
         private bool planningGround;   // planning a median ramp's ground road (not the ramp)
         private const float RampAngle = 12f;
         private const float MedianRampAngle = 25f;
@@ -1636,7 +1723,18 @@ namespace RealisticRoads
         private void PickMedianRamp(int choice)
         {
             medianRamp = medianRamp == choice ? 0 : choice;
-            if (medianRamp != 0 && (SplitRoads.RampRoad(MedianRampLanes) == null || MedianGroundSplit == null))
+            cutRoad = null;
+            if (MedianCut && (CutTrack == null || MedianGroundSplit == null))
+            {
+                bool metro = medianRamp == 4;
+                string why = CutTrack == null ? "the game's " + (metro ? "metro" : "train") + " track (with its elevated, slope and tunnel versions) wasn't found"
+                    : "the " + (metro ? "metro" : "train") + " track and its open cut are " + (2f * TrackHalf(CutTrack)).ToString("F1") +
+                      " m wide, wider than the widest gap RR makes in the six-lane road (" + (2f * SplitRoads.WidestCut(MedianGroundRoad)).ToString("F1") + " m)";
+                Mod.Log("Median cut: " + MedianRampNames[medianRamp] + " isn't available: " + why);
+                Mod.WarnNow("Median cut not available", char.ToUpper(why[0]) + why.Substring(1) + ".");
+                medianRamp = 0;
+            }
+            else if (medianRamp != 0 && !MedianCut && (SplitRoads.RampRoad(MedianRampLanes) == null || MedianGroundSplit == null))
             {
                 Mod.Log("Median ramp: " + MedianRampNames[medianRamp] + " isn't available (its ramp or ground road wasn't made when the city loaded)");
                 Mod.WarnNow("Median ramp not available", "The " + MedianRampNames[medianRamp] + " needs road copies made when the city loads, " +
@@ -1645,14 +1743,15 @@ namespace RealisticRoads
             }
             if (medianRamp != 0)
             {
-                // The ramp is a deck over the road (or the ground) from its first point.
+                // The ramp (a median cut's track) is a deck over the road (or the
+                // ground) from its first point: drawn along the road, it follows it.
                 rampMode = false;
                 if (upgradeMode) ToggleUpgrade();
                 deckMode = true;
                 underMode = false;
             }
             choicesVersion++;
-            Mod.Log(medianRamp != 0 ? "Median ramp: " + MedianRampNames[medianRamp] : "Median ramp off");
+            Mod.Log(medianRamp != 0 ? (MedianCut ? "Median cut: " : "Median ramp: ") + MedianRampNames[medianRamp] : "Median ramp off");
         }
 
         // A median ramp's height along it (set by MedianProfile for the plan),
@@ -1768,7 +1867,7 @@ namespace RealisticRoads
         }
 
         // Drawing a median ramp down: it started on a raised deck.
-        private bool MedianDown => medianRamp != 0 && points.Count > 0 &&
+        private bool MedianDown => medianRamp != 0 && !MedianCut && points.Count > 0 &&
                                    points[0].y - TerrainManager.instance.SampleRawHeightSmooth(points[0]) >= DeckJoinHeight;
 
         private void ToggleRamp()
@@ -2099,6 +2198,11 @@ namespace RealisticRoads
         {
             var waiting = pending;
             pending = null;
+            if (waiting.Cut)
+            {
+                FinishCut(waiting);
+                return;
+            }
             if (waiting.Ground != null)
             {
                 FinishMedian(waiting);
@@ -2287,8 +2391,9 @@ namespace RealisticRoads
         // A part can't be built: every part built before it goes (one group).
         private void FailMedian(PendingParallel waiting, string why)
         {
-            Mod.Log("Median ramp road not built (" + why + "): what was built of it is removed again");
-            Mod.WarnNow("Median ramp road not built", char.ToUpper(why[0]) + why.Substring(1) + ". Nothing of it was left built.");
+            string what = waiting.Cut ? "Median cut" : "Median ramp road";
+            Mod.Log(what + " not built (" + why + "): what was built of it is removed again");
+            Mod.WarnNow(what + " not built", char.ToUpper(why[0]) + why.Substring(1) + ". Nothing of it was left built.");
             if (waiting.AnyBuilt) NetworkBuilder.UndoLast();
         }
 
@@ -2707,6 +2812,14 @@ namespace RealisticRoads
                 spec = KeepParallel(parallel);
             }
 
+            // A median cut: its track first, then the road (see FinishCut).
+            if (MedianCut)
+            {
+                StartCut(division);
+                ClearPoints();
+                return;
+            }
+
             // A median ramp road's new ground road: checked now, built once the ramp is.
             NetInfo groundRoad = null;
             if (medianRamp != 0)
@@ -2800,7 +2913,34 @@ namespace RealisticRoads
             string rampNote = null, rampProblem = null;
             NetInfo alongStart = null, alongEnd = null;   // the road it starts (ends) along the middle of
             Vector3 rampStart = Vector3.zero, rampEnd = Vector3.zero;
-            if (rampMode || medianRamp != 0)
+            // A median cut's track starts on a track's end: its road is the one under
+            // the line where it starts (split there, see FinishCut), which its line
+            // follows from there; an end on anything but its own track is free.
+            if (MedianCut)
+            {
+                nodes = new List<ushort>(nodes);
+                segments = new List<ushort>(segments);
+                roads = new List<ushort>(roads);
+                roadTs = new List<float>(roadTs);
+                foreach (int k in new[] { 0, n })
+                {
+                    if (nodes[k] != 0 && !OnCutTrack(nodes[k], 0)) nodes[k] = 0;
+                    if (segments[k] != 0 && !OnCutTrack(0, segments[k])) segments[k] = 0;
+                }
+                ushort startRoad;
+                float startRoadT;
+                cutRoad = CutRoadUnder(controls[0], controls[1] - controls[0], out startRoad, out startRoadT);
+                roads[0] = startRoad;
+                roadTs[0] = startRoadT;
+                ushort underEnd;
+                float underEndT;
+                if (CutRoadUnder(controls[n], controls[n] - controls[n - 1], out underEnd, out underEndT) != null)
+                {
+                    roads[n] = underEnd;
+                    roadTs[n] = underEndT;
+                }
+            }
+            if (rampMode || (medianRamp != 0 && !MedianCut))
             {
                 roads = new List<ushort>(roads);
                 roadTs = new List<float>(roadTs);
@@ -2885,9 +3025,16 @@ namespace RealisticRoads
             division.Lifts = lifts;
             // A median ramp's own height profile (up to its target and level, or down).
             bool down = false;
-            string profileProblem = medianRamp != 0 ? MedianProfile(controls, nodes, segments, n, division.Length, out down) : null;
+            string profileProblem = MedianCut ? CutProfile(controls, nodes, n, division.Length, out down)
+                : medianRamp != 0 ? MedianProfile(controls, nodes, segments, n, division.Length, out down) : null;
+            if (MedianCut) TypeCutCrossings(division);
             if (medianRamp == 0) medianProfile = null;
             PlanDivision(division, nodes[0], nodes[n], startSegment, ts[0], endSegment, ts[n], raisedPoints);
+            if (MedianCut)
+            {
+                if (division.Plan != null) CheckCut(division, profileProblem);
+                return division;
+            }
             if (division.Plan != null)
             {
                 division.Plan.MedianDown = down;
@@ -2942,8 +3089,9 @@ namespace RealisticRoads
         {
             var joined = JoinedRoads(startNode, endNode, startSegment, endSegment);
             RoadPlanner.Ramp = rampMode;
-            RoadPlanner.MedianRamp = medianRamp != 0 && !planningGround;
-            RoadPlanner.HoldStart = medianRamp != 0 && !planningGround && startNode == 0 && startSegment == 0;
+            RoadPlanner.MedianRamp = medianRamp != 0 && !MedianCut && !planningGround;
+            RoadPlanner.MedianCut = MedianCut && !planningGround;
+            RoadPlanner.HoldStart = medianRamp != 0 && !MedianCut && !planningGround && startNode == 0 && startSegment == 0;
             RoadPlanner.Profile = medianRamp != 0 && !planningGround ? medianProfile : null;
             try
             {
@@ -2968,9 +3116,11 @@ namespace RealisticRoads
                 // Never left set for the next plan (a parallel line, the next curve).
                 RoadPlanner.Ramp = false;
                 RoadPlanner.MedianRamp = false;
+                RoadPlanner.MedianCut = false;
                 RoadPlanner.HoldStart = false;
                 RoadPlanner.Profile = null;
             }
+            if (MedianCut && !planningGround) OneSlope(division);
             DropNodesOverCrossings(division);
             division.NodeAlong = NodeDistances(division);
             division.Cost = NetworkBuilder.Cost(Net, division.Plan);
@@ -3211,6 +3361,10 @@ namespace RealisticRoads
             {
                 // A median ramp's ground road runs under its own ramp: not a crossing.
                 if (planningGround && SplitRoads.IsRamp(crossedSegments[crossing.Segment].Info)) continue;
+                // A median cut's track runs along its road (not across it), and its
+                // ground road runs either side of the track.
+                if (MedianCut && !planningGround && RunsAlong(polyline, crossing)) continue;
+                if (MedianCut && planningGround && RoadPlanner.IsRail(crossedSegments[crossing.Segment].Info)) continue;
                 if (crossing.Distance < MinSpacing * 0.5f || crossing.Distance > division.Length - MinSpacing * 0.5f) continue;
                 if (InDeck(division.DeckRanges, crossing.Distance))
                 {

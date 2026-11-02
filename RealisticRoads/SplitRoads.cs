@@ -39,8 +39,18 @@ namespace RealisticRoads
             public int Inner;     // inner lanes cut out on each side
             public float Cut;     // the gap: this far either side of the centre
             public bool Start;    // the start piece (no junction models) of that ground road
+            public string Tag;    // its name's last word: the inner lanes ("1", "2"), or a median cut's ("Cut12")
+            public bool Open;     // a median cut's: the gap left open (no paving; the ground shows, the cut is dug in it)
             public NetInfo Info;  // once loaded
         }
+
+        // A median cut's ground roads: a gap as wide as the track in it (and its
+        // open cut), left open. By road: its inner lanes cut out, the gap's half.
+        public const string CutTag = "Cut";
+        private static readonly KeyValuePair<int, float>[] LargeCuts = { new KeyValuePair<int, float>(1, 6f), new KeyValuePair<int, float>(2, 7.5f), new KeyValuePair<int, float>(2, 9f) };
+        private static readonly KeyValuePair<int, float>[] MediumCuts = { new KeyValuePair<int, float>(1, 6f) };
+
+        private static string CutName(float gapHalf) => CutTag + Mathf.RoundToInt(2f * gapHalf);
 
         // By the road each was made from.
         private static readonly Dictionary<string, List<Variant>> variants = new Dictionary<string, List<Variant>>();
@@ -88,6 +98,21 @@ namespace RealisticRoads
                         Mod.LogError("Making the median ground road from " + road.name + " (" + inner + " inner lane(s)) failed", e);
                     }
                 }
+                // The median cuts' ground roads (an open gap for a metro or train track).
+                var cuts = road.name == "Large Road" ? LargeCuts : road.name == "Medium Road" ? MediumCuts : new KeyValuePair<int, float>[0];
+                foreach (var cut in cuts)
+                    try
+                    {
+                        string tag = CutName(cut.Value);
+                        var copy = Make(road, cut.Key, cut.Value, false, true, tag);
+                        if (copy != null) made.Add(copy);
+                        var start = Make(road, cut.Key, cut.Value, true, true, tag);
+                        if (start != null) made.Add(start);
+                    }
+                    catch (Exception e)
+                    {
+                        Mod.LogError("Making the median cut road from " + road.name + " (" + CutName(cut.Value) + ") failed", e);
+                    }
             }
             // The full roads' start pieces.
             foreach (var road in prefabs)
@@ -110,12 +135,26 @@ namespace RealisticRoads
                         foreach (bool invert in new[] { false, true })
                             try
                             {
-                                var taper = MakeTaper(road, inner, inner == 1 ? MedianGap2 : MedianGap4, atEnd, invert);
+                                var taper = MakeTaper(road, inner, inner == 1 ? MedianGap2 : MedianGap4, atEnd, invert, inner.ToString());
                                 if (taper != null) made.Add(taper);
                             }
                             catch (Exception e)
                             {
                                 Mod.LogError("Making the median ramp taper of " + road.name + " (" + inner + ") failed", e);
+                            }
+                // And for each median cut's ground road (its lanes slide out to the open gap).
+                var cutsHere = road.name == "Large Road" ? LargeCuts : road.name == "Medium Road" ? MediumCuts : new KeyValuePair<int, float>[0];
+                foreach (var cut in cutsHere)
+                    foreach (bool atEnd in new[] { false, true })
+                        foreach (bool invert in new[] { false, true })
+                            try
+                            {
+                                var taper = MakeTaper(road, cut.Key, cut.Value, atEnd, invert, CutName(cut.Value));
+                                if (taper != null) made.Add(taper);
+                            }
+                            catch (Exception e)
+                            {
+                                Mod.LogError("Making the median cut taper of " + road.name + " (" + CutName(cut.Value) + ") failed", e);
                             }
             }
             string collectionName = ((Component)collection).gameObject.name;
@@ -188,12 +227,13 @@ namespace RealisticRoads
         // lanes each way, each half moved (out, or in past a median) so the gap
         // reaches 'gapHalf' either side.
         // 'start': its start piece (see StartPrefix).
-        private static NetInfo Make(NetInfo road, int inner, float gapHalf, bool start)
+        private static NetInfo Make(NetInfo road, int inner, float gapHalf, bool start, bool open = false, string tag = null)
         {
             float cut = CutFor(road, inner);
             if (cut <= 0f || gapHalf <= 0f) return null;
             float widen = gapHalf - cut;
-            string name = (start ? StartPrefix + "Ground " : MedianPrefix) + road.name + " " + inner;
+            tag = tag ?? inner.ToString();
+            string name = (start ? StartPrefix + "Ground " : MedianPrefix) + road.name + " " + tag;
             var go = UnityEngine.Object.Instantiate(road.gameObject);
             go.name = name;
             if (road.transform != null && go.transform != null) go.transform.parent = road.transform.parent;
@@ -237,36 +277,41 @@ namespace RealisticRoads
                 foreach (var segment in copy.m_segments)
                 {
                     if (segment == null) continue;
-                    var mesh = Widen(segment.m_mesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
+                    var mesh = Widen(segment.m_mesh, cut, widen, surface, inside ? kerb : -1f, edge, plain, open);
                     if (mesh != null) segment.m_mesh = mesh;
-                    var lod = Widen(segment.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
+                    var lod = Widen(segment.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge, plain, open);
                     if (lod != null) segment.m_lodMesh = lod;
                 }
             if (copy.m_nodes != null)
                 foreach (var node in copy.m_nodes)
                 {
                     if (node == null) continue;
-                    var mesh = Widen(node.m_mesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
+                    var mesh = Widen(node.m_mesh, cut, widen, surface, inside ? kerb : -1f, edge, plain, open);
                     if (mesh != null) node.m_mesh = mesh;
-                    var lod = Widen(node.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge, plain);
+                    var lod = Widen(node.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge, plain, open);
                     if (lod != null) node.m_lodMesh = lod;
                 }
+            // A median cut's gap is open: no paving there, and the ground is not
+            // hidden under the road, so the grass shows in the gap and the track's
+            // open cut (which hides the ground over itself) is dug in it.
+            if (open) copy.m_clipTerrain = false;
             if (start) SetUpStartPiece(copy);
             HideFromMenus(copy);
-            Name(copy, Title(road) + " (" + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes beside a median ramp" + (start ? ", where it starts" : "") + ")",
-                "Built by Realistic Roads beside a ramp in the road's middle.");
+            Name(copy, Title(road) + " (" + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes beside a median " + (open ? "cut" : "ramp") +
+                       (start ? ", where it starts" : "") + ")",
+                "Built by Realistic Roads beside a ramp or track in the road's middle.");
             lock (variants)
             {
                 List<Variant> list;
                 if (!variants.TryGetValue(road.name, out list)) variants[road.name] = list = new List<Variant>();
                 list.RemoveAll(v => v.Name == name);
-                list.Add(new Variant { Name = name, Inner = inner, Cut = cut + widen, Start = start });
+                list.Add(new Variant { Name = name, Inner = inner, Cut = cut + widen, Start = start, Tag = tag, Open = open });
                 list.Sort((a, b) => a.Cut.CompareTo(b.Cut));
             }
             Mod.Log("Median ramp roads: " + name + " from " + road.name + " (" + (2f * road.m_halfWidth).ToString("F1") + " m, inner lane edge " +
                         cut.ToString("F1") + " m): " + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes, halves moved " +
                         widen.ToString("+0.0;-0.0") + " m" + (inside ? " into its sidewalks (now " + copy.m_pavementWidth.ToString("F1") + " m)" : " (the road wider)") +
-                        ", a " + (2f * (cut + widen)).ToString("F1") + " m gap in the middle, " + (2f * copy.m_halfWidth).ToString("F1") + " m wide");
+                        ", a " + (2f * (cut + widen)).ToString("F1") + " m " + (open ? "open " : "") + "gap in the middle, " + (2f * copy.m_halfWidth).ToString("F1") + " m wide");
             return copy;
         }
 
@@ -744,14 +789,15 @@ namespace RealisticRoads
         // 'plain' > 0: the gap is drawn with the road surface found that far
         // from the centre (the innermost lane's middle): no lane markings, no
         // median under the ramp, only paving.
-        internal static Mesh Widen(Mesh mesh, float cut, float widen, float surface, float kerb = -1f, float edge = 0f, float plain = 0f)
+        internal static Mesh Widen(Mesh mesh, float cut, float widen, float surface, float kerb = -1f, float edge = 0f, float plain = 0f, bool open = false)
         {
             var lines = new List<float> { -cut, cut };
             if (kerb >= 0f) lines.AddRange(new[] { -kerb, kerb, -edge, edge });
             if (plain > 0.05f && plain < cut - 0.05f) lines.AddRange(new[] { -plain, plain });
             var sliced = SliceAcross(mesh, lines.ToArray());
             if (sliced == null) return null;
-            if (plain > 0.05f && plain < cut - 0.05f && sliced.Uv != null) PlainGap(sliced, cut, plain);
+            if (open) DropGap(sliced, cut);
+            else if (plain > 0.05f && plain < cut - 0.05f && sliced.Uv != null) PlainGap(sliced, cut, plain);
             var vertices = sliced.Vertices;
             var triangles = sliced.Triangles;
             float stretch = (cut + widen) / cut;
@@ -768,6 +814,23 @@ namespace RealisticRoads
                 vertices[i] = new Vector3(side * a, y, vertices[i].z);
             }
             return sliced.Make(mesh, " (median)");
+        }
+
+        // A median cut's gap: every triangle within 'cut' of the centre goes (the
+        // model was cut along it), so nothing is drawn there.
+        private static void DropGap(Sliced sliced, float cut)
+        {
+            var v = sliced.Vertices;
+            var kept = new List<int>();
+            var t = sliced.Triangles;
+            for (int i = 0; i + 2 < t.Length; i += 3)
+            {
+                bool inside = Mathf.Abs(v[t[i]].x) < cut - 0.01f || Mathf.Abs(v[t[i + 1]].x) < cut - 0.01f || Mathf.Abs(v[t[i + 2]].x) < cut - 0.01f;
+                bool outside = Mathf.Abs(v[t[i]].x) > cut + 0.01f || Mathf.Abs(v[t[i + 1]].x) > cut + 0.01f || Mathf.Abs(v[t[i + 2]].x) > cut + 0.01f;
+                if (inside && !outside) continue;
+                kept.Add(t[i]); kept.Add(t[i + 1]); kept.Add(t[i + 2]);
+            }
+            sliced.Triangles = kept.ToArray();
         }
 
         // Every corner in the gap (within 'cut') takes the texture place of the
@@ -1061,8 +1124,42 @@ namespace RealisticRoads
                 List<Variant> list;
                 if (!variants.TryGetValue(road.name, out list)) return null;
                 foreach (var variant in list)
-                    if (variant.Info != null && !variant.Start && variant.Inner == inner) return variant.Info;
+                    if (variant.Info != null && !variant.Start && !variant.Open && variant.Inner == inner) return variant.Info;
                 return null;
+            }
+        }
+
+        // A median cut's ground road for 'road': the narrowest whose open gap is at
+        // least 'half' either side of the centre (the track and its cut); null if
+        // none is that wide. 'gapHalf': its gap's half.
+        public static NetInfo CutRoadFor(NetInfo road, float half, out float gapHalf)
+        {
+            gapHalf = 0f;
+            if (road == null) return null;
+            lock (variants)
+            {
+                List<Variant> list;
+                if (!variants.TryGetValue(road.name, out list)) return null;
+                Variant best = null;
+                foreach (var variant in list)
+                    if (variant.Info != null && !variant.Start && variant.Open && variant.Cut >= half - 0.01f && (best == null || variant.Cut < best.Cut)) best = variant;
+                if (best == null) return null;
+                gapHalf = best.Cut;
+                return best.Info;
+            }
+        }
+
+        // The widest median cut gap 'road' has (its half), 0 if none.
+        public static float WidestCut(NetInfo road)
+        {
+            if (road == null) return 0f;
+            lock (variants)
+            {
+                List<Variant> list;
+                if (!variants.TryGetValue(road.name, out list)) return 0f;
+                float widest = 0f;
+                foreach (var variant in list) if (variant.Info != null && variant.Open) widest = Mathf.Max(widest, variant.Cut);
+                return widest;
             }
         }
 
@@ -1076,7 +1173,7 @@ namespace RealisticRoads
                 {
                     var match = pair.Value.Find(v => v.Info == ground);
                     if (match == null) continue;
-                    var start = pair.Value.Find(v => v.Start && v.Inner == match.Inner);
+                    var start = pair.Value.Find(v => v.Start && v.Tag == match.Tag);
                     return start != null ? start.Info : null;
                 }
             return null;
@@ -1112,9 +1209,9 @@ namespace RealisticRoads
         private static readonly Dictionary<string, string> taperRoads = new Dictionary<string, string>();   // taper's name -> its road's
         private const float TaperMarking = 0.25f;   // the lane's edge (its marking) kept out of the stretched strip
 
-        private static string TaperKey(string road, int inner, bool atEnd, bool invert) => road + "|" + inner + "|" + atEnd + "|" + invert;
+        private static string TaperKey(string road, string tag, bool atEnd, bool invert) => road + "|" + tag + "|" + atEnd + "|" + invert;
 
-        private static NetInfo MakeTaper(NetInfo road, int inner, float gapHalf, bool atEnd, bool invert)
+        private static NetInfo MakeTaper(NetInfo road, int inner, float gapHalf, bool atEnd, bool invert, string tag)
         {
             float cut = CutFor(road, inner);
             if (cut <= 0f) return null;
@@ -1138,7 +1235,7 @@ namespace RealisticRoads
             float innerSlide = -median;
             float from = cut + TaperMarking, to = laneOuter - TaperMarking;
             if (to - from < 0.5f || (to + widen) - (from + innerSlide) < 0.5f) return null;
-            string name = StartPrefix + road.name + " Taper " + inner + (atEnd ? " End" : " Start") + (invert ? " Inverted" : "");
+            string name = StartPrefix + road.name + " Taper " + tag + (atEnd ? " End" : " Start") + (invert ? " Inverted" : "");
             var go = UnityEngine.Object.Instantiate(road.gameObject);
             go.name = name;
             if (road.transform != null && go.transform != null) go.transform.parent = road.transform.parent;
@@ -1185,7 +1282,7 @@ namespace RealisticRoads
             Name(copy, Title(road) + " (widening where a median ramp leaves it)", "Built by Realistic Roads where a ramp rises out of the road's middle.");
             lock (variants)
             {
-                taperNames[TaperKey(road.name, inner, atEnd, invert)] = name;
+                taperNames[TaperKey(road.name, tag, atEnd, invert)] = name;
                 taperRoads[name] = road.name;
             }
             Mod.Log("Median ramp roads: " + name + ": outer lanes, kerb and sidewalk slide " + widen.ToString("+0.0;-0.0") + " m along it" +
@@ -1265,7 +1362,7 @@ namespace RealisticRoads
                     var match = pair.Value.Find(v => v.Info == ground);
                     if (match == null) continue;
                     NetInfo taper;
-                    return tapers.TryGetValue(TaperKey(road.name, match.Inner, atEnd, invert), out taper) ? taper : null;
+                    return tapers.TryGetValue(TaperKey(road.name, match.Tag, atEnd, invert), out taper) ? taper : null;
                 }
             return null;
         }

@@ -134,6 +134,16 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      city saved with them needs this mod to load them. Where the ground road and the ramp leave a node together, they and
      the road coming in end square there. The earlier split copies of every road and the first ramp roads are gone: a
      city saved with those pieces loses them when it loads;
+   - **Median cuts** (the two buttons after the median ramp roads: metro, train; pressed again: off). A metro or train track
+     goes between a raised track and a tunnel through an open cut in a road's middle. **Down**: start on the end of a raised
+     track; it comes down at its grade (metro 5 %, train 3.5 %), through one slope piece (the game's own, with its portal)
+     into a tunnel 9 m under the ground, and on in the tunnel as far as you draw. **Up**: start on the end of a tunnel; it
+     comes up through the cut to the first deck level (or the raised track you end on). Drawn along a six-lane or four-lane
+     road, that road under the line becomes its ground road with an open gap for the track (12, 15 or 18 m, the narrowest
+     the track and its cut fit in; the six-lane road keeps two lanes each way beside a 12 m gap, the four-lane road one);
+     its inner lanes end where the gap begins, where the road's last 40 m slide out to it. On open ground, 56 m of the
+     six-lane road is built before it and its ground road along the line. A road crossing the open cut stops it being
+     built; roads over the tunnel or under the raised track are fine. Built track first, then the road, one Ctrl+Z for all;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,
      with its distance along the road (`3   at 1,240 m   Train Track`), how it is crossed and how high: the deck's
      height above the crossed road or the water (or how deep below it). Crossings have their options as icons and,

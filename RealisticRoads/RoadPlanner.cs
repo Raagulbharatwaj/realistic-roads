@@ -100,6 +100,13 @@ namespace RealisticRoads
         public const float MedianRampGrade = 0.08f;
         [ThreadStatic] public static bool MedianRamp;
         [ThreadStatic] public static bool HoldStart;
+        // A median cut (a metro or train track coming down through an open cut in
+        // a road's middle into a tunnel, or up out of one): its profile goes
+        // below the ground on purpose, at its own grade (MedianCutGrade).
+        [ThreadStatic] public static bool MedianCut;
+        public const float MetroCutGrade = 0.05f;     // a metro's portal ramp (as steep as real ones get)
+        public static float MedianCutGrade(NetInfo info) =>
+            info != null && info.m_class != null && info.m_class.m_subService == ItemClass.SubService.PublicTransportMetro ? MetroCutGrade : RailGrade;
         // A median ramp's height at each distance along it (given its length):
         // set, every node is held at it and the plan only checks it against
         // what each node must clear (the planner works out nothing itself).
@@ -224,7 +231,8 @@ namespace RealisticRoads
             var underWater = new bool[n];   // in a water crossing chosen as a tunnel
 
             bool ramp = Ramp && !IsRail(info);
-            maxGrade = MedianRamp && !IsRail(info) ? MedianRampGrade + (Profile != null ? 0.0005f : 0f)
+            maxGrade = MedianCut ? MedianCutGrade(info) + 0.0005f
+                : MedianRamp && !IsRail(info) ? MedianRampGrade + (Profile != null ? 0.0005f : 0f)
                 : ramp ? (steepGrades ? RampSteepGrade : RampGrade) : steepGrades ? SteepGrade : GradeFor(info);
             plan.Grade = maxGrade;
             // Raised parts use the elevated version, else the bridge one (InfoFor).
@@ -430,7 +438,7 @@ namespace RealisticRoads
                     else if (clash == null && h > maxH[i] + 0.25f)
                         clash = "At " + distance[i].ToString("N0") + " m the ramp is at " + (h - ground[i]).ToString("F1") + " m above the ground but must stay " +
                                 "under " + (maxH[i] - ground[i]).ToString("F1") + " m there (a road or deck over it)";
-                    else if (clash == null && h < ground[i] - 0.5f)
+                    else if (clash == null && h < ground[i] - 0.5f && !MedianCut)
                         clash = "At " + distance[i].ToString("N0") + " m the ground rises above the level ramp: draw it where the ground stays below it";
                     Fix(i, h, minH, maxH, isFixed);
                 }

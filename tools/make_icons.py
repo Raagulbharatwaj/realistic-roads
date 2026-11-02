@@ -270,6 +270,25 @@ median_icon(2, 8, "median62")
 median_icon(1, 14, "median64")
 median_icon(1, 8, "median42")
 
+# median cuts: ground lanes either side, the track in the middle going down
+# into a dark open cut and its tunnel mouth (metro: plain rails; train: sleepers)
+def cut_icon(sleepers, name):
+    im, d = canvas()
+    for x in (5, 10):
+        line(d, (x, 38, x, 4), EXIST, 3)
+        line(d, (40 - x, 38, 40 - x, 4), EXIST, 3)
+    d.polygon(p(13, 38, 27, 38, 27, 20, 13, 20), fill=(45, 45, 50, 255))
+    d.pieslice(p(15, 24, 25, 40), 180, 360, fill=(15, 15, 18, 255))
+    if sleepers:
+        for y0 in (6, 11, 16, 21, 26):
+            line(d, (14, y0, 26, y0), DASH, 1.5)
+    line(d, (17, 4, 17, 32), OURS, 2.5)
+    line(d, (23, 4, 23, 32), OURS, 2.5)
+    save(im, name)
+
+cut_icon(False, "cutMetro")
+cut_icon(True, "cutTrain")
+
 
 # direction of the parallel line: two lanes, arrows opposite ways
 im, d = canvas()
@@ -281,7 +300,7 @@ save(im, "direction")
 
 # preview sheet for checking by eye
 names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under",
-         "elevated", "auto", "reset", "parallel", "side", "beside", "upgrade", "direction", "ramp", "median62", "median64", "median42"]
+         "elevated", "auto", "reset", "parallel", "side", "beside", "upgrade", "direction", "ramp", "median62", "median64", "median42", "cutMetro", "cutTrain"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")
