@@ -383,6 +383,17 @@ namespace RealisticRoads
                         ushort s = net.m_nodes.m_buffer[node].GetSegment(i);
                         if (s != 0) at.Add(s);
                     }
+                    // Only the node RR built: the full road, its ground road and at most
+                        // one ramp, the full road going on along the ground road. Anything
+                        // else (a side street at a junction) is never changed: checked
+                        // before anything is.
+                    why = TransitionTopology(node, at);
+                    if (why != null)
+                    {
+                        Mod.Log("Median ramp node #" + node + ": start pieces not made: " + why);
+                        if (done != null) done(false, why);
+                        return;
+                    }
                     bool full = false, ground = false;
                     foreach (ushort s in at)
                     {
@@ -466,6 +477,31 @@ namespace RealisticRoads
                     if (done != null) done(false, "making its start pieces failed (" + e.Message + ")");
                 }
             });
+        }
+
+        // Why the node isn't one to make start pieces at, or null: exactly one
+        // ground road, one other road (the full road, going on along the ground
+        // road within TransitionBend) and at most one ramp.
+        private const float TransitionBend = 45f;
+
+        private static string TransitionTopology(ushort node, List<ushort> at)
+        {
+            var segments = NetManager.instance.m_segments.m_buffer;
+            int ramps = 0, grounds = 0, others = 0;
+            ushort full = 0, ground = 0;
+            foreach (ushort s in at)
+            {
+                var info = segments[s].Info;
+                if (SplitRoads.IsRamp(info)) ramps++;
+                else if (SplitRoads.IsSplit(info)) { grounds++; ground = s; }
+                else { others++; full = s; }
+            }
+            if (grounds != 1 || others != 1 || ramps > 1)
+                return "node #" + node + " has " + others + " road(s), " + grounds + " ground road(s) and " + ramps + " ramp(s) at it (a junction?): " +
+                       "it must be only the road, its ground road and the ramp, so nothing there was changed";
+            if (Vector3.Dot(Away(full, node), Away(ground, node)) > -Mathf.Cos(TransitionBend * Mathf.Deg2Rad))
+                return "at node #" + node + " the road doesn't go on along its ground road (they meet at more than " + TransitionBend.ToString("F0") + " degrees)";
+            return null;
         }
 
         private const float LineCover = 3f;   // a road this close to the drawn line (flat) runs under it

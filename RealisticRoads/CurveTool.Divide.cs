@@ -187,7 +187,7 @@ namespace RealisticRoads
                 // A median cut's track runs along its road (not across it), and its
                 // ground road runs either side of the track.
                 if (MedianCut && !planningGround && RunsAlong(polyline, crossing)) continue;
-                if (MedianCut && planningGround && RoadPlanner.IsRail(crossedSegments[crossing.Segment].Info)) continue;
+                if ((MedianCut || buildingCut) && planningGround && RoadPlanner.IsRail(crossedSegments[crossing.Segment].Info)) continue;
                 if (crossing.Distance < MinSpacing * 0.5f || crossing.Distance > division.Length - MinSpacing * 0.5f) continue;
                 if (InDeck(division.DeckRanges, crossing.Distance))
                 {
