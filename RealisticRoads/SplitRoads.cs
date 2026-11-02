@@ -999,6 +999,59 @@ namespace RealisticRoads
             };
         }
 
+        // A model cut across its length into 'pieces' rows (lines of constant z):
+        // SliceAcross on the model turned so z is across (x and z swapped, and
+        // back). Null if it can't be read.
+        internal static Mesh SliceAlong(Mesh mesh, int pieces)
+        {
+            if (mesh == null || pieces < 2) return null;
+            var vertices = mesh.vertices;
+            if (vertices == null || vertices.Length == 0) return null;
+            float zMin = float.MaxValue, zMax = float.MinValue;
+            foreach (var v in vertices)
+            {
+                zMin = Mathf.Min(zMin, v.z);
+                zMax = Mathf.Max(zMax, v.z);
+            }
+            if (zMax - zMin < 0.01f) return null;
+            var lines = new float[pieces - 1];
+            for (int k = 1; k < pieces; k++) lines[k - 1] = zMin + (zMax - zMin) * k / pieces;
+            var turned = new Mesh();
+            var swapped = new Vector3[vertices.Length];
+            for (int i = 0; i < vertices.Length; i++) swapped[i] = new Vector3(vertices[i].z, vertices[i].y, vertices[i].x);
+            turned.vertices = swapped;
+            var normals = mesh.normals;
+            if (normals != null && normals.Length == vertices.Length)
+            {
+                var n = new Vector3[normals.Length];
+                for (int i = 0; i < n.Length; i++) n[i] = new Vector3(normals[i].z, normals[i].y, normals[i].x);
+                turned.normals = n;
+            }
+            var tangents = mesh.tangents;
+            if (tangents != null && tangents.Length == vertices.Length)
+            {
+                var t = new Vector4[tangents.Length];
+                for (int i = 0; i < t.Length; i++) t[i] = new Vector4(tangents[i].z, tangents[i].y, tangents[i].x, tangents[i].w);
+                turned.tangents = t;
+            }
+            turned.uv = mesh.uv;
+            turned.uv2 = mesh.uv2;
+            turned.colors = mesh.colors;
+            turned.triangles = mesh.triangles;
+            var sliced = SliceAcross(turned, lines);
+            UnityEngine.Object.Destroy(turned);
+            if (sliced == null) return null;
+            for (int i = 0; i < sliced.Vertices.Length; i++)
+                sliced.Vertices[i] = new Vector3(sliced.Vertices[i].z, sliced.Vertices[i].y, sliced.Vertices[i].x);
+            if (sliced.Normals != null)
+                for (int i = 0; i < sliced.Normals.Length; i++)
+                    sliced.Normals[i] = new Vector3(sliced.Normals[i].z, sliced.Normals[i].y, sliced.Normals[i].x);
+            if (sliced.Tangents != null)
+                for (int i = 0; i < sliced.Tangents.Length; i++)
+                    sliced.Tangents[i] = new Vector4(sliced.Tangents[i].z, sliced.Tangents[i].y, sliced.Tangents[i].x, sliced.Tangents[i].w);
+            return sliced.Make(mesh, " (rows)");
+        }
+
         private static List<T> Attribute<T>(T[] values, int count)
         {
             return values != null && values.Length == count ? new List<T>(values) : null;
@@ -1328,11 +1381,16 @@ namespace RealisticRoads
         // (0, or a median's width in: it closes up, squeezed to nothing);
         // 'from' to 'to' stretched between the two; past 'to' as the ground road
         // has it (Across). 'atMaxZ': the full slide at the model's +z end.
+        private const int TaperRows = 10;   // the model cut into this many rows along it, for the S-curve
+
         private static Mesh TaperMesh(Mesh mesh, float cut, float widen, float kerb, float edge, float median, float inner, float from, float to, bool atMaxZ)
         {
             var lines = new List<float> { -from, from, -to, to, -kerb, kerb, -edge, edge };
             if (median > 0.05f) lines.AddRange(new[] { -median, median });
-            var sliced = SliceAcross(mesh, lines.ToArray());
+            // Rows along it first: the game draws straight between a model's corners,
+            // and a road model has few along its length, so the slide's S-curve needs them.
+            var rows = SliceAlong(mesh, TaperRows);
+            var sliced = SliceAcross(rows ?? mesh, lines.ToArray());
             if (sliced == null) return null;
             var vertices = sliced.Vertices;
             float zMin = float.MaxValue, zMax = float.MinValue;
@@ -1347,6 +1405,9 @@ namespace RealisticRoads
                 float x = vertices[i].x, a = Mathf.Abs(x);
                 float f = (vertices[i].z - zMin) / (zMax - zMin);
                 if (!atMaxZ) f = 1f - f;
+                // Smoothstep: the slide starts and ends along the road (no kink at
+                // either end, where it meets the full road and the ground road).
+                f = f * f * (3f - 2f * f);
                 float target;
                 if (median > 0.05f && a < median) target = a * (median + inner) / median;
                 else if (a <= from) target = a + inner;

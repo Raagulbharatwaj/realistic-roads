@@ -15,6 +15,52 @@ namespace RealisticRoads
     public partial class CurveTool
     {
         private const float CutDepth = RoadPlanner.TunnelMinDepth + 1f;   // the tunnel at the bottom of the cut: this far under the ground
+        private const float GapPast = 20f;       // the road's open gap goes this far past the tunnel's mouth
+        private const float CutSample = 1f;      // metres between the profile's samples, finding the cut's ends
+        private float cutFrom = -1f, cutTo = -1f;   // DivideAlong's stops for the open cut (while dividing a cut's track)
+
+        // Where the open cut is along the line (from where the track meets the
+        // ground to where it is a tunnel's depth under it), and where the road's
+        // gap goes: from the raised end to GapPast beyond the tunnel's mouth
+        // (over the tunnel the road is whole). False if the profile never goes
+        // both above and below.
+        private bool CutStops(Division division, bool down)
+        {
+            if (medianProfile == null || division.Polyline == null) return false;
+            var terrain = TerrainManager.instance;
+            float total = division.Length, surface = -1f, tunnel = -1f;
+            float deep = -(CutDepth - 0.5f);
+            for (float d = 0f; d <= total; d += CutSample)
+            {
+                Vector3 p, tangent;
+                CurveMath.PointAt(division.Polyline, d, out p, out tangent);
+                float elevation = medianProfile(d, total) - terrain.SampleRawHeightSmooth(p);
+                if (down)
+                {
+                    if (surface < 0f && elevation <= 0f) surface = d;
+                    if (tunnel < 0f && elevation <= deep) { tunnel = d; break; }
+                }
+                else
+                {
+                    if (elevation <= deep) tunnel = d;
+                    if (surface < 0f && elevation >= 0f) { surface = d; break; }
+                }
+            }
+            if (surface < 0f || tunnel < 0f) return false;
+            division.CutFrom = Mathf.Min(surface, tunnel);
+            division.CutTo = Mathf.Max(surface, tunnel);
+            if (down)
+            {
+                division.GapFrom = 0f;
+                division.GapTo = tunnel + GapPast >= total - MinSpacing ? total : tunnel + GapPast;
+            }
+            else
+            {
+                division.GapFrom = tunnel - GapPast <= MinSpacing ? 0f : tunnel - GapPast;
+                division.GapTo = total;
+            }
+            return true;
+        }
 
         // A node or a segment of the median cut's track (any of its versions).
         private bool OnCutTrack(ushort node, ushort segment)
@@ -120,7 +166,7 @@ namespace RealisticRoads
         // its grade to CutDepth under the ground (or the tunnel it ends on), then
         // level; or up from the tunnel it starts on to the deck level (or the
         // raised track it ends on), then level. Null if fine, else why not.
-        private string CutProfile(List<Vector3> controls, List<ushort> nodes, int n, float length, out bool down)
+        private string CutProfile(List<Vector3> controls, List<Vector3> line, List<ushort> nodes, int n, float length, out bool down)
         {
             down = false;
             medianProfile = null;
@@ -160,7 +206,7 @@ namespace RealisticRoads
                 float from = start.y;
                 bool joinsDeck = nodes[n] != 0 && end.y - endGround >= DeckJoinHeight;
                 string over = null;
-                float target = joinsDeck ? end.y : startGround + MedianDeckLevel(controls, nodes[n], out over);
+                float target = joinsDeck ? end.y : startGround + MedianDeckLevel(line, nodes[n], out over);
                 if (target - from < 1f) return "The track it ends on is no higher than the tunnel it starts in";
                 float rise = (target - from) / grade;
                 if (length < rise)
@@ -200,6 +246,26 @@ namespace RealisticRoads
         {
             var plan = division.Plan;
             if (plan == null || plan.Kinds == null) return;
+            CollapseCut(division);
+            // The slope piece (between the node at the ground and the first in the
+            // tunnel) bends no more than any piece may.
+            for (int i = 1; i < plan.Points.Count; i++)
+            {
+                bool slope = (plan.Kinds[i] == NodeKind.Tunnel) != (plan.Kinds[i - 1] == NodeKind.Tunnel);
+                if (!slope) continue;
+                float bend = CurveMath.BendAngle(division.Tangents[i - 1], division.InTangents[i]);
+                if (bend > MaxBend)
+                    plan.Problems.Add("The open cut bends " + bend.ToString("F0") + " degrees in its one piece (at most " + MaxBend.ToString("F0") +
+                                      "): draw it straighter where the track goes into the ground");
+            }
+        }
+
+        // Nodes below the ground but not in the tunnel (none when the line was
+        // divided at the cut's ends, CutStops): all go but the one nearest the
+        // ground, which is put on it, so the cut is one piece.
+        private void CollapseCut(Division division)
+        {
+            var plan = division.Plan;
             var terrain = TerrainManager.instance;
             int count = plan.Points.Count;
             Func<int, float> elevation = i => plan.Points[i].y - terrain.SampleRawHeightSmooth(plan.Points[i]);
@@ -275,11 +341,14 @@ namespace RealisticRoads
                 plan.Problems.Insert(0, "No road with a gap wide enough for this track (" + (2f * TrackHalf(CutTrack)).ToString("F1") + " m) was made when the city loaded");
             if (medianSummary != null) plan.Warnings.Add("Median cut: " + medianSummary);
             if (cutRoad != null)
-                plan.Warnings.Add("The " + Title(cutRoad) + " under it becomes its ground road along the line, with an open gap for the track " +
+                plan.Warnings.Add("The " + Title(cutRoad) + " under it becomes its ground road with an open gap for the track, from " +
+                                  (division.GapFrom > 1f ? division.GapFrom.ToString("N0") + " m" : "the start") + " to " +
+                                  (division.GapTo < division.Length - 1f ? division.GapTo.ToString("N0") + " m (past the tunnel's mouth; over the tunnel the road stays whole)" : "the end") +
+                                  ", " +
                                   "(its inner lanes end where the gap begins)");
             else
                 plan.Warnings.Add("Not along a six-lane or four-lane road: " + LeadIn.ToString("F0") + " m of " + Title(MedianGroundRoad) +
-                                  " is built before it, and its ground road (with the gap) along the line");
+                                  " is built before it, and its ground road (with the gap) along the line to just past the tunnel's mouth");
         }
 
         // The track first (one Ctrl+Z group with the rest).
@@ -294,7 +363,7 @@ namespace RealisticRoads
             }
             if (!division.Plan.MedianAlong)
             {
-                var check = DivideGround(division, ground);
+                var check = DivideGround(division, ground, 0, division.GapFrom, division.GapTo);
                 string why = check == null || check.Plan == null ? "its road can't be drawn here"
                     : !check.Ok ? "its road bends too sharply"
                     : !check.Plan.Ok ? "its road: " + string.Join("; ", check.Plan.Problems.ToArray()) : null;
@@ -349,7 +418,8 @@ namespace RealisticRoads
                     if (cut.Plan.MedianAlong)
                     {
                         NextMedian(waiting, MedianStage.CutSplit);
-                        NetworkBuilder.RoadNodeAt(cut.Polyline[0], cut.Polyline[1] - cut.Polyline[0], lanes, waiting.Group, node =>
+                        var gap = GapLine(cut);
+                        NetworkBuilder.RoadNodeAt(gap[0], gap[1] - gap[0], lanes, waiting.Group, node =>
                         {
                             waiting.Origin = node;
                             waiting.State = node != 0 ? 1 : 2;
@@ -357,8 +427,9 @@ namespace RealisticRoads
                         return;
                     }
                     {
-                        Vector3 at = cut.Polyline[0];
-                        Vector3 away = -(cut.Polyline[1] - cut.Polyline[0]);
+                        var gap = GapLine(cut);
+                        Vector3 at = gap[0];
+                        Vector3 away = -(gap[1] - gap[0]);
                         at.y = TerrainManager.instance.SampleRawHeightSmooth(at);
                         var lead = DivideLeadIn(at, away, false, waiting.Full);
                         string why = lead == null || lead.Plan == null ? "the " + LeadIn.ToString("F0") + " m of " + Title(waiting.Full) + " can't be drawn there"
@@ -379,7 +450,7 @@ namespace RealisticRoads
                 case MedianStage.CutSplit:
                     Mod.Log("Median cut, next: the road under it becomes " + waiting.Ground.name + " from node #" + waiting.Origin);
                     NextMedian(waiting, MedianStage.CutConvert);
-                    NetworkBuilder.ConvertAlong(new List<Vector3>(cut.Polyline), waiting.Origin, waiting.Ground, lanes, waiting.Group, (stop, along, count) =>
+                    NetworkBuilder.ConvertAlong(GapLine(cut), waiting.Origin, waiting.Ground, lanes, waiting.Group, (stop, along, count) =>
                     {
                         waiting.Stop = stop;
                         waiting.StopAlong = along;
@@ -393,7 +464,7 @@ namespace RealisticRoads
                         FailMedian(waiting, "no stretch of the road under it could become its ground road");
                         return;
                     }
-                    if (waiting.StopAlong < cut.Length - MinSpacing) BuildCutGround(waiting, waiting.Stop, waiting.StopAlong);
+                    if (waiting.StopAlong < GapLength(cut) - MinSpacing) BuildCutGround(waiting, waiting.Stop, waiting.StopAlong);
                     else CutStarts(waiting, waiting.Origin, MedianStage.CutStarts);
                     return;
                 case MedianStage.CutLeadIn:
@@ -428,10 +499,24 @@ namespace RealisticRoads
             }
         }
 
-        // The road with the gap along the line from 'from' ('fromAlong' along it).
+        // The stretch of the line its road has the gap along (the whole line if
+        // the cut's ends weren't found), and its length.
+        private static List<Vector3> GapLine(Division cut)
+        {
+            float from = Mathf.Max(cut.GapFrom, 0f), to = cut.GapTo > 0f ? cut.GapTo : cut.Length;
+            return CurveMath.Slice(cut.Polyline, from, to);
+        }
+
+        private static float GapLength(Division cut)
+        {
+            return (cut.GapTo > 0f ? cut.GapTo : cut.Length) - Mathf.Max(cut.GapFrom, 0f);
+        }
+
+        // The road with the gap along the line from 'from' ('fromAlong' along the gap).
         private void BuildCutGround(PendingParallel waiting, ushort from, float fromAlong)
         {
-            var ground = DivideGround(waiting.Main, waiting.Ground, from, fromAlong);
+            var cut = waiting.Main;
+            var ground = DivideGround(cut, waiting.Ground, from, Mathf.Max(cut.GapFrom, 0f) + fromAlong, cut.GapTo);
             string why = ground == null || ground.Plan == null ? "its road beside the track can't be drawn there"
                 : !ground.Ok ? "its road beside the track bends too sharply"
                 : !ground.Plan.Ok ? "its road beside the track: " + string.Join("; ", ground.Plan.Problems.ToArray())

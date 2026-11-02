@@ -241,6 +241,13 @@ namespace RealisticRoads
                         float farAlong;
                         bool farOff = OffLine(line, nodes[far].m_position, out farAlong);
                         var road = segments[segment].Info;
+                        // The road leaves the line in this segment (it curves away) while the
+                        // line goes on: this segment stays the road it is, and the ground road
+                        // is built on from this node along the line (its 'along' is where).
+                        Vector3 lineEnd = line[line.Count - 1], endOnRoad;
+                        CrossingFinder.ClosestT(segment, lineEnd, out endOnRoad);
+                        bool endsHere = CurveMath.FlatDistance(endOnRoad, lineEnd) <= LineCover;
+                        if (farOff && !endsHere) break;
                         if (farOff || farAlong >= lineLength - 1f)
                         {
                             // The line ends in this segment: cut it there.
@@ -534,7 +541,9 @@ namespace RealisticRoads
         // 'lanes' vehicle lanes: one a median ramp road's ground road replaces.
         private static bool ConvertsToGround(NetInfo info, int lanes)
         {
-            if (info == null || SplitRoads.IsRamp(info) || SplitRoads.IsSplit(info) || RoadUpgrade.VersionOf(info) >= 0) return false;
+            // Never one of RR's own pieces (a ramp, a ground road, or the full road's
+            // start or taper piece at another median ramp's or cut's node).
+            if (info == null || SplitRoads.IsOwnPiece(info) || SplitRoads.IsSplit(info) || RoadUpgrade.VersionOf(info) >= 0) return false;
             if (info.m_netAI == null || info.m_netAI.GetType().Name != "RoadAI") return false;
             return info.m_forwardVehicleLaneCount + info.m_backwardVehicleLaneCount == lanes &&
                    info.m_forwardVehicleLaneCount == info.m_backwardVehicleLaneCount;

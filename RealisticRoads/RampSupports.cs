@@ -20,7 +20,7 @@ namespace RealisticRoads
         private const float DrawDistance = 4000f;
         private const float Inset = 0.4f;          // the walls stand this far inside the ramp's edges
         private const float WallThickness = 0.3f;  // their inner face this far inside the outer one
-        private const float PierInset = 0.3f;      // a wall pillar's sides this far inside the walls' inner faces (not in their plane)
+        private const float PierProud = 0.05f;     // a wall pillar's sides this far outside the walls' outer faces (not in their plane)
         private const float UnderSurface = 0.3f;   // their top this far under the road's surface (under the deck)
         private const float IntoGround = 1f;       // their foot this far into the ground
         private const float MinWall = 0.3f;        // lower than this: no wall there
@@ -352,7 +352,9 @@ namespace RealisticRoads
             Vector3 across = CurveMath.Rotate(along, 90f);
             Vector3 at = n.m_position;
             float top = at.y - PierUnderside;
-            float width = 2f * Mathf.Max(half - Inset - WallThickness - PierInset, 0.5f);
+            // Just past the walls' outer faces (not in their plane): at the end of a
+            // walled stretch it covers the walls' open ends, a solid block.
+            float width = 2f * Mathf.Max(half - Inset + PierProud, 0.5f);
             float ground = TerrainManager.instance.SampleRawHeightSmooth(at) - IntoGround;
             var terrain = TerrainManager.instance;
             // The lowest ground under its width (it stands on a slope too).
@@ -366,10 +368,14 @@ namespace RealisticRoads
             var texture = material.Value;
             Vector3 center = new Vector3(0f, (top + ground) * 0.5f - at.y, 0f);
             Vector3 x = across * (width * 0.5f), y = Vector3.up * ((top - ground) * 0.5f), z = along * (PierDepth * 0.5f);
-            DeckFrames.Face(vertices, normals, uvs, triangles, texture, center + z, y, x, along);
-            DeckFrames.Face(vertices, normals, uvs, triangles, texture, center - z, y, x, -along);
-            DeckFrames.Face(vertices, normals, uvs, triangles, texture, center + x, y, z, across);
-            DeckFrames.Face(vertices, normals, uvs, triangles, texture, center - x, y, z, -across);
+            // Its four sides with the concrete's texture upright (however wide the
+            // pillar is: DeckFrames.Face lays it along the longer side), and its top.
+            foreach (var side in new[] { z, -z, x, -x })
+            {
+                Vector3 run = side == z || side == -z ? x : z;
+                Vector3 c = center + side;
+                Quad(vertices, normals, uvs, triangles, texture, c - run - y, c + run - y, c + run + y, c - run + y, side.normalized);
+            }
             DeckFrames.Face(vertices, normals, uvs, triangles, texture, center + y, x, z, Vector3.up);
             return new Part
             {

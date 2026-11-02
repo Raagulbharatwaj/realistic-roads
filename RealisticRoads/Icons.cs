@@ -121,6 +121,7 @@ namespace RealisticRoads
             catch (Exception e)
             {
                 failed = true;
+                loaded.Clear();   // no atlas: no sprite counts as loaded
                 Mod.LogError("Loading icons failed, using text buttons", e);
                 return null;
             }

@@ -254,6 +254,11 @@ namespace RealisticRoads
         // A curve cut into buildable pieces.
         private class Division
         {
+            // A median cut's: where its road has the open gap along the line (from
+            // its elevated end to just past the tunnel's mouth), and where the open
+            // cut is (from the ground to the tunnel's depth): see CutStops.
+            public float GapFrom, GapTo = -1f;
+            public float CutFrom = -1f, CutTo = -1f;
             public List<Vector3> Points;
             public List<Vector3> Tangents;      // leaving each point
             public List<Vector3> InTangents;    // arriving at it (differs at a sharp corner)
@@ -541,7 +546,7 @@ namespace RealisticRoads
             second = parallelMode && !liveDeck.Contains(true) ? DivideParallel(preview, CurrentParallel()) : null;
             // A median ramp road: its ground road beside the ramp.
             if (medianRamp != 0 && preview.Plan != null && !preview.Plan.MedianAlong)
-                second = DivideGround(preview, MedianGroundSplit);
+                second = MedianCut ? DivideGround(preview, MedianGroundSplit, 0, preview.GapFrom, preview.GapTo) : DivideGround(preview, MedianGroundSplit);
             cursorText = CursorText(withHover);
             ShowPanel();
             PlaceButtons();
@@ -1780,7 +1785,7 @@ namespace RealisticRoads
         // highest RR's own deck is over the roads along and beyond the line:
         // MedianDeckLevel). Null if
         // fine, else why it can't be built.
-        private string MedianProfile(List<Vector3> controls, List<ushort> nodes, List<ushort> segments, int n, float length, out bool down)
+        private string MedianProfile(List<Vector3> controls, List<Vector3> line, List<ushort> nodes, List<ushort> segments, int n, float length, out bool down)
         {
             medianProfile = null;
             medianSummary = null;
@@ -1797,7 +1802,7 @@ namespace RealisticRoads
                 float from = startOnRoad ? start.y : startGround;
                 bool joinsDeck = nodes[n] != 0 && end.y - endGround >= DeckJoinHeight;
                 string over = null;
-                float target = joinsDeck ? end.y : from + MedianDeckLevel(controls, nodes[n], out over);
+                float target = joinsDeck ? end.y : from + MedianDeckLevel(line, nodes[n], out over);
                 string what = joinsDeck ? "the deck it joins" : "the first deck level" + (over != null ? " (" + over + ")" : "");
                 if (target - from < 1f) return "No deck level to climb to here (" + what + " is " + (target - from).ToString("F1") + " m up)";
                 float climb = (target - from) / grade;
@@ -1837,19 +1842,22 @@ namespace RealisticRoads
         // nothing stands through it. Higher where the roads there need it.
         public const float MinMedianRampLevel = 14.6f;
 
-        private float MedianDeckLevel(List<Vector3> controls, ushort endNode, out string over)
+        // 'line': the curve as drawn (sampled along its bends and the roads it
+        // follows, not the straight chords between its points).
+        private float MedianDeckLevel(List<Vector3> line, ushort endNode, out string over)
         {
             over = null;
             float best = MinMedianRampLevel;
             float half = Net != null ? Net.m_halfWidth : 4f;
             var samples = new List<Vector3>();
-            for (int i = 0; i < controls.Count; i++)
+            float total = CurveMath.Length(line);
+            for (float d = 0f; d < total; d += DeckLevelStep)
             {
-                samples.Add(controls[i]);
-                if (i + 1 >= controls.Count) break;
-                float length = CurveMath.FlatDistance(controls[i], controls[i + 1]);
-                for (float d = DeckLevelStep; d < length; d += DeckLevelStep) samples.Add(Vector3.Lerp(controls[i], controls[i + 1], d / length));
+                Vector3 p, tangent;
+                CurveMath.PointAt(line, d, out p, out tangent);
+                samples.Add(p);
             }
+            if (line.Count > 0) samples.Add(line[line.Count - 1]);
             if (endNode != 0)
             {
                 var net = NetManager.instance;
@@ -2633,11 +2641,14 @@ namespace RealisticRoads
         // it starts (going down: ends) at, 'originAlong' along the line from
         // where the ramp leaves (lands in) the road (past a stretch of road
         // that became the ground road).
-        private Division DivideGround(Division ramp, NetInfo split, ushort origin = 0, float originAlong = 0f)
+        // 'until' (> 0): the ground road ends that far along the line (a median
+        // cut's gap ends before its line does).
+        private Division DivideGround(Division ramp, NetInfo split, ushort origin = 0, float originAlong = 0f, float until = -1f)
         {
             if (ramp == null || split == null || ramp.Polyline == null || ramp.Polyline.Count < 2 || ramp.Length < 1f) return null;
             bool down = ramp.Plan != null && ramp.Plan.MedianDown;
-            float from = down ? 0f : originAlong, until = down ? ramp.Length - originAlong : ramp.Length;
+            float from = down ? 0f : originAlong;
+            until = down ? ramp.Length - originAlong : until > 0f ? Mathf.Min(until, ramp.Length) : ramp.Length;
             var polyline = CurveMath.Slice(ramp.Polyline, from, until);
             if (CurveMath.Length(polyline) < 1f) return null;
             ushort startNode, endNode, startSegment, endSegment;
@@ -3089,8 +3100,34 @@ namespace RealisticRoads
             division.Lifts = lifts;
             // A median ramp's own height profile (up to its target and level, or down).
             bool down = false;
-            string profileProblem = MedianCut ? CutProfile(controls, nodes, n, division.Length, out down)
-                : medianRamp != 0 ? MedianProfile(controls, nodes, segments, n, division.Length, out down) : null;
+            string profileProblem = MedianCut ? CutProfile(controls, division.Polyline, nodes, n, division.Length, out down)
+                : medianRamp != 0 ? MedianProfile(controls, division.Polyline, nodes, segments, n, division.Length, out down) : null;
+            if (MedianCut && profileProblem == null && CutStops(division, down))
+            {
+                // Divided again with a stop where the track reaches the ground and one
+                // where it reaches the tunnel's depth, nothing between: the open cut
+                // is one slope piece, planned as it is built.
+                cutFrom = division.CutFrom;
+                cutTo = division.CutTo;
+                try
+                {
+                    var again = DivideShaped(controls, division.Continues ? startDir : Vector3.zero, division.Continues ? endDir : Vector3.zero,
+                        nodes[0], nodes[n], lifts, straight, deck, below, paths, under);
+                    if (again.Ok)
+                    {
+                        again.Continues = division.Continues;
+                        again.GapFrom = division.GapFrom;
+                        again.GapTo = division.GapTo;
+                        again.CutFrom = division.CutFrom;
+                        again.CutTo = division.CutTo;
+                        division = again;
+                    }
+                }
+                finally
+                {
+                    cutFrom = cutTo = -1f;
+                }
+            }
             if (MedianCut) TypeCutCrossings(division);
             if (medianRamp == 0) medianProfile = null;
             PlanDivision(division, nodes[0], nodes[n], startSegment, ts[0], endSegment, ts[n], raisedPoints);
