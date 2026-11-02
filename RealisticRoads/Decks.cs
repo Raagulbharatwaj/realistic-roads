@@ -897,7 +897,7 @@ namespace RealisticRoads
 
         public static bool Prefix(ushort __0, ref BuildingInfo __2, ref float __3)
         {
-            if (!DeckFrames.Holds(__0)) return true;
+            if (!DeckFrames.Holds(__0) && !RampSupports.Holds(__0)) return true;
             __2 = null;
             __3 = 0f;
             return false;
@@ -911,6 +911,7 @@ namespace RealisticRoads
         public static void Postfix(RenderManager.CameraInfo __0)
         {
             DeckFrames.Render(__0);
+            RampSupports.Render(__0);
         }
     }
 }
