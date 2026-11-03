@@ -33,6 +33,7 @@ namespace RealisticRoads
         public string Beside = "";                // what it is
         public bool BesideOther;                  // another road or track (or one being picked)
         public bool ParallelReverse;              // it runs the other way
+        public bool ParallelCentred;              // the line drawn is the middle of the pair
         public bool Upgrade;                      // changing an existing road instead of drawing one
         public bool Ramp;                         // drawing a slip ramp between two roads
         public string MedianRamp;                 // the median ramp road being drawn (null: none)
@@ -162,9 +163,9 @@ namespace RealisticRoads
         public Action ToggleSnap;
         public Action ToggleDeck, ToggleUnder;
         // The parallel line: on / off, the gap, which side, and what it is.
-        public Action ToggleParallel, FlipSide, PickBeside, FlipDirection;
+        public Action ToggleParallel, FlipSide, PickBeside, FlipDirection, ToggleCentred;
         public Action<float> ChangeGap;
-        private UIButton parallelButton, sideButton, besideButton, directionButton;
+        private UIButton parallelButton, sideButton, besideButton, directionButton, centredButton;
         private UILabel gapLabel;
         // Upgrade an existing road along a stretch; draw a slip ramp.
         public Action ToggleUpgrade, ToggleRamp;
@@ -373,6 +374,10 @@ namespace RealisticRoads
                 "or the same way (a double track, a road and its tram or rail line)", sx + 2f * (IconSize + 3f), y,
                 () => { if (FlipDirection != null) FlipDirection(); });
             Put(directionButton, 0, 2, true);
+            centredButton = BarButton(Icons.Centred, "|", "Centred pair: the line drawn is the middle between the two roads (green), " +
+                "each road half the way out to its side; else the line drawn is the curve's own and the parallel road goes beside it",
+                sx + 3f * (IconSize + 3f), y, () => { if (ToggleCentred != null) ToggleCentred(); });
+            Put(centredButton, 0, 2, true);
 
             // Decks.
             y = RowsTop;
@@ -599,6 +604,7 @@ namespace RealisticRoads
                 if (gapLabel.text != gap) gapLabel.text = gap;
             }
             Select(directionButton, model.Parallel && model.ParallelReverse);
+            Select(centredButton, model.Parallel && model.ParallelCentred);
             if (radiusLabel != null)
             {
                 string text = model.Radius < 0.5f ? "sharp" : model.Radius.ToString("0") + " m";
@@ -620,7 +626,7 @@ namespace RealisticRoads
             if (profileTexture != null) UnityEngine.Object.Destroy(profileTexture);
             panel = null;
             curveButton = straightButton = snapButton = deckButton = underButton = null;
-            parallelButton = sideButton = besideButton = directionButton = null;
+            parallelButton = sideButton = besideButton = directionButton = centredButton = null;
             gapLabel = null;
             upgradeButton = rampButton = null;
             for (int choice = 0; choice < medianButtons.Length; choice++) medianButtons[choice] = null;

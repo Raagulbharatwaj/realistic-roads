@@ -255,6 +255,7 @@ namespace RealisticRoads
         // A curve cut into buildable pieces.
         private class Division
         {
+            public float CentreShift;   // Centred: how far the curve was moved right of the line drawn (see Divide)
             // A median cut's: where its road has the open gap along the line (from
             // its elevated end to just past the tunnel's mouth), and where the open
             // cut is (from the ground to the tunnel's depth): see CutStops.
@@ -414,6 +415,7 @@ namespace RealisticRoads
         private float parallelGap = DefaultGap;  // metres between the two roads' edges
         private bool parallelLeft = true;        // on the left of the curve as drawn (else the right)
         private bool parallelReverse = true;     // runs the other way (a one-way pair), else the same way (a double track)
+        private bool parallelCentred;            // the line drawn is the middle of the pair (each road half the way to the side)
         private bool pickingBeside;              // the next road picked in the game's menu goes beside the curve
         private NetInfo besideNetwork;           // null: the same road, the other way (a one-way pair)
         private Division second;                 // the parallel line's preview
@@ -2964,6 +2966,20 @@ namespace RealisticRoads
             choicesVersion++;
         }
 
+        // Centred: the line drawn is the middle of the pair; else it is the curve's own.
+        private void ToggleCentred()
+        {
+            parallelCentred = !parallelCentred;
+            parallelTypes.Clear();
+            parallelExtra.Clear();
+            parallelWaterExtra.Clear();
+            parallelWaterTunnel.Clear();
+            parallelWaterPlaces.Clear();
+            parallelCrossingPlaces.Clear();
+            choicesVersion++;
+            Mod.Log("Parallel line: " + (parallelCentred ? "the line drawn is the middle of the pair" : "beside the curve drawn"));
+        }
+
         // The other way (a one-way pair) or the same way (a double track).
         private void FlipDirection()
         {
@@ -3124,7 +3140,49 @@ namespace RealisticRoads
         // smoothly; if that would bend too much it meets the road at an angle
         // instead (like a normal junction). Crossings with existing roads get a
         // node exactly on them, and RoadPlanner works out the heights.
+        // Centred (Parallel on): the line drawn is the middle between the two
+        // roads, so the curve is moved half the way (both half widths and the
+        // gap) to the side away from the parallel line, which then goes the
+        // whole way from it on its side. Its ends join a road of its kind they
+        // land on, as the parallel line's do. 0: not centred.
+        private float CentreShift(List<bool> deckModes)
+        {
+            if (!parallelMode || !parallelCentred || SelectedNetwork == null || medianRamp != 0 || rampMode || upgradeMode ||
+                deckModes.Contains(true)) return 0f;
+            var info = besideNetwork ?? SelectedNetwork;
+            float half = (SelectedNetwork.m_halfWidth + parallelGap + info.m_halfWidth) * 0.5f;
+            return parallelLeft ? half : -half;   // + : to the right
+        }
+
         private Division Divide(List<Vector3> controls, List<ushort> nodes, List<ushort> segments, List<float> ts, List<float> lifts,
+            List<bool> pointModes, List<bool> deckModes, List<bool> underModes, List<ushort> roads, List<float> roadTs)
+        {
+            float shift = controls.Count >= 2 ? CentreShift(deckModes) : 0f;
+            if (shift != 0f)
+            {
+                controls = CurveMath.Offset(controls, shift);
+                nodes = new List<ushort>(nodes);
+                segments = new List<ushort>(segments);
+                ts = new List<float>(ts);
+                float reach = Mathf.Min(EndSnap, Mathf.Abs(shift));
+                foreach (int k in new[] { 0, controls.Count - 1 })
+                {
+                    Vector3 at = controls[k];
+                    ushort node, segment;
+                    float t;
+                    EndOn(ref at, SelectedNetwork, reach, out node, out segment, out t);
+                    controls[k] = at;
+                    nodes[k] = node;
+                    segments[k] = segment;
+                    ts[k] = t;
+                }
+            }
+            var division = DivideMain(controls, nodes, segments, ts, lifts, pointModes, deckModes, underModes, roads, roadTs);
+            division.CentreShift = shift;
+            return division;
+        }
+
+        private Division DivideMain(List<Vector3> controls, List<ushort> nodes, List<ushort> segments, List<float> ts, List<float> lifts,
             List<bool> pointModes, List<bool> deckModes, List<bool> underModes, List<ushort> roads, List<float> roadTs)
         {
             line = MainSetup();
@@ -3778,6 +3836,7 @@ namespace RealisticRoads
                 panel.FlipSide = FlipSide;
                 panel.PickBeside = PickBeside;
                 panel.FlipDirection = FlipDirection;
+                panel.ToggleCentred = ToggleCentred;
                 panel.ToggleUpgrade = ToggleUpgrade;
                 panel.ToggleRamp = ToggleRamp;
                 panel.PickMedianRamp = PickMedianRamp;
@@ -3830,6 +3889,7 @@ namespace RealisticRoads
                     : (besideNetwork != null ? Title(besideNetwork) : "the same road") + (parallelReverse ? ", other way" : ", same way"),
                 BesideOther = besideNetwork != null || pickingBeside,
                 ParallelReverse = parallelReverse,
+                ParallelCentred = parallelCentred,
                 Upgrade = upgradeMode,
                 Ramp = rampMode,
                 MedianRamp = medianRamp != 0 ? MedianRampNames[medianRamp] : null,
@@ -4094,6 +4154,7 @@ namespace RealisticRoads
             Vector3 mouse = Input.mousePosition;
             float best = InsertPixels * InsertPixels, bestAlong = -1f, run = 0f;
             Vector3 bestPoint = Vector3.zero;
+            int bestIndex = -1;
             for (int i = 0; i < line.Polyline.Count; i++)
             {
                 if (i > 0) run += CurveMath.FlatDistance(line.Polyline[i - 1], line.Polyline[i]);
@@ -4104,7 +4165,10 @@ namespace RealisticRoads
                 best = dx * dx + dy * dy;
                 bestAlong = run;
                 bestPoint = line.Polyline[i];
+                bestIndex = i;
             }
+            // Centred: the curve is beside the line drawn; the point goes on the line.
+            if (bestIndex >= 0 && line.CentreShift != 0f) bestPoint = CurveMath.Offset(line.Polyline, -line.CentreShift)[bestIndex];
             if (bestAlong < 0f)
             {
                 Mod.Log("Shift+click on the curve itself to put a point in there");

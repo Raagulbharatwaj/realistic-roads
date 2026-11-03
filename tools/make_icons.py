@@ -296,6 +296,14 @@ def cut_icon(sleepers, name):
 cut_icon(False, "cutMetro")
 cut_icon(True, "cutTrain")
 
+# centred pair: two roads either side of the drawn line (dashed, in the middle)
+im, d = canvas()
+line(d, (9, 4, 9, 36), OURS, 7)
+line(d, (31, 4, 31, 36), OURS, 7)
+for y0 in (4, 13, 22, 31):
+    line(d, (20, y0, 20, y0 + 5), DASH, 2.5)
+save(im, "centred")
+
 
 # direction of the parallel line: two lanes, arrows opposite ways
 im, d = canvas()
@@ -307,7 +315,7 @@ save(im, "direction")
 
 # preview sheet for checking by eye
 names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under",
-         "elevated", "auto", "reset", "grade", "parallel", "side", "beside", "upgrade", "direction", "ramp", "median62", "median64", "median42", "cutMetro", "cutTrain"]
+         "elevated", "auto", "reset", "grade", "parallel", "side", "beside", "upgrade", "direction", "ramp", "median62", "median64", "median42", "cutMetro", "cutTrain", "centred"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")
