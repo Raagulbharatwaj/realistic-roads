@@ -124,6 +124,7 @@ namespace RealisticRoads
         // Dragging a node's height: the scale stays as it was when it was grabbed.
         public Func<int, bool> GrabNode;
         public Action<float> DragHeight;
+        public Action<int, float> NudgeNode;   // the mouse wheel over a dot: its height up or down by this
         public Action ReleaseNode;
         public Action<int> FreeNode;
         public Action<float, float, Forced> MarkStretch;
@@ -269,12 +270,13 @@ namespace RealisticRoads
                 () => { if (ToggleUnder != null) ToggleUnder(); });
             float x = Pad + 5f * (IconSize + 3f) + 11f;
             BarLabel("Corner", x, y + 8f, 38f);
-            BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner)", x + 38f, y,
-                () => { if (ChangeRadius != null) ChangeRadius(-CurveTool.RadiusStep); });
+            Action tighter = () => { if (ChangeRadius != null) ChangeRadius(-CurveTool.RadiusStep); };
+            Action wider = () => { if (ChangeRadius != null) ChangeRadius(CurveTool.RadiusStep); };
+            var radiusMinus = BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner; or the mouse wheel)", x + 38f, y, tighter);
             radiusLabel = BarLabel("", x + 38f + IconSize, y + 8f, 38f);
             radiusLabel.textAlignment = UIHorizontalAlignment.Center;
-            BarButton(Icons.Plus, "+", "Wider corners between straight pieces", x + 76f + IconSize, y,
-                () => { if (ChangeRadius != null) ChangeRadius(CurveTool.RadiusStep); });
+            var radiusPlus = BarButton(Icons.Plus, "+", "Wider corners between straight pieces (or the mouse wheel)", x + 76f + IconSize, y, wider);
+            Wheel(wider, tighter, radiusMinus, radiusLabel, radiusPlus);
 
             y += IconSize + 6f;
             BarLabel("Length", Pad, y + 4f, 48f);
@@ -294,12 +296,14 @@ namespace RealisticRoads
                 () => { if (ToggleParallel != null) ToggleParallel(); });
             float gx = Pad + IconSize + 6f;
             BarLabel("Gap", gx, y + 8f, 28f);
-            BarButton(Icons.Minus, "-", "Narrower gap between the two roads' edges", gx + 28f, y,
-                () => { if (ChangeGap != null) ChangeGap(-CurveTool.GapStep); });
+            Action narrower = () => { if (ChangeGap != null) ChangeGap(-CurveTool.GapStep); };
+            Action widerGap = () => { if (ChangeGap != null) ChangeGap(CurveTool.GapStep); };
+            var gapMinus = BarButton(Icons.Minus, "-", "Narrower gap between the two roads' edges (or the mouse wheel)", gx + 28f, y, narrower);
             gapLabel = BarLabel("", gx + 28f + IconSize, y + 8f, 36f);
             gapLabel.textAlignment = UIHorizontalAlignment.Center;
-            BarButton(Icons.Plus, "+", "Wider gap between the two roads' edges (up to " + CurveTool.MaxGap.ToString("0") + " m)",
-                gx + 64f + IconSize, y, () => { if (ChangeGap != null) ChangeGap(CurveTool.GapStep); });
+            var gapPlus = BarButton(Icons.Plus, "+", "Wider gap between the two roads' edges (up to " + CurveTool.MaxGap.ToString("0") + " m; or the mouse wheel)",
+                gx + 64f + IconSize, y, widerGap);
+            Wheel(widerGap, narrower, gapMinus, gapLabel, gapPlus);
             float sx = gx + 64f + 2f * IconSize + 6f;
             sideButton = BarButton(Icons.Side, "<>", "Put the parallel road on the other side of the curve", sx, y,
                 () => { if (FlipSide != null) FlipSide(); });
@@ -592,7 +596,7 @@ namespace RealisticRoads
                 profileSprite = (UITextureSprite)panel.AddUIComponent(typeof(UITextureSprite));
                 profileSprite.size = new Vector2(ProfileWidth, ProfileHeight);
                 profileSprite.relativePosition = new Vector3(Pad, y);
-                profileSprite.tooltip = "Drag a dot up or down to set the road's height there (right-click it to let go). " +
+                profileSprite.tooltip = "Drag a dot up or down to set the road's height there (or the mouse wheel over it; right-click it to let go). " +
                                         "Drag along the view to select a stretch for the buttons below. Click to keep the mark on the map";
                 profileSprite.eventMouseMove += (component, param) =>
                 {
@@ -600,6 +604,17 @@ namespace RealisticRoads
                 };
                 profileSprite.eventMouseLeave += (component, param) => { if (!cursorPinned && draggedNode < 0) SetCursor(-1f, false); };
                 profileSprite.eventMouseDown += (component, param) => PressProfile(param.buttons);
+                // The mouse wheel over a dot: its height up or down (Shift: 1 m).
+                profileSprite.eventMouseWheel += (component, param) =>
+                {
+                    float wx, wrow;
+                    if (draggedNode >= 0 || NudgeNode == null || !MouseOnProfile(out wx, out wrow)) return;
+                    int node = NodeUnderMouse(wx, wrow);
+                    if (node < 0) return;
+                    float step = ShiftStep(CurveTool.LiftStep);
+                    NudgeNode(node, param.wheelDelta > 0f ? step : -step);
+                    param.Use();
+                };
                 dynamic.Add(profileSprite);
                 y += ProfileHeight + 3f;
                 float x = Pad;
@@ -667,10 +682,11 @@ namespace RealisticRoads
                     {
                         if (item.Allowed.Count > 0) x += 8f;
                         string step = item.Step.ToString("0.#");
-                        IconButton(Icons.Plus, "+", "Higher (+" + step + " m, Shift: 1 m)", new Vector2(x, y), false,
-                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(ShiftStep(c.Step)); });
-                        IconButton(Icons.Minus, "-", "Lower (-" + step + " m, Shift: 1 m)", new Vector2(x + IconSize + 3f, y), false,
-                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(-ShiftStep(c.Step)); });
+                        Action higher = () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(ShiftStep(c.Step)); };
+                        Action lower = () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(-ShiftStep(c.Step)); };
+                        var plus = IconButton(Icons.Plus, "+", "Higher (+" + step + " m, Shift: 1 m; or the mouse wheel)", new Vector2(x, y), false, higher);
+                        var minus = IconButton(Icons.Minus, "-", "Lower (-" + step + " m, Shift: 1 m; or the mouse wheel)", new Vector2(x + IconSize + 3f, y), false, lower);
+                        Wheel(higher, lower, plus, minus);
                     }
                     if (item.Allowed.Count > 0 || item.HeightButtons) y += IconSize;
                     y += RowGap + 6f;
@@ -789,7 +805,22 @@ namespace RealisticRoads
             return label;
         }
 
-        private void IconButton(string icon, string letter, string tooltip, Vector2 at, bool selected, Action onClick)
+        // The mouse wheel over any of 'over': up runs 'up', down runs 'down'.
+        internal static void Wheel(Action up, Action down, params UIComponent[] over)
+        {
+            foreach (var component in over)
+            {
+                if (component == null) continue;
+                component.eventMouseWheel += (c, p) =>
+                {
+                    if (p.wheelDelta > 0f) up();
+                    else if (p.wheelDelta < 0f) down();
+                    p.Use();
+                };
+            }
+        }
+
+        private UIButton IconButton(string icon, string letter, string tooltip, Vector2 at, bool selected, Action onClick)
         {
             var button = (UIButton)(parent ?? panel).AddUIComponent(typeof(UIButton));
             button.size = new Vector2(IconSize, IconSize);
@@ -814,6 +845,7 @@ namespace RealisticRoads
             }
             button.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0) onClick(); };
             dynamic.Add(button);
+            return button;
         }
 
         private const float ActionSize = 30f;

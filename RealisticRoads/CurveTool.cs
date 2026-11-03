@@ -98,6 +98,7 @@ namespace RealisticRoads
         // On-screen buttons, reused every frame: button i runs buttonActions[i].
         private readonly List<UIButton> buttons = new List<UIButton>();
         private readonly List<System.Action> buttonActions = new List<System.Action>();
+        private readonly List<System.Action<int>> buttonWheels = new List<System.Action<int>>();   // the mouse wheel over button i (+1 up, -1 down), or null
 
         // Clicked control points and, for each, the existing node it snapped to
         // (or 0) and where to draw it.
@@ -258,6 +259,7 @@ namespace RealisticRoads
             // its elevated end to just past the tunnel's mouth), and where the open
             // cut is (from the ground to the tunnel's depth): see CutStops.
             public float GapFrom, GapTo = -1f;
+            public List<ushort> Blocking = new List<ushort>();   // buildings its ground-level stretches run through (marked on the map)
             public float CutFrom = -1f, CutTo = -1f;
             public List<Vector3> Points;
             public List<Vector3> Tangents;      // leaving each point
@@ -1100,8 +1102,17 @@ namespace RealisticRoads
                     e.Use();
                     // Esc also stops waiting for a road for beside the curve (not
                     // ClearPoints: picking it in the menu leaves and reopens the tool).
+                    // One step back at a time: planning -> drawing (the points kept)
+                    // -> the curve cleared -> out of the tool.
                     pickingBeside = false;
-                    if (points.Count > 0 || upgradePoints.Count > 0)
+                    if (planning)
+                    {
+                        planning = false;
+                        dragIndex = -1;
+                        choicesVersion++;
+                        Mod.Log("Esc: back to drawing (the points are kept; Esc again clears them)");
+                    }
+                    else if (points.Count > 0 || upgradePoints.Count > 0)
                     {
                         ClearPoints();
                         Mod.Log("Curve cleared (Esc again leaves the tool)");
@@ -1168,10 +1179,22 @@ namespace RealisticRoads
             {
                 // Planning: clicks never add points. Grab a point to move it;
                 // right-click goes back to drawing (adding points at the end).
-                if (e.button == 0)
+                // Shift+click on the curve puts a point in there; right-click on a
+                // point takes that one out.
+                if (e.button == 0 && e.shift)
+                {
+                    e.Use();
+                    InsertPointUnderMouse();
+                }
+                else if (e.button == 0)
                 {
                     e.Use();
                     dragIndex = PointUnderMouse();
+                }
+                else if (e.button == 1 && PointUnderMouse() >= 0 && points.Count > 2)
+                {
+                    e.Use();
+                    RemovePointAt(PointUnderMouse());
                 }
                 else if (e.button == 1)
                 {
@@ -1274,6 +1297,15 @@ namespace RealisticRoads
                     else overlay.DrawBezier(cameraInfo, color, PieceBezier(division, i), width, 100000f, -100000f, -1f, 1280f, false, true);
                 }
                 DrawPillarSpots(cameraInfo, overlay, division);
+                // Buildings it would run through: a red ring round each.
+                var buildings = BuildingManager.instance.m_buildings.m_buffer;
+                foreach (ushort id in division.Blocking)
+                {
+                    var b = buildings[id];
+                    if ((b.m_flags & Building.Flags.Created) == Building.Flags.None || b.Info == null) continue;
+                    float size = Mathf.Max(b.Info.m_cellWidth, b.Info.m_cellLength) * 8f * 1.15f + 4f;
+                    overlay.DrawCircle(cameraInfo, BadColor, b.m_position, size, -1f, 1280f, false, true);
+                }
 
                 var problems = !division.Plan.Ok;
                 foreach (var crossing in division.Crossings)
@@ -1531,6 +1563,18 @@ namespace RealisticRoads
             if (Mathf.Abs(height - draggedPin.Height) < 0.01f) return;
             draggedPin.Height = height;
             choicesVersion++;
+        }
+
+        // The mouse wheel over a dot in the side view: its height held, 'step' up or down.
+        private void NudgeNode(int i, float step)
+        {
+            var division = preview;
+            if (division == null || division.Plan == null || i < 0 || i >= division.Plan.Points.Count) return;
+            float current = division.Plan.Points[i].y;
+            if (!GrabNode(i)) return;
+            DragHeight(draggedPin.Height + step);
+            if (Mathf.Abs(draggedPin.Height - current) < 0.01f) DragHeight(current + step);
+            ReleaseNode();
         }
 
         private void ReleaseNode()
@@ -3232,7 +3276,7 @@ namespace RealisticRoads
             division.Cost = NetworkBuilder.Cost(Net, division.Plan);
             int blocked = BuildingsInTheWay(division);
             if (blocked > 0)
-                division.Plan.Warnings.Add("Runs through " + blocked + " building(s): bulldoze them first (they are not removed)");
+                division.Plan.Warnings.Add("Runs through " + blocked + " building(s), ringed red on the map: bulldoze them first (they are not removed)");
         }
 
         // How far either side of a crossing our bridge's nodes go: past the other
@@ -3354,8 +3398,9 @@ namespace RealisticRoads
                         }
                         if (c.Type == CrossingType.Bridge)
                         {
-                            UseButton(used++, Icons.Plus, "+", "Higher (+" + HeightStep + " m, Shift: 1 m)", new Vector2(x, y), false, () => AddExtra(d, c, ClickStep()));
-                            UseButton(used++, Icons.Minus, "-", "Lower (-" + HeightStep + " m, Shift: 1 m)", new Vector2(x + IconSize + 2f, y), false, () => AddExtra(d, c, -ClickStep()));
+                            System.Action<int> wheel = dir => AddExtra(d, c, dir * ClickStep());
+                            UseButton(used++, Icons.Plus, "+", "Higher (+" + HeightStep + " m, Shift: 1 m; or the mouse wheel)", new Vector2(x, y), false, () => AddExtra(d, c, ClickStep()), wheel);
+                            UseButton(used++, Icons.Minus, "-", "Lower (-" + HeightStep + " m, Shift: 1 m; or the mouse wheel)", new Vector2(x + IconSize + 2f, y), false, () => AddExtra(d, c, -ClickStep()), wheel);
                         }
                     }
                     else
@@ -3373,10 +3418,11 @@ namespace RealisticRoads
                             new Vector2(left + IconSize + 2f, y), r.Tunnel, () => SetWaterTunnel(d, r, true));
                         if (!r.Tunnel)
                         {
-                            UseButton(used++, Icons.Plus, "+", "Bridge higher over the water (+" + HeightStep + " m)",
-                                new Vector2(left + 2f * (IconSize + 2f), y), false, () => AddWaterExtra(d, r, ClickStep()));
-                            UseButton(used++, Icons.Minus, "-", "Bridge lower over the water (-" + HeightStep + " m)",
-                                new Vector2(left + 3f * (IconSize + 2f), y), false, () => AddWaterExtra(d, r, -ClickStep()));
+                            System.Action<int> wheel = dir => AddWaterExtra(d, r, dir * ClickStep());
+                            UseButton(used++, Icons.Plus, "+", "Bridge higher over the water (+" + HeightStep + " m; or the mouse wheel)",
+                                new Vector2(left + 2f * (IconSize + 2f), y), false, () => AddWaterExtra(d, r, ClickStep()), wheel);
+                            UseButton(used++, Icons.Minus, "-", "Bridge lower over the water (-" + HeightStep + " m; or the mouse wheel)",
+                                new Vector2(left + 3f * (IconSize + 2f), y), false, () => AddWaterExtra(d, r, -ClickStep()), wheel);
                         }
                     }
                 }
@@ -3439,16 +3485,22 @@ namespace RealisticRoads
             return true;
         }
 
-        private void UseButton(int index, string icon, string letter, string tooltip, Vector2 position, bool selected, System.Action action)
+        private void UseButton(int index, string icon, string letter, string tooltip, Vector2 position, bool selected, System.Action action,
+            System.Action<int> wheel = null)
         {
             while (buttons.Count <= index)
             {
                 int i = buttons.Count;
-                buttons.Add(CreateButton(() => { if (i < buttonActions.Count && buttonActions[i] != null) buttonActions[i](); }));
+                var made = CreateButton(() => { if (i < buttonActions.Count && buttonActions[i] != null) buttonActions[i](); });
+                RoadPanel.Wheel(() => { if (i < buttonWheels.Count && buttonWheels[i] != null) buttonWheels[i](1); },
+                                () => { if (i < buttonWheels.Count && buttonWheels[i] != null) buttonWheels[i](-1); }, made);
+                buttons.Add(made);
                 buttonActions.Add(null);
+                buttonWheels.Add(null);
             }
             var button = buttons[index];
             buttonActions[index] = action;
+            buttonWheels[index] = wheel;
             button.relativePosition = new Vector3(position.x, position.y);
             button.tooltip = tooltip;
             if (button.atlas == Icons.Atlas && Icons.Atlas != null)
@@ -3604,6 +3656,7 @@ namespace RealisticRoads
                 panel.GrabNode = GrabNode;
                 panel.DragHeight = DragHeight;
                 panel.ReleaseNode = ReleaseNode;
+                panel.NudgeNode = NudgeNode;
                 panel.FreeNode = FreeNode;
                 panel.MarkStretch = MarkStretch;
                 panel.ResetShape = ResetShape;
@@ -3670,7 +3723,8 @@ namespace RealisticRoads
                 MedianChoice = medianRamp,
                 Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
                 Mode = planning
-                    ? "PLANNING: drag the points to adjust; pick each crossing here or on the map. Check mark / Enter: build. Esc: scrap. Right-click: keep drawing."
+                    ? "PLANNING: drag the points to adjust; Shift+click the curve: add a point; right-click a point: remove it; pick each crossing here or on the map. " +
+                      "Check mark / Enter: build. Right-click elsewhere or Esc: back to drawing (Esc again: clear)."
                     : points.Count == 0 ? "DRAWING: click to place the first point. Tab: straight / curved pieces."
                     : "DRAWING: click to add points (Tab: straight / curved; type a length or turn above for an exact point). " +
                       "Double-click or Enter when done, to check and adjust the plan before building.",
@@ -3914,6 +3968,101 @@ namespace RealisticRoads
         }
 
         // The point whose marker is under the mouse on screen (-1: none).
+        // Planning: a point put into the curve where the mouse is on it (within
+        // InsertPixels on the screen), between the points either side; the
+        // heights pinned and stretches marked stay where they were along it.
+        private const float InsertPixels = 24f;
+
+        private void InsertPointUnderMouse()
+        {
+            var camera = Camera.main;
+            var line = preview;
+            if (camera == null || line == null || line.Polyline == null || line.ControlAt == null || points.Count < 2) return;
+            Vector3 mouse = Input.mousePosition;
+            float best = InsertPixels * InsertPixels, bestAlong = -1f, run = 0f;
+            Vector3 bestPoint = Vector3.zero;
+            for (int i = 0; i < line.Polyline.Count; i++)
+            {
+                if (i > 0) run += CurveMath.FlatDistance(line.Polyline[i - 1], line.Polyline[i]);
+                Vector3 screen = camera.WorldToScreenPoint(line.Polyline[i]);
+                if (screen.z <= 0f) continue;
+                float dx = screen.x - mouse.x, dy = screen.y - mouse.y;
+                if (dx * dx + dy * dy >= best) continue;
+                best = dx * dx + dy * dy;
+                bestAlong = run;
+                bestPoint = line.Polyline[i];
+            }
+            if (bestAlong < 0f)
+            {
+                Mod.Log("Shift+click on the curve itself to put a point in there");
+                return;
+            }
+            int span = 0;
+            while (span + 1 < line.ControlAt.Length && line.ControlAt[span + 1] <= bestAlong) span++;
+            if (span >= points.Count - 1) span = points.Count - 2;
+            float a = line.ControlAt[span], b = line.ControlAt[Mathf.Min(span + 1, line.ControlAt.Length - 1)];
+            float f = b - a > 0.01f ? Mathf.Clamp((bestAlong - a) / (b - a), 0.05f, 0.95f) : 0.5f;
+            int index = span + 1;
+            bestPoint.y = TerrainManager.instance.SampleRawHeightSmooth(bestPoint);
+            points.Insert(index, bestPoint);
+            pointNodes.Insert(index, 0);
+            pointMarkers.Insert(index, bestPoint);
+            pointSegments.Insert(index, 0);
+            pointTs.Insert(index, 0f);
+            pointLifts.Insert(index, pointLifts[span]);
+            pointStraight.Insert(index, pointStraight[index]);
+            pointDeck.Insert(index, pointDeck[index]);
+            pointUnder.Insert(index, pointUnder[index]);
+            pointRoad.Insert(index, 0);
+            pointRoadT.Insert(index, 0f);
+            // Pins and stretches are placed by point (a point's number and how far
+            // on to the next): those past the new point move one on.
+            Func<float, float> shift = at =>
+                at >= span + 1 ? at + 1f
+                : at <= span ? at
+                : at - span <= f ? span + (at - span) / f
+                : span + 1 + (at - span - f) / (1f - f);
+            foreach (var pin in heightPins) pin.At = shift(pin.At);
+            foreach (var stretch in stretches)
+            {
+                stretch.From = shift(stretch.From);
+                stretch.To = shift(stretch.To);
+            }
+            choicesVersion++;
+            Mod.Log("Point " + (index + 1) + " put in at " + Format(bestPoint) + " (" + points.Count + " points)");
+        }
+
+        // Planning: point 'index' taken out (two at least stay).
+        private void RemovePointAt(int index)
+        {
+            if (index < 0 || index >= points.Count || points.Count <= 2) return;
+            points.RemoveAt(index);
+            pointNodes.RemoveAt(index);
+            pointMarkers.RemoveAt(index);
+            pointSegments.RemoveAt(index);
+            pointTs.RemoveAt(index);
+            pointLifts.RemoveAt(index);
+            pointStraight.RemoveAt(index);
+            pointDeck.RemoveAt(index);
+            pointUnder.RemoveAt(index);
+            pointRoad.RemoveAt(index);
+            pointRoadT.RemoveAt(index);
+            // Placed by point: past it, one back; on its two spans, onto the one span left.
+            Func<float, float> shift = at =>
+                at >= index + 1 ? at - 1f
+                : at <= index - 1 ? at
+                : Mathf.Max(index - 1, 0) + Mathf.Clamp01((at - (index - 1)) * 0.5f);
+            foreach (var pin in heightPins) pin.At = shift(pin.At);
+            foreach (var stretch in stretches)
+            {
+                stretch.From = shift(stretch.From);
+                stretch.To = shift(stretch.To);
+            }
+            if (dragIndex >= points.Count) dragIndex = -1;
+            choicesVersion++;
+            Mod.Log("Point " + (index + 1) + " taken out (" + points.Count + " points left)");
+        }
+
         private int PointUnderMouse()
         {
             var camera = Camera.main;

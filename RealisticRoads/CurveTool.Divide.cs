@@ -111,6 +111,7 @@ namespace RealisticRoads
                     id = b.m_nextGridBuilding;
                 }
             }
+            division.Blocking = new List<ushort>(hit);
             return hit.Count;
         }
 
