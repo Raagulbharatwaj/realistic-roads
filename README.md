@@ -148,7 +148,9 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      comes up through the cut to the first deck level (or the raised track you end on). Drawn along a six-lane or four-lane
      road, that road under the line becomes its ground road with an open gap for the track (12, 15 or 18 m, the narrowest
      the track and its cut fit in; the six-lane road keeps two lanes each way beside a 12 m gap, the four-lane road one);
-     its inner lanes end where the gap begins, where the road's last 40 m slide out to it. On open ground, 56 m of the
+     its inner lanes end where the gap begins, where the road's last 40 m slide out to it. The gap begins only where the
+     track is 7.5 m or less over the road (higher up it passes over the road as it is); it is open only over the cut
+     itself, and paved like a median ramp road's where the track is on its pillars over the road or in its tunnel under it. On open ground, 56 m of the
      six-lane road is built before it and its ground road along the line. A road crossing the open cut stops it being
      built; roads over the tunnel or under the raised track are fine. Built track first, then the road, one Ctrl+Z for all;
    - **Along the road**: every crossing and water bridge in one list, **in order from the first point**, numbered,

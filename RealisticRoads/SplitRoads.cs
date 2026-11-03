@@ -51,6 +51,27 @@ namespace RealisticRoads
         private static readonly KeyValuePair<int, float>[] MediumCuts = { new KeyValuePair<int, float>(1, 6f) };
 
         private static string CutName(float gapHalf) => CutTag + Mathf.RoundToInt(2f * gapHalf);
+        private const string PavedTag = "P";   // a median cut road's paved twin: its tag + this
+
+        // A tag as the tapers know it: a paved twin's as its open road's.
+        private static string TaperTag(string tag) =>
+            tag != null && tag.StartsWith(CutTag) && tag.EndsWith(PavedTag) ? tag.Substring(0, tag.Length - PavedTag.Length) : tag;
+
+        // A median cut road's (or its start piece's) paved twin; null for anything else.
+        public static NetInfo PavedTwinOf(NetInfo open)
+        {
+            if (open == null) return null;
+            lock (variants)
+                foreach (var pair in variants)
+                {
+                    var match = pair.Value.Find(v => v.Info == open);
+                    if (match == null) continue;
+                    if (!match.Open) return null;
+                    var twin = pair.Value.Find(v => v.Start == match.Start && v.Tag == match.Tag + PavedTag);
+                    return twin != null ? twin.Info : null;
+                }
+            return null;
+        }
 
         // By the road each was made from.
         private static readonly Dictionary<string, List<Variant>> variants = new Dictionary<string, List<Variant>>();
@@ -108,6 +129,12 @@ namespace RealisticRoads
                         if (copy != null) made.Add(copy);
                         var start = Make(road, cut.Key, cut.Value, true, true, tag);
                         if (start != null) made.Add(start);
+                        // Its paved twin: the same lanes, the gap paved (where the
+                        // track is on pillars over the road, or in its tunnel under it).
+                        var paved = Make(road, cut.Key, cut.Value, false, false, tag + PavedTag);
+                        if (paved != null) made.Add(paved);
+                        var pavedStart = Make(road, cut.Key, cut.Value, true, false, tag + PavedTag);
+                        if (pavedStart != null) made.Add(pavedStart);
                     }
                     catch (Exception e)
                     {
@@ -291,13 +318,15 @@ namespace RealisticRoads
                     var lod = Widen(node.m_lodMesh, cut, widen, surface, inside ? kerb : -1f, edge, plain, open);
                     if (lod != null) node.m_lodMesh = lod;
                 }
-            // A median cut's gap is open: no paving there, and the ground is not
-            // hidden under the road, so the grass shows in the gap and the track's
-            // open cut (which hides the ground over itself) is dug in it.
-            if (open) copy.m_clipTerrain = false;
+            // A median cut's gap is open: no paving there, so the track's open cut
+            // (dug and walled by its own slope piece) shows in it. The road still
+            // hides the ground under itself (m_clipTerrain as the road's): the
+            // ground is raised to the sidewalk's level under a road, so shown it
+            // would cover the carriageways, which are lower (the grey road).
             if (start) SetUpStartPiece(copy);
             HideFromMenus(copy);
-            Name(copy, Title(road) + " (" + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes beside a median " + (open ? "cut" : "ramp") +
+            bool cutRoad = tag.StartsWith(CutTag);
+            Name(copy, Title(road) + " (" + (VehicleLanes(copy, -1) + VehicleLanes(copy, 1)) + " ground lanes beside a median " + (cutRoad ? "cut" : "ramp") +
                        (start ? ", where it starts" : "") + ")",
                 "Built by Realistic Roads beside a ramp or track in the road's middle.");
             lock (variants)
@@ -1185,7 +1214,8 @@ namespace RealisticRoads
                 List<Variant> list;
                 if (!variants.TryGetValue(road.name, out list)) return null;
                 foreach (var variant in list)
-                    if (variant.Info != null && !variant.Start && !variant.Open && variant.Inner == inner) return variant.Info;
+                    if (variant.Info != null && !variant.Start && !variant.Open && variant.Inner == inner &&
+                        (variant.Tag == null || !variant.Tag.StartsWith(CutTag))) return variant.Info;
                 return null;
             }
         }
@@ -1431,7 +1461,7 @@ namespace RealisticRoads
                     var match = pair.Value.Find(v => v.Info == ground);
                     if (match == null) continue;
                     NetInfo taper;
-                    return tapers.TryGetValue(TaperKey(road.name, match.Tag, atEnd, invert), out taper) ? taper : null;
+                    return tapers.TryGetValue(TaperKey(road.name, TaperTag(match.Tag), atEnd, invert), out taper) ? taper : null;
                 }
             return null;
         }

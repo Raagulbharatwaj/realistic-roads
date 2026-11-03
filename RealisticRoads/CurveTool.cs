@@ -409,7 +409,7 @@ namespace RealisticRoads
             public bool TriedLineStart;  // and its road was looked for where the line starts too
         }
 
-        private enum MedianStage { LeadIn, Ramp, Convert, Ground, Starts, CutTrack, CutSplit, CutConvert, CutLeadIn, CutGround, CutStarts, CutEndStarts }
+        private enum MedianStage { LeadIn, Ramp, Convert, Ground, Starts, CutTrack, CutSplit, CutConvert, CutLeadIn, CutGround, CutStarts, CutEndStarts, CutPave }
 
         private bool parallelMode;
         private float parallelGap = DefaultGap;  // metres between the two roads' edges
