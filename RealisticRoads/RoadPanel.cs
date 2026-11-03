@@ -129,6 +129,7 @@ namespace RealisticRoads
         public Action<int> FreeNode;
         public Action<float, float, Forced> MarkStretch;
         public Action ResetShape;
+        public Action<float, float> StraightGrade;
         private int draggedNode = -1;
         private float drawLow, drawHigh;          // the heights at the bottom and top of the drawn side view
         private float dragLow, dragHigh;          // those when the node was grabbed
@@ -140,7 +141,7 @@ namespace RealisticRoads
         // The two pictures' pixels, kept (not made anew each time the side view changes).
         private readonly Color32[] baseBuffer = new Color32[ProfileWidth * ProfileHeight];
         private readonly Color32[] shownBuffer = new Color32[ProfileWidth * ProfileHeight];
-        private UIButton elevatedButton, tunnelButton, autoButton, resetButton;
+        private UIButton elevatedButton, tunnelButton, autoButton, gradeButton, resetButton;
         private UILabel shapeHint;                // what the buttons act on
         private const float NodeGrab = 6f;        // pixels from a node's dot that grab it
         private const float MinStretch = 10f;     // metres: a shorter selection is a click
@@ -637,7 +638,7 @@ namespace RealisticRoads
             draggedNode = -1;
             pressed = selecting = false;
             selectFrom = selectTo = -1f;
-            elevatedButton = tunnelButton = autoButton = resetButton = null;
+            elevatedButton = tunnelButton = autoButton = gradeButton = resetButton = null;
             shapeHint = null;
             dynamic.Clear();
             texts.Clear();
@@ -720,7 +721,7 @@ namespace RealisticRoads
             drawnProfile = null;
             profilePixels = null;
             profileBase = null;
-            elevatedButton = tunnelButton = autoButton = resetButton = null;
+            elevatedButton = tunnelButton = autoButton = gradeButton = resetButton = null;
             shapeHint = null;
             if (model.Profile != null)
             {
@@ -763,12 +764,15 @@ namespace RealisticRoads
                     () => Mark(Forced.Tunnel));
                 autoButton = ShapeButton(Icons.Auto, "A", "Auto: the planner decides the heights again (and lets go of the ones held). " +
                     "The selected stretch, or the whole road if none is selected", Pad + 2f * (ShapeButtonSize + 4f), y, () => Mark(Forced.None));
+                gradeButton = ShapeButton(Icons.Grade, "/", "Straight grade: one even slope from the selected stretch's first node to its last " +
+                    "(the whole road if none is selected); the heights between are held on it. Heights set by a crossing stay",
+                    Pad + 3f * (ShapeButtonSize + 4f), y, Grade);
                 resetButton = ShapeButton(Icons.Reset, "R", "Clear every height and stretch set in the side view",
                     Width - Pad - ShapeButtonSize, y, () => { if (ResetShape != null) ResetShape(); });
                 shapeHint = (UILabel)panel.AddUIComponent(typeof(UILabel));
                 shapeHint.autoSize = false;
-                shapeHint.size = new Vector2(Width - 2f * Pad - 4f * (ShapeButtonSize + 4f) - 4f, ShapeButtonSize);
-                shapeHint.relativePosition = new Vector3(Pad + 3f * (ShapeButtonSize + 4f) + 2f, y);
+                shapeHint.size = new Vector2(Width - 2f * Pad - 5f * (ShapeButtonSize + 4f) - 4f, ShapeButtonSize);
+                shapeHint.relativePosition = new Vector3(Pad + 4f * (ShapeButtonSize + 4f) + 2f, y);
                 shapeHint.textScale = 0.7f;
                 shapeHint.wordWrap = true;
                 shapeHint.verticalAlignment = UIVerticalAlignment.Middle;
@@ -1329,9 +1333,24 @@ namespace RealisticRoads
             MarkStretch(from, to, kind);
         }
 
+        // The selected stretch (or the whole road) on one even slope.
+        private void Grade()
+        {
+            if (StraightGrade == null || drawnProfile == null) return;
+            float from = 0f, to = drawnProfile.Length;
+            if (HasSelection)
+            {
+                from = Mathf.Min(selectFrom, selectTo);
+                to = Mathf.Max(selectFrom, selectTo);
+            }
+            ClearSelection();
+            StraightGrade(from, to);
+        }
+
         private void UpdateShapeButtons()
         {
             bool profile = drawnProfile != null;
+            SetEnabled(gradeButton, profile);
             SetEnabled(elevatedButton, profile);
             SetEnabled(tunnelButton, profile);
             SetEnabled(autoButton, profile);

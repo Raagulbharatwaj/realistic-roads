@@ -209,6 +209,13 @@ line(d, (12, 12, 28, 28), DASH, 4.5)
 line(d, (28, 12, 12, 28), DASH, 4.5)
 save(im, "reset")
 
+# straight grade: ours one even slope over uneven ground
+im, d = canvas()
+d.pieslice(p(14, 22, 34, 42), 180, 360, fill=GROUND)
+d.rectangle(p(2, 32, 38, 38), fill=GROUND)
+line(d, (2, 30, 38, 10), OURS, 5)
+save(im, "grade")
+
 # parallel drawing: two roads side by side (ours and its pair), the side
 # switch (arrows left and right), and what goes beside (a road and a track)
 im, d = canvas()
@@ -300,7 +307,7 @@ save(im, "direction")
 
 # preview sheet for checking by eye
 names = ["junction", "bridge", "overpass", "underpass", "tunnel", "plus", "minus", "logo", "curve", "straight", "snap", "deck", "under",
-         "elevated", "auto", "reset", "parallel", "side", "beside", "upgrade", "direction", "ramp", "median62", "median64", "median42", "cutMetro", "cutTrain"]
+         "elevated", "auto", "reset", "grade", "parallel", "side", "beside", "upgrade", "direction", "ramp", "median62", "median64", "median42", "cutMetro", "cutTrain"]
 sheet = Image.new("RGBA", (len(names) * 48, 48), (40, 50, 60, 255))
 for i, nm in enumerate(names):
     bg = Image.open(f"{out}/bg.png"); ic = Image.open(f"{out}/{nm}.png")

@@ -1698,6 +1698,67 @@ namespace RealisticRoads
                     (kind == Forced.Elevated ? "elevated" : kind == Forced.Tunnel ? "in a tunnel" : "left to the planner"));
         }
 
+        // A stretch selected in the side view (its metres) on one even slope:
+        // from its first node to its last at their heights now, every node
+        // between held on the line. What was set there before (heights,
+        // Elevated / Tunnel) goes first; a node whose height a crossing or an
+        // end sets keeps it.
+        private void StraightGrade(float from, float to)
+        {
+            var division = preview;
+            if (division == null || division.Plan == null || division.ControlAt == null || division.NodeAlong == null) return;
+            var plan = division.Plan;
+            var chord = ChordAlong(plan);
+            int n = plan.Points.Count;
+            if (chord.Length != n || division.NodeAlong.Length != n) return;
+            float lo = Mathf.Min(from, to) - 0.5f, hi = Mathf.Max(from, to) + 0.5f;
+            int first = -1, last = -1;
+            for (int i = 0; i < n; i++)
+                if (chord[i] >= lo && chord[i] <= hi)
+                {
+                    if (first < 0) first = i;
+                    last = i;
+                }
+            if (first < 0 || last - first < 2)
+            {
+                Mod.Log("Side view: straight grade needs at least one node between the stretch's ends");
+                return;
+            }
+            float startHeight = plan.Points[first].y, endHeight = plan.Points[last].y;
+            float span = Mathf.Max(chord[last] - chord[first], 0.01f);
+            var heights = new float[n];
+            for (int i = first; i <= last; i++) heights[i] = Mathf.Lerp(startHeight, endHeight, (chord[i] - chord[first]) / span);
+
+            MarkStretch(chord[first], chord[last], Forced.None);
+            float lastPlace = points.Count - 1;
+            int held = 0, kept = 0;
+            var terrain = TerrainManager.instance;
+            for (int i = first; i <= last; i++)
+            {
+                if (plan.Held != null && i < plan.Held.Length && plan.Held[i])
+                {
+                    if (i != first && i != last) kept++;
+                    continue;
+                }
+                float place = CurveMath.PlaceOf(division.ControlAt, division.NodeAlong[i]);
+                if (place > lastPlace + 0.0001f) continue;
+                float ground = terrain.SampleRawHeightSmooth(plan.Points[i]);
+                float height = Mathf.Round(Mathf.Clamp(heights[i], ground + MinPinHeight, ground + MaxLift) * 2f) / 2f;
+                var pin = PinNear(division, division.NodeAlong[i]);
+                if (pin == null)
+                {
+                    pin = new HeightPin { At = place };
+                    heightPins.Add(pin);
+                }
+                pin.Height = height;
+                held++;
+            }
+            choicesVersion++;
+            Mod.Log("Side view: straight grade " + chord[first].ToString("N0") + " to " + chord[last].ToString("N0") + " m, " +
+                    ((endHeight - startHeight) / span * 100f).ToString("0.0") + " %, " + held + " height(s) held" +
+                    (kept > 0 ? ", " + kept + " set by a crossing kept" : ""));
+        }
+
         private void ResetShape()
         {
             heightPins.Clear();
@@ -3709,6 +3770,7 @@ namespace RealisticRoads
                 panel.FreeNode = FreeNode;
                 panel.MarkStretch = MarkStretch;
                 panel.ResetShape = ResetShape;
+                panel.StraightGrade = StraightGrade;
                 panel.ToggleParallel = ToggleParallel;
                 panel.ChangeGap = ChangeGap;
                 panel.FlipSide = FlipSide;
