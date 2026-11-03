@@ -2254,7 +2254,7 @@ namespace RealisticRoads
         {
             string road = SelectedNetwork != null ? Title(SelectedNetwork) : "the picked road";
             model.Mode = "UPGRADE: click a road where the upgrade starts, then where it ends; the roads between become " + road +
-                         " (same shape, same junctions). Whole segments only: every segment the two points touch changes from end to end. " +
+                         " (same shape, same junctions). A point on the middle of a road cuts it there: only the part between the points changes. " +
                          "A cheaper road costs nothing and gives no refund. Check mark / Enter: upgrade. Right-click: take back a point. Upgrade button: back to drawing.";
             model.HasPoints = upgradePoints.Count > 0;
             var plan = upgradePlan;
@@ -2303,11 +2303,13 @@ namespace RealisticRoads
             {
                 float width = (SelectedNetwork != null ? SelectedNetwork.m_halfWidth : 4f) * 2f;
                 Color color = plan.Ok ? GoodColor : BadColor;
-                foreach (ushort segment in plan.Segments)
+                for (int k = 0; k < plan.Segments.Count; k++)
                 {
                     Vector3 a, b, c, d;
-                    CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
-                    overlay.DrawBezier(cameraInfo, color, new Bezier3 { a = a, b = b, c = c, d = d }, width, 100000f, -100000f, -1f, 1280f, false, true);
+                    CrossingFinder.SegmentBezier(plan.Segments[k], out a, out b, out c, out d);
+                    var bezier = new Bezier3 { a = a, b = b, c = c, d = d };
+                    if (plan.From[k] > 0f || plan.To[k] < 1f) bezier = bezier.Cut(plan.From[k], plan.To[k]);
+                    overlay.DrawBezier(cameraInfo, color, bezier, width, 100000f, -100000f, -1f, 1280f, false, true);
                 }
             }
             foreach (var point in upgradePoints)

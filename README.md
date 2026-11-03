@@ -89,7 +89,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      round corners and through junctions, only along roads of the same kind). Every segment on the way is replaced on
      the same nodes, so the shape and the junctions stay; each keeps its version (an elevated piece becomes the new
      road's elevated version, a tunnel its tunnel; a version the new road lacks is left as it was, and the panel says
-     so). A point on the middle of a road takes in that whole segment, one on a node starts there. The panel shows how
+     so). A point on the middle of a road cuts it there, and only the part towards the other point
+     changes (within 8 m of a node it goes to the node); one on a node starts there. The panel shows how
      many segments and metres change and the cost (the new road's price less the old one's); Enter or the check mark
      upgrades, one Ctrl+Z puts the old road back. Nodes between upgraded segments become the new road too (pillars
      follow); nodes at junctions with other roads are left to them;
