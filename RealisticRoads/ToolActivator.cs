@@ -40,10 +40,15 @@ namespace RealisticRoads
                 curveTool.enabled = false;
 
                 curveButton = CreateButton("RealisticRoadsCurveButton", "RR",
-                    "Realistic Roads (Ctrl+Shift+C)\nPick a road in the Roads menu first, then draw it with curves", 120f, ToggleCurveTool);
+                    "Realistic Roads" + (Mod.ToolKey != KeyCode.None ? " (" + Mod.ToolKeyName + ")" : "") + "\nPick a road in the Roads menu first, then draw it with curves", 120f, ToggleCurveTool);
+                // In UnifiedUI's toolbar instead, when that mod is on.
+                if (UnifiedUIButton.Register(curveButton.tooltip.Replace("\nRight-drag to move this button", ""), Icons.Texture(Icons.Logo),
+                        on => { if (curveTool != null && on != curveTool.IsActive) ToggleCurveTool(); },
+                        tool => curveTool != null && tool == curveTool))
+                    curveButton.isVisible = false;
                 NetworkBuilder.ClearUndo();
 
-                Mod.Log("Tools ready: RR / Ctrl+Shift+C = curve tool");
+                Mod.Log("Tools ready: RR / " + Mod.ToolKeyName + " = curve tool");
             }
             catch (Exception e)
             {
@@ -67,6 +72,7 @@ namespace RealisticRoads
                     UnityEngine.Object.Destroy(curveTool);
                 }
                 if (curveButton != null) UnityEngine.Object.Destroy(curveButton.gameObject);
+                UnifiedUIButton.Release();
                 if (modeButton != null) UnityEngine.Object.Destroy(modeButton.gameObject);
             }
             catch (Exception e)
@@ -337,17 +343,15 @@ namespace RealisticRoads
         }
     }
 
-    // Ctrl+Shift+C toggles the curve tool. OnUpdate runs on the main thread.
+    // The curve tool's key (Mod.ToolKey, Ctrl+Shift+C unless changed or
+    // removed in the mod's settings) toggles it. OnUpdate runs on the main thread.
     public class HotkeyHandler : ThreadingExtensionBase
     {
         public override void OnUpdate(float realTimeDelta, float simulationTimeDelta)
         {
             ToolActivator.Update();
             ToolActivator.PumpBuilds();
-            if (!Input.GetKeyDown(KeyCode.C)) return;
-            var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
-            var shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-            if (!ctrl || !shift || UIView.HasInputFocus()) return;
+            if (!Mod.ToolKeyPressed() || UIView.HasInputFocus()) return;
             ToolActivator.ToggleCurveTool();
         }
     }

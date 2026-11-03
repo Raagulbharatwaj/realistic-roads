@@ -414,40 +414,41 @@ namespace RealisticRoads
             switch (waiting.Stage)
             {
                 case MedianStage.CutTrack:
+                {
+                    // The road where the gap begins: split there (or its end node).
+                    // None there: where the line starts (the gap then begins there, over
+                    // the tunnel's start too); none there either: open ground.
                     Mod.Log("Median cut, step 2: the track is built");
-                    if (cut.Plan.MedianAlong)
+                    var gap = GapLine(cut);
+                    NextMedian(waiting, MedianStage.CutSplit);
+                    NetworkBuilder.RoadNodeAt(gap[0], gap[1] - gap[0], lanes, waiting.Group, node =>
                     {
-                        NextMedian(waiting, MedianStage.CutSplit);
+                        waiting.Origin = node;
+                        waiting.State = 1;
+                    });
+                    return;
+                }
+                case MedianStage.CutSplit:
+                    if (waiting.Origin == 0 && !waiting.TriedLineStart && cut.GapFrom > 1f)
+                    {
+                        waiting.TriedLineStart = true;
+                        cut.GapFrom = 0f;
+                        Mod.Log("Median cut: no road where the gap would begin; trying where the line starts (the gap then begins there)");
                         var gap = GapLine(cut);
+                        NextMedian(waiting, MedianStage.CutSplit);
                         NetworkBuilder.RoadNodeAt(gap[0], gap[1] - gap[0], lanes, waiting.Group, node =>
                         {
                             waiting.Origin = node;
-                            waiting.State = node != 0 ? 1 : 2;
+                            waiting.State = 1;
                         });
                         return;
                     }
+                    if (waiting.Origin == 0)
                     {
-                        var gap = GapLine(cut);
-                        Vector3 at = gap[0];
-                        Vector3 away = -(gap[1] - gap[0]);
-                        at.y = TerrainManager.instance.SampleRawHeightSmooth(at);
-                        var lead = DivideLeadIn(at, away, false, waiting.Full);
-                        string why = lead == null || lead.Plan == null ? "the " + LeadIn.ToString("F0") + " m of " + Title(waiting.Full) + " can't be drawn there"
-                            : !lead.Ok || !lead.Plan.Ok ? "the " + LeadIn.ToString("F0") + " m of " + Title(waiting.Full) + ": " +
-                                                          (lead.Plan.Ok ? "it bends too sharply" : string.Join("; ", lead.Plan.Problems.ToArray()))
-                            : null;
-                        if (why != null)
-                        {
-                            FailMedian(waiting, why);
-                            return;
-                        }
-                        Mod.Log("Median cut, next: building " + LeadIn.ToString("F0") + " m of " + waiting.Full.name + " to where the gap begins");
-                        waiting.LeadAt = at;
-                        NextMedian(waiting, MedianStage.CutLeadIn);
-                        NetworkBuilder.BuildCurve(waiting.Full, lead.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
+                        // No road there: on open ground, a stretch of the full road first.
+                        LeadInCut(waiting);
+                        return;
                     }
-                    return;
-                case MedianStage.CutSplit:
                     Mod.Log("Median cut, next: the road under it becomes " + waiting.Ground.name + " from node #" + waiting.Origin);
                     NextMedian(waiting, MedianStage.CutConvert);
                     NetworkBuilder.ConvertAlong(GapLine(cut), waiting.Origin, waiting.Ground, lanes, waiting.Group, (stop, along, count) =>
@@ -459,9 +460,13 @@ namespace RealisticRoads
                     });
                     return;
                 case MedianStage.CutConvert:
+                    // None converted: the road ends at that node (the line goes on past
+                    // its end), and the ground road is built from it along the line.
                     if (waiting.Converted == 0)
                     {
-                        FailMedian(waiting, "no stretch of the road under it could become its ground road");
+                        Mod.Log("Median cut: the road ends at node #" + waiting.Origin + "; its ground road is built on from there along the line");
+                        waiting.Stop = 0;
+                        BuildCutGround(waiting, waiting.Origin, 0f);
                         return;
                     }
                     if (waiting.StopAlong < GapLength(cut) - MinSpacing) BuildCutGround(waiting, waiting.Stop, waiting.StopAlong);
@@ -497,6 +502,30 @@ namespace RealisticRoads
                     Mod.Log("Median cut, last: all parts built (one Ctrl+Z removes it all)");
                     return;
             }
+        }
+
+        // On open ground: a stretch of the full road to where the gap begins
+        // (then its ground road along the gap, CutLeadIn).
+        private void LeadInCut(PendingParallel waiting)
+        {
+            var gap = GapLine(waiting.Main);
+            Vector3 at = gap[0];
+            Vector3 away = -(gap[1] - gap[0]);
+            at.y = TerrainManager.instance.SampleRawHeightSmooth(at);
+            var lead = DivideLeadIn(at, away, false, waiting.Full);
+            string why = lead == null || lead.Plan == null ? "the " + LeadIn.ToString("F0") + " m of " + Title(waiting.Full) + " can't be drawn there"
+                : !lead.Ok || !lead.Plan.Ok ? "the " + LeadIn.ToString("F0") + " m of " + Title(waiting.Full) + ": " +
+                                              (lead.Plan.Ok ? "it bends too sharply" : string.Join("; ", lead.Plan.Problems.ToArray()))
+                : null;
+            if (why != null)
+            {
+                FailMedian(waiting, why);
+                return;
+            }
+            Mod.Log("Median cut, next: no road where the gap begins: building " + LeadIn.ToString("F0") + " m of " + waiting.Full.name + " to there");
+            waiting.LeadAt = at;
+            NextMedian(waiting, MedianStage.CutLeadIn);
+            NetworkBuilder.BuildCurve(waiting.Full, lead.Plan, waiting.Group, built => waiting.State = built ? 1 : 2);
         }
 
         // The stretch of the line its road has the gap along (the whole line if

@@ -41,6 +41,7 @@ namespace RealisticRoads
         public const string Elevated = "elevated";
         public const string Auto = "auto";
         public const string Reset = "reset";
+        public const string Grade = "grade";
         public const string Parallel = "parallel";
         public const string Side = "side";
         public const string Beside = "beside";
@@ -52,13 +53,14 @@ namespace RealisticRoads
         public const string Median42 = "median42";
         public const string CutMetro = "cutMetro";
         public const string CutTrain = "cutTrain";
+        public const string Centred = "centred";
 
         private static readonly string[] Names =
         {
             Junction, Bridge, Overpass, Underpass, Tunnel, Plus, Minus, Background, BackgroundHover, BackgroundSelected,
             Logo, LogoSmall, ButtonBackground, ButtonBackgroundHover, ButtonBackgroundPressed,
             Build, BuildOff, Undo, UndoOff, GameTool, BackgroundOff, PageBack, PageNext, Curve, Straight, Snap, Deck, Under,
-            Elevated, Auto, Reset, Parallel, Side, Beside, Upgrade, Direction, Ramp, Median62, Median64, Median42, CutMetro, CutTrain,
+            Elevated, Auto, Reset, Grade, Parallel, Side, Beside, Upgrade, Direction, Ramp, Median62, Median64, Median42, CutMetro, CutTrain, Centred,
         };
 
         private static UITextureAtlas atlas;
@@ -125,6 +127,13 @@ namespace RealisticRoads
                 Mod.LogError("Loading icons failed, using text buttons", e);
                 return null;
             }
+        }
+
+        // One icon as its own texture (for UnifiedUI's toolbar); null if it can't load.
+        public static Texture2D Texture(string name)
+        {
+            try { return Load(typeof(Icons).Assembly, name); }
+            catch (Exception e) { Mod.LogError("Loading icon " + name + " failed", e); return null; }
         }
 
         private static Texture2D Load(Assembly assembly, string name)

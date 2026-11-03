@@ -13,6 +13,9 @@ namespace RealisticRoads
         public readonly List<ushort> Segments = new List<ushort>();    // in no particular order
         public readonly List<NetInfo> OldInfos = new List<NetInfo>();
         public readonly List<NetInfo> NewInfos = new List<NetInfo>();
+        // The part of each segment that changes (0..1 along it): all of it,
+        // except where a point is on its middle, which cuts it there.
+        public readonly List<float> From = new List<float>(), To = new List<float>();
         // For a one-way or uneven road: each segment built from the first
         // point towards the second (null: each keeps the way it was drawn).
         public List<bool> Inverts;
@@ -32,10 +35,14 @@ namespace RealisticRoads
         private static readonly string[] VersionFields = { "m_elevatedInfo", "m_bridgeInfo", "m_slopeInfo", "m_tunnelInfo" };
         private static readonly string[] VersionNames = { "elevated", "bridge", "slope", "tunnel" };
 
+        // A cut this close to a segment's end (metres) goes to the end instead;
+        // a part shorter than this isn't changed.
+        private const float MinPart = 8f;
+
         // Main thread. The upgrade from (segA, tA) to (segB, tB) into 'info'. A
         // point on a node ('onNodeA'/'onNodeB') starts there; one on the middle
-        // of a road takes in that whole road (segments are upgraded whole, like
-        // the game's own upgrade).
+        // of a road cuts it there, and only the part towards the other point
+        // changes.
         public static UpgradePlan Make(NetInfo info, ushort segA, float tA, bool onNodeA, ushort segB, float tB, bool onNodeB)
         {
             var plan = new UpgradePlan { Info = info };
@@ -68,6 +75,25 @@ namespace RealisticRoads
             }
             if (!onNodeA) used.Add(segA);
             if (!onNodeB) used.Add(segB);
+            // The part of the end segments between the points. Both on one
+            // segment, straight along it: the part between them; the way round
+            // through the network: those segments whole, as before.
+            var parts = new Dictionary<ushort, KeyValuePair<float, float>>();
+            float pathLength = 0f;
+            for (int i = 1; i < plan.Path.Count; i++) pathLength += (plan.Path[i] - plan.Path[i - 1]).magnitude;
+            if (segA == segB)
+            {
+                if (!onNodeA && !onNodeB && Mathf.Abs(pathLength - Mathf.Abs(tA - tB) * segments[segA].m_averageLength) < 2f)
+                    parts[segA] = new KeyValuePair<float, float>(Mathf.Min(tA, tB), Mathf.Max(tA, tB));
+            }
+            else
+            {
+                bool forward;
+                if (!onNodeA && along.TryGetValue(segA, out forward))
+                    parts[segA] = forward ? new KeyValuePair<float, float>(tA, 1f) : new KeyValuePair<float, float>(0f, tA);
+                if (!onNodeB && along.TryGetValue(segB, out forward))
+                    parts[segB] = forward ? new KeyValuePair<float, float>(0f, tB) : new KeyValuePair<float, float>(tB, 1f);
+            }
             var ordered = new List<ushort>(used);
             ordered.Sort();
 
@@ -105,15 +131,27 @@ namespace RealisticRoads
                     plan.Unchanged++;
                     continue;
                 }
+                float from = 0f, to = 1f;
+                KeyValuePair<float, float> part;
+                if (parts.TryGetValue(segment, out part))
+                {
+                    float length = Mathf.Max(s.m_averageLength, 1f), snap = MinPart / length;
+                    from = part.Key < snap ? 0f : part.Key;
+                    to = part.Value > 1f - snap ? 1f : part.Value;
+                    if ((to - from) * length < MinPart) continue;
+                }
                 plan.Segments.Add(segment);
                 plan.OldInfos.Add(old);
                 plan.NewInfos.Add(target);
+                plan.From.Add(from);
+                plan.To.Add(to);
                 if (plan.Inverts != null) plan.Inverts.Add(wantInvert);
-                plan.Length += s.m_averageLength;
+                plan.Length += s.m_averageLength * (to - from);
                 if (target.m_halfWidth > old.m_halfWidth + 0.5f) wider = true;
                 Vector3 a = nodes[s.m_startNode].m_position, b = nodes[s.m_endNode].m_position;
                 float ha = a.y - terrain.SampleRawHeightSmooth(a), hb = b.y - terrain.SampleRawHeightSmooth(b);
-                cost += System.Math.Max(0L, NetworkBuilder.PieceCost(target, info, a, b, ha, hb) - NetworkBuilder.PieceCost(old, old, a, b, ha, hb));
+                long difference = System.Math.Max(0L, NetworkBuilder.PieceCost(target, info, a, b, ha, hb) - NetworkBuilder.PieceCost(old, old, a, b, ha, hb));
+                cost += (long)(difference * (to - from));
             }
             plan.Cost = (int)System.Math.Min(cost, int.MaxValue);
 
@@ -126,14 +164,14 @@ namespace RealisticRoads
                 var s = segments[plan.Segments[k]];
                 foreach (ushort node in new[] { s.m_startNode, s.m_endNode })
                 {
-                    if (!seen.Add(node)) continue;
+                    if (!Reaches(plan, k, node) || !seen.Add(node)) continue;
                     NetInfo nodeInfo = null;
                     bool inner = true;
                     for (int i = 0; i < 8; i++)
                     {
                         ushort other = nodes[node].GetSegment(i);
                         if (other == 0) continue;
-                        if (!upgraded.Contains(other))
+                        if (!upgraded.Contains(other) || !Reaches(plan, plan.Segments.IndexOf(other), node))
                         {
                             inner = false;
                             break;
@@ -152,6 +190,13 @@ namespace RealisticRoads
             if (plan.Segments.Count == 0)
                 plan.Problems.Add(plan.Unchanged > 0 ? "It is already " + info.name + " all the way" : "Nothing to upgrade between the two points");
             return plan;
+        }
+
+        // Whether segment k's upgraded part runs to this end node of it.
+        private static bool Reaches(UpgradePlan plan, int k, ushort node)
+        {
+            var s = NetManager.instance.m_segments.m_buffer[plan.Segments[k]];
+            return node == s.m_startNode ? plan.From[k] <= 0f : node == s.m_endNode && plan.To[k] >= 1f;
         }
 
         // Which version of its road a network is: an index into VersionFields,

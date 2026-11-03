@@ -16,6 +16,7 @@ namespace RealisticRoads
         // Crossings and water bridges, in order along the road (numbered as on the map).
         public readonly List<PanelCrossing> Items = new List<PanelCrossing>();
         public readonly List<string> Problems = new List<string>();
+        public readonly List<string> Fixes = new List<string>();      // buttons under the problems that clear one
         public readonly List<string> Warnings = new List<string>();
         public bool CanBuild;
         public bool HasPoints;
@@ -33,6 +34,7 @@ namespace RealisticRoads
         public string Beside = "";                // what it is
         public bool BesideOther;                  // another road or track (or one being picked)
         public bool ParallelReverse;              // it runs the other way
+        public bool ParallelCentred;              // the line drawn is the middle of the pair
         public bool Upgrade;                      // changing an existing road instead of drawing one
         public bool Ramp;                         // drawing a slip ramp between two roads
         public string MedianRamp;                 // the median ramp road being drawn (null: none)
@@ -124,10 +126,12 @@ namespace RealisticRoads
         // Dragging a node's height: the scale stays as it was when it was grabbed.
         public Func<int, bool> GrabNode;
         public Action<float> DragHeight;
+        public Action<int, float> NudgeNode;   // the mouse wheel over a dot: its height up or down by this
         public Action ReleaseNode;
         public Action<int> FreeNode;
         public Action<float, float, Forced> MarkStretch;
         public Action ResetShape;
+        public Action<float, float> StraightGrade;
         private int draggedNode = -1;
         private float drawLow, drawHigh;          // the heights at the bottom and top of the drawn side view
         private float dragLow, dragHigh;          // those when the node was grabbed
@@ -139,7 +143,7 @@ namespace RealisticRoads
         // The two pictures' pixels, kept (not made anew each time the side view changes).
         private readonly Color32[] baseBuffer = new Color32[ProfileWidth * ProfileHeight];
         private readonly Color32[] shownBuffer = new Color32[ProfileWidth * ProfileHeight];
-        private UIButton elevatedButton, tunnelButton, autoButton, resetButton;
+        private UIButton elevatedButton, tunnelButton, autoButton, gradeButton, resetButton;
         private UILabel shapeHint;                // what the buttons act on
         private const float NodeGrab = 6f;        // pixels from a node's dot that grab it
         private const float MinStretch = 10f;     // metres: a shorter selection is a click
@@ -160,9 +164,10 @@ namespace RealisticRoads
         public Action ToggleSnap;
         public Action ToggleDeck, ToggleUnder;
         // The parallel line: on / off, the gap, which side, and what it is.
-        public Action ToggleParallel, FlipSide, PickBeside, FlipDirection;
+        public Action ToggleParallel, FlipSide, PickBeside, FlipDirection, ToggleCentred;
+        public Action<int> ApplyFix;
         public Action<float> ChangeGap;
-        private UIButton parallelButton, sideButton, besideButton, directionButton;
+        private UIButton parallelButton, sideButton, besideButton, directionButton, centredButton;
         private UILabel gapLabel;
         // Upgrade an existing road along a stretch; draw a slip ramp.
         public Action ToggleUpgrade, ToggleRamp;
@@ -176,7 +181,6 @@ namespace RealisticRoads
         private UILabel radiusLabel;
         private UITextField lengthField, turnField;
         private const float BarTop = 46f;
-        private const float ContentTop = BarTop + 134f;  // the rows below the DRAW bar
         private UIButton buildButton, undoButton;
         private const int PageSize = 5;             // items along the road shown at a time
         private int page;                           // which PageSize items are shown
@@ -249,78 +253,159 @@ namespace RealisticRoads
 
         // --- the DRAW bar (made once; only its state changes) ----------------------
 
+        // The bar is in four tabs, by what is being built: Draw (curved or
+        // straight pieces, exact lengths, a parallel road), Decks (over or under
+        // the roads), Ramps & cuts (a slip ramp, the median ramp roads, the
+        // median cuts) and Upgrade. Only the open tab's buttons show, so modes
+        // of different tabs aren't mixed by mistake: leaving the Ramps & cuts or
+        // Upgrade tab turns its mode off, and opening Upgrade turns it on.
+        private static readonly string[] TabNames = { "Draw", "Decks", "Ramps & cuts", "Upgrade" };
+        private const float TabHeight = 24f;
+        private const float RowsTop = BarTop + TabHeight + 4f;
+        private int tab;
+        private readonly UIButton[] tabButtons = new UIButton[4];
+        private class BarItem
+        {
+            public UIComponent Component;
+            public int Tab;
+            public bool ParallelOnly;      // shown only while Parallel is on
+        }
+        private readonly List<BarItem> barItems = new List<BarItem>();
+        private static readonly float[] DrawRows = { 0f, IconSize + 6f, IconSize + 36f };   // the Draw tab's rows, from RowsTop
+
+        private void Put(UIComponent component, int tab, int row, bool parallelOnly = false)
+        {
+            if (component == null) return;
+            barItems.Add(new BarItem { Component = component, Tab = tab, ParallelOnly = parallelOnly });
+        }
+
+        // The height of the open tab's buttons, and where the rows below start.
+        private float TabContentHeight => tab == 0 ? DrawRows[2] + IconSize + 4f : IconSize + 6f;
+        private float ContentTop => RowsTop + TabContentHeight + 18f;
+
         private void CreateDrawBar()
         {
-            float y = BarTop;
+            float tabWidth = (Width - 2f * Pad - 3f * 3f) / 4f;
+            for (int t = 0; t < 4; t++)
+            {
+                int picked = t;
+                var button = (UIButton)panel.AddUIComponent(typeof(UIButton));
+                button.size = new Vector2(tabWidth, TabHeight);
+                button.relativePosition = new Vector3(Pad + t * (tabWidth + 3f), BarTop);
+                button.text = TabNames[t];
+                button.textScale = 0.75f;
+                button.normalBgSprite = button.focusedBgSprite = "ButtonMenu";
+                button.hoveredBgSprite = "ButtonMenuHovered";
+                button.pressedBgSprite = "ButtonMenuPressed";
+                button.tooltip = t == 0 ? "Draw: curved or straight pieces, exact lengths, a parallel road"
+                    : t == 1 ? "Decks: the next pieces over the roads below, or under them as a tunnel"
+                    : t == 2 ? "Ramps & cuts: a slip ramp, the median ramp roads and the metro and train median cuts"
+                    : "Upgrade: turn a stretch of road into the road picked in the game's menu";
+                button.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0) PickTab(picked); };
+                tabButtons[t] = button;
+            }
+
+            // Draw, row 0: curved / straight, snapping, the corner radius.
+            float y = RowsTop;
             curveButton = BarButton(Icons.Curve, "C", "Curved pieces: the road bends smoothly through the points (Tab)", Pad, y,
                 () => { if (SetStraight != null) SetStraight(false); });
+            Put(curveButton, 0, 0);
             straightButton = BarButton(Icons.Straight, "S", "Straight pieces, with rounded corners between them (Tab)\n" +
                 "Snaps to 15° turns, along or across nearby roads, and 8 m lengths; hold Shift to draw freely", Pad + IconSize + 3f, y,
                 () => { if (SetStraight != null) SetStraight(true); });
+            Put(straightButton, 0, 0);
             snapButton = BarButton(Icons.Snap, "Sn", "Snapping for straight pieces (on: green)", Pad + 2f * (IconSize + 3f) + 8f, y,
                 () => { if (ToggleSnap != null) ToggleSnap(); });
-            deckButton = BarButton(Icons.Deck, "D", "Deck: the next pieces run over the roads below, a level up (double or triple " +
-                "decker)\nClick on a road to put a deck point over its middle; between two such points the deck follows the road.\n" +
-                "Pillars stand on the road's median if it has one, else a frame spans the road", Pad + 3f * (IconSize + 3f) + 8f, y,
-                () => { if (ToggleDeck != null) ToggleDeck(); });
-            underButton = BarButton(Icons.Under, "U", "Under: the next pieces run one level under the roads, as a tunnel (metro under a " +
-                "street)\nClick on a road to put a point under its middle; between two such points the tunnel follows the road.\n" +
-                "One level only: not under a road that is already underground", Pad + 4f * (IconSize + 3f) + 8f, y,
-                () => { if (ToggleUnder != null) ToggleUnder(); });
-            float x = Pad + 5f * (IconSize + 3f) + 11f;
-            BarLabel("Corner", x, y + 8f, 38f);
-            BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner)", x + 38f, y,
-                () => { if (ChangeRadius != null) ChangeRadius(-CurveTool.RadiusStep); });
+            Put(snapButton, 0, 0);
+            float x = Pad + 3f * (IconSize + 3f) + 20f;
+            Put(BarLabel("Corner", x, y + 8f, 38f), 0, 0);
+            Action tighter = () => { if (ChangeRadius != null) ChangeRadius(-CurveTool.RadiusStep); };
+            Action wider = () => { if (ChangeRadius != null) ChangeRadius(CurveTool.RadiusStep); };
+            var radiusMinus = BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner; or the mouse wheel)", x + 38f, y, tighter);
             radiusLabel = BarLabel("", x + 38f + IconSize, y + 8f, 38f);
             radiusLabel.textAlignment = UIHorizontalAlignment.Center;
-            BarButton(Icons.Plus, "+", "Wider corners between straight pieces", x + 76f + IconSize, y,
-                () => { if (ChangeRadius != null) ChangeRadius(CurveTool.RadiusStep); });
+            var radiusPlus = BarButton(Icons.Plus, "+", "Wider corners between straight pieces (or the mouse wheel)", x + 76f + IconSize, y, wider);
+            Wheel(wider, tighter, radiusMinus, radiusLabel, radiusPlus);
+            Put(radiusMinus, 0, 0);
+            Put(radiusLabel, 0, 0);
+            Put(radiusPlus, 0, 0);
 
-            y += IconSize + 6f;
-            BarLabel("Length", Pad, y + 4f, 48f);
+            // Draw, row 1: an exact length and turn for the next point.
+            y = RowsTop + DrawRows[1];
+            Put(BarLabel("Length", Pad, y + 4f, 48f), 0, 1);
             lengthField = BarField(Pad + 50f, y, 62f, "Length of the next piece in metres; Enter places the point");
-            BarLabel("m", Pad + 116f, y + 4f, 16f);
-            BarLabel("Turn", Pad + 140f, y + 4f, 36f);
+            Put(lengthField, 0, 1);
+            Put(BarLabel("m", Pad + 116f, y + 4f, 16f), 0, 1);
+            Put(BarLabel("Turn", Pad + 140f, y + 4f, 36f), 0, 1);
             turnField = BarField(Pad + 176f, y, 52f,
                 "Turn from the last piece in degrees: + right, - left (the first piece: bearing from north); Enter places the point");
-            BarLabel("° (+ right)", Pad + 232f, y + 4f, 84f);
+            Put(turnField, 0, 1);
+            Put(BarLabel("° (+ right)", Pad + 232f, y + 4f, 84f), 0, 1);
 
-            // Parallel: a second road beside the curve (a one-way pair, or a
-            // road and a track), the gap between them, its side, and what it is.
-            y += 30f;
+            // Draw, row 2: Parallel, a second road beside the curve (a one-way
+            // pair, or a road and a track); its gap, side, road and direction
+            // only while it is on.
+            y = RowsTop + DrawRows[2];
             parallelButton = BarButton(Icons.Parallel, "P", "Parallel: build a second road beside the curve, at the gap set here.\n" +
                 "The same road runs the other way (a one-way pair); or pick a road or track for it with the button on the right.\n" +
                 "Each is planned on its own (crossings, bridges, tunnels); one Build and one Ctrl+Z for both", Pad, y,
                 () => { if (ToggleParallel != null) ToggleParallel(); });
+            Put(parallelButton, 0, 2);
             float gx = Pad + IconSize + 6f;
-            BarLabel("Gap", gx, y + 8f, 28f);
-            BarButton(Icons.Minus, "-", "Narrower gap between the two roads' edges", gx + 28f, y,
-                () => { if (ChangeGap != null) ChangeGap(-CurveTool.GapStep); });
+            Put(BarLabel("Gap", gx, y + 8f, 28f), 0, 2, true);
+            Action narrower = () => { if (ChangeGap != null) ChangeGap(-CurveTool.GapStep); };
+            Action widerGap = () => { if (ChangeGap != null) ChangeGap(CurveTool.GapStep); };
+            var gapMinus = BarButton(Icons.Minus, "-", "Narrower gap between the two roads' edges (or the mouse wheel)", gx + 28f, y, narrower);
             gapLabel = BarLabel("", gx + 28f + IconSize, y + 8f, 36f);
             gapLabel.textAlignment = UIHorizontalAlignment.Center;
-            BarButton(Icons.Plus, "+", "Wider gap between the two roads' edges (up to " + CurveTool.MaxGap.ToString("0") + " m)",
-                gx + 64f + IconSize, y, () => { if (ChangeGap != null) ChangeGap(CurveTool.GapStep); });
+            var gapPlus = BarButton(Icons.Plus, "+", "Wider gap between the two roads' edges (up to " + CurveTool.MaxGap.ToString("0") + " m; or the mouse wheel)",
+                gx + 64f + IconSize, y, widerGap);
+            Wheel(widerGap, narrower, gapMinus, gapLabel, gapPlus);
+            Put(gapMinus, 0, 2, true);
+            Put(gapLabel, 0, 2, true);
+            Put(gapPlus, 0, 2, true);
             float sx = gx + 64f + 2f * IconSize + 6f;
             sideButton = BarButton(Icons.Side, "<>", "Put the parallel road on the other side of the curve", sx, y,
                 () => { if (FlipSide != null) FlipSide(); });
+            Put(sideButton, 0, 2, true);
             besideButton = BarButton(Icons.Beside, "2", "Another road or track beside the curve: press this, then pick it in the game's menu " +
                 "(the curve keeps its own road).\nPress again to go back to the curve's own road", sx + IconSize + 3f, y,
                 () => { if (PickBeside != null) PickBeside(); });
+            Put(besideButton, 0, 2, true);
             directionButton = BarButton(Icons.Direction, "Dir", "Which way the parallel line runs: the other way (a one-way pair, green) " +
                 "or the same way (a double track, a road and its tram or rail line)", sx + 2f * (IconSize + 3f), y,
                 () => { if (FlipDirection != null) FlipDirection(); });
+            Put(directionButton, 0, 2, true);
+            centredButton = BarButton(Icons.Centred, "|", "Centred pair: the line drawn is the middle between the two roads (green), " +
+                "each road half the way out to its side; else the line drawn is the curve's own and the parallel road goes beside it",
+                sx + 3f * (IconSize + 3f), y, () => { if (ToggleCentred != null) ToggleCentred(); });
+            Put(centredButton, 0, 2, true);
 
-            // Upgrade an existing road instead of drawing one; a slip ramp.
-            y += IconSize + 4f;
-            upgradeButton = BarButton(Icons.Upgrade, "Up", "Upgrade along a curve: click a road where it starts, then where it ends;\n" +
-                "every road between becomes the road picked in the game's menu, on the same nodes (shape and junctions kept),\n" +
-                "each in its own version (elevated, tunnel...). One Ctrl+Z puts the old road back", Pad, y,
-                () => { if (ToggleUpgrade != null) ToggleUpgrade(); });
+            // Decks.
+            y = RowsTop;
+            deckButton = BarButton(Icons.Deck, "D", "Deck: the next pieces run over the roads below, a level up (double or triple " +
+                "decker)\nClick on a road to put a deck point over its middle; between two such points the deck follows the road.\n" +
+                "Pillars stand on the road's median if it has one, else a frame spans the road", Pad, y,
+                () => { if (ToggleDeck != null) ToggleDeck(); });
+            Put(deckButton, 1, 0);
+            underButton = BarButton(Icons.Under, "U", "Under: the next pieces run one level under the roads, as a tunnel (metro under a " +
+                "street)\nClick on a road to put a point under its middle; between two such points the tunnel follows the road.\n" +
+                "One level only: not under a road that is already underground", Pad + IconSize + 3f, y,
+                () => { if (ToggleUnder != null) ToggleUnder(); });
+            Put(underButton, 1, 0);
+            var deckHint = BarLabel("Deck: over the roads below. Under: a tunnel under them. Click a road for a point over (under) its middle",
+                Pad + 2f * (IconSize + 3f) + 6f, y, Width - 2f * Pad - 2f * (IconSize + 3f) - 6f);
+            deckHint.wordWrap = true;
+            deckHint.size = new Vector2(deckHint.size.x, IconSize);
+            deckHint.textScale = 0.65f;
+            Put(deckHint, 1, 0);
+
+            // Ramps & cuts: a slip ramp, the three median ramp roads, the two median cuts.
             rampButton = BarButton(Icons.Ramp, "R", "Slip ramp: start on the road it leaves, end on the road it joins (any levels).\n" +
                 "It leaves and joins them along them, the way their traffic goes; the heights between are worked out\n" +
-                "at the usual grades (up to 4.5 % where there is no room). Draw it the way its traffic goes", Pad + IconSize + 3f, y,
+                "at the usual grades (up to 4.5 % where there is no room). Draw it the way its traffic goes", Pad, y,
                 () => { if (ToggleRamp != null) ToggleRamp(); });
-            // The three median ramp roads (pressed again: off).
+            Put(rampButton, 2, 0);
             const string how = "\nUp: start on the ground (on the road, along it, or anywhere); the ramp rises out of the road's middle at 8 % " +
                                "to the first deck level (or the deck you end on) and stays level as far as you draw.\nDown: start on a deck's end; " +
                                "it comes down at 8 % into the road's middle. The road's outer lanes run beside it on the ground to the next junction, " +
@@ -332,9 +417,9 @@ namespace RealisticRoads
             {
                 int picked = choice;
                 medianButtons[choice] = BarButton(icons[choice], letters[choice], titles[choice] + how,
-                    Pad + (choice + 1) * (IconSize + 3f), y, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
+                    Pad + choice * (IconSize + 3f) + 6f, y, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
+                Put(medianButtons[choice], 2, 0);
             }
-            // The two median cuts (pressed again: off).
             const string cutHow = "\nDown: start on the end of a raised track; it comes down at its grade (metro 5 %, train 3.5 %) into an open cut " +
                                   "in the road's middle and on into a tunnel.\nUp: start on the end of a tunnel; it comes up through the cut to the deck level " +
                                   "(or the raised track you end on).\nDrawn along a six-lane or four-lane road, that road gets an open gap for it along the line " +
@@ -346,12 +431,70 @@ namespace RealisticRoads
             {
                 int picked = 4 + k;
                 medianButtons[picked] = BarButton(cutIcons[k], cutLetters[k], cutTitles[k] + cutHow,
-                    Pad + (picked + 1) * (IconSize + 3f), y, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
+                    Pad + picked * (IconSize + 3f) + 12f, y, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
+                Put(medianButtons[picked], 2, 0);
             }
-            toolsLabel = BarLabel("", Pad + 7f * (IconSize + 3f) + 4f, y + 1f, Width - 2f * Pad - 7f * (IconSize + 3f) - 4f);
-            toolsLabel.wordWrap = true;
-            toolsLabel.size = new Vector2(toolsLabel.size.x, 30f);
+
+            // Upgrade.
+            upgradeButton = BarButton(Icons.Upgrade, "Up", "Upgrade along a curve: click a road where it starts, then where it ends;\n" +
+                "every road between becomes the road picked in the game's menu, on the same nodes (shape and junctions kept),\n" +
+                "each in its own version (elevated, tunnel...). One Ctrl+Z puts the old road back", Pad, y,
+                () => { if (ToggleUpgrade != null) ToggleUpgrade(); });
+            Put(upgradeButton, 3, 0);
+            var upgradeHint = BarLabel("Click a road where the upgrade starts, then where it ends: the roads between become the road picked in the game's menu",
+                Pad + IconSize + 9f, y, Width - 2f * Pad - IconSize - 9f);
+            upgradeHint.wordWrap = true;
+            upgradeHint.size = new Vector2(upgradeHint.size.x, IconSize);
+            upgradeHint.textScale = 0.65f;
+            Put(upgradeHint, 3, 0);
+
+            // What is being drawn (and the parallel line), under the open tab's buttons.
+            toolsLabel = BarLabel("", Pad, RowsTop + TabContentHeight, Width - 2f * Pad);
             toolsLabel.textScale = 0.7f;
+        }
+
+        // A tab picked: the ramp or upgrade mode of the tab left is turned off,
+        // Upgrade's turned on.
+        private void PickTab(int picked)
+        {
+            if (picked == tab) return;
+            var model = current;
+            if (model != null)
+            {
+                if (tab == 3 && model.Upgrade && ToggleUpgrade != null) ToggleUpgrade();
+                if (tab == 2 && model.Ramp && ToggleRamp != null) ToggleRamp();
+                if (tab == 2 && model.MedianChoice > 0 && PickMedianRamp != null) PickMedianRamp(model.MedianChoice);
+                if (picked == 3 && !model.Upgrade && ToggleUpgrade != null) ToggleUpgrade();
+            }
+            tab = picked;
+            structure = null;   // the rows below move: laid out again
+            if (current != null) Show(current);
+        }
+
+        // Only the open tab's buttons (Parallel's own only while it is on); the
+        // tab follows a mode turned on elsewhere (Upgrade, a ramp).
+        private void LayOutBar(PanelModel model)
+        {
+            if (model.Upgrade) tab = 3;
+            else if (model.Ramp || model.MedianChoice > 0) tab = 2;
+            else if (tab == 3) tab = 0;
+            for (int t = 0; t < 4; t++)
+            {
+                var button = tabButtons[t];
+                if (button == null) continue;
+                string normal = t == tab ? "ButtonMenuPressed" : "ButtonMenu";
+                if (button.normalBgSprite != normal) button.normalBgSprite = button.focusedBgSprite = normal;
+            }
+            foreach (var item in barItems)
+            {
+                bool show = item.Tab == tab && (!item.ParallelOnly || model.Parallel);
+                if (item.Component.isVisible != show) item.Component.isVisible = show;
+            }
+            if (toolsLabel != null)
+            {
+                var at = new Vector3(Pad, RowsTop + TabContentHeight);
+                if (toolsLabel.relativePosition != at) toolsLabel.relativePosition = at;
+            }
         }
 
         private UIButton BarButton(string icon, string letter, string tooltip, float x, float y, Action onClick)
@@ -437,6 +580,7 @@ namespace RealisticRoads
 
         private void UpdateDrawBar(PanelModel model)
         {
+            LayOutBar(model);
             Select(curveButton, !model.Straight);
             Select(straightButton, model.Straight);
             Select(snapButton, model.Snapping);
@@ -462,6 +606,7 @@ namespace RealisticRoads
                 if (gapLabel.text != gap) gapLabel.text = gap;
             }
             Select(directionButton, model.Parallel && model.ParallelReverse);
+            Select(centredButton, model.Parallel && model.ParallelCentred);
             if (radiusLabel != null)
             {
                 string text = model.Radius < 0.5f ? "sharp" : model.Radius.ToString("0") + " m";
@@ -483,7 +628,7 @@ namespace RealisticRoads
             if (profileTexture != null) UnityEngine.Object.Destroy(profileTexture);
             panel = null;
             curveButton = straightButton = snapButton = deckButton = underButton = null;
-            parallelButton = sideButton = besideButton = directionButton = null;
+            parallelButton = sideButton = besideButton = directionButton = centredButton = null;
             gapLabel = null;
             upgradeButton = rampButton = null;
             for (int choice = 0; choice < medianButtons.Length; choice++) medianButtons[choice] = null;
@@ -501,7 +646,7 @@ namespace RealisticRoads
             draggedNode = -1;
             pressed = selecting = false;
             selectFrom = selectTo = -1f;
-            elevatedButton = tunnelButton = autoButton = resetButton = null;
+            elevatedButton = tunnelButton = autoButton = gradeButton = resetButton = null;
             shapeHint = null;
             dynamic.Clear();
             texts.Clear();
@@ -544,7 +689,7 @@ namespace RealisticRoads
         private string Shape(PanelModel model)
         {
             var shape = new System.Text.StringBuilder();
-            shape.Append(model.HasPoints).Append(model.CanBuild).Append(model.Profile != null).Append('|').Append(page).Append('|');
+            shape.Append(model.HasPoints).Append(model.CanBuild).Append(model.Profile != null).Append('|').Append(page).Append('|').Append(tab).Append('|');
             shape.Append(Lines(model.ProfileText, Width - 2f * Pad, 0.75f)).Append(Lines(model.Height, Width - 2f * Pad, 0.75f))
                 .Append(Lines(model.Mode, Width - 2f * Pad, 0.75f));
             // A text that wraps to more or fewer lines moves everything under it.
@@ -559,6 +704,7 @@ namespace RealisticRoads
                 shape.Append(':').Append((int)crossing.Selected).Append(crossing.HeightButtons).Append(';');
             }
             shape.Append('|').Append(model.Items.Count).Append('|').Append(model.Problems.Count).Append('|').Append(model.Warnings.Count);
+            foreach (var fix in model.Fixes) shape.Append('|').Append(fix);
             return shape.ToString();
         }
 
@@ -584,7 +730,7 @@ namespace RealisticRoads
             drawnProfile = null;
             profilePixels = null;
             profileBase = null;
-            elevatedButton = tunnelButton = autoButton = resetButton = null;
+            elevatedButton = tunnelButton = autoButton = gradeButton = resetButton = null;
             shapeHint = null;
             if (model.Profile != null)
             {
@@ -592,7 +738,7 @@ namespace RealisticRoads
                 profileSprite = (UITextureSprite)panel.AddUIComponent(typeof(UITextureSprite));
                 profileSprite.size = new Vector2(ProfileWidth, ProfileHeight);
                 profileSprite.relativePosition = new Vector3(Pad, y);
-                profileSprite.tooltip = "Drag a dot up or down to set the road's height there (right-click it to let go). " +
+                profileSprite.tooltip = "Drag a dot up or down to set the road's height there (or the mouse wheel over it; right-click it to let go). " +
                                         "Drag along the view to select a stretch for the buttons below. Click to keep the mark on the map";
                 profileSprite.eventMouseMove += (component, param) =>
                 {
@@ -600,6 +746,17 @@ namespace RealisticRoads
                 };
                 profileSprite.eventMouseLeave += (component, param) => { if (!cursorPinned && draggedNode < 0) SetCursor(-1f, false); };
                 profileSprite.eventMouseDown += (component, param) => PressProfile(param.buttons);
+                // The mouse wheel over a dot: its height up or down (Shift: 1 m).
+                profileSprite.eventMouseWheel += (component, param) =>
+                {
+                    float wx, wrow;
+                    if (draggedNode >= 0 || NudgeNode == null || !MouseOnProfile(out wx, out wrow)) return;
+                    int node = NodeUnderMouse(wx, wrow);
+                    if (node < 0) return;
+                    float step = ShiftStep(CurveTool.LiftStep);
+                    NudgeNode(node, param.wheelDelta > 0f ? step : -step);
+                    param.Use();
+                };
                 dynamic.Add(profileSprite);
                 y += ProfileHeight + 3f;
                 float x = Pad;
@@ -616,12 +773,15 @@ namespace RealisticRoads
                     () => Mark(Forced.Tunnel));
                 autoButton = ShapeButton(Icons.Auto, "A", "Auto: the planner decides the heights again (and lets go of the ones held). " +
                     "The selected stretch, or the whole road if none is selected", Pad + 2f * (ShapeButtonSize + 4f), y, () => Mark(Forced.None));
+                gradeButton = ShapeButton(Icons.Grade, "/", "Straight grade: one even slope from the selected stretch's first node to its last " +
+                    "(the whole road if none is selected); the heights between are held on it. Heights set by a crossing stay",
+                    Pad + 3f * (ShapeButtonSize + 4f), y, Grade);
                 resetButton = ShapeButton(Icons.Reset, "R", "Clear every height and stretch set in the side view",
                     Width - Pad - ShapeButtonSize, y, () => { if (ResetShape != null) ResetShape(); });
                 shapeHint = (UILabel)panel.AddUIComponent(typeof(UILabel));
                 shapeHint.autoSize = false;
-                shapeHint.size = new Vector2(Width - 2f * Pad - 4f * (ShapeButtonSize + 4f) - 4f, ShapeButtonSize);
-                shapeHint.relativePosition = new Vector3(Pad + 3f * (ShapeButtonSize + 4f) + 2f, y);
+                shapeHint.size = new Vector2(Width - 2f * Pad - 5f * (ShapeButtonSize + 4f) - 4f, ShapeButtonSize);
+                shapeHint.relativePosition = new Vector3(Pad + 4f * (ShapeButtonSize + 4f) + 2f, y);
                 shapeHint.textScale = 0.7f;
                 shapeHint.wordWrap = true;
                 shapeHint.verticalAlignment = UIVerticalAlignment.Middle;
@@ -667,10 +827,11 @@ namespace RealisticRoads
                     {
                         if (item.Allowed.Count > 0) x += 8f;
                         string step = item.Step.ToString("0.#");
-                        IconButton(Icons.Plus, "+", "Higher (+" + step + " m, Shift: 1 m)", new Vector2(x, y), false,
-                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(ShiftStep(c.Step)); });
-                        IconButton(Icons.Minus, "-", "Lower (-" + step + " m, Shift: 1 m)", new Vector2(x + IconSize + 3f, y), false,
-                            () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(-ShiftStep(c.Step)); });
+                        Action higher = () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(ShiftStep(c.Step)); };
+                        Action lower = () => { var c = Row(index); if (c != null && c.Raise != null) c.Raise(-ShiftStep(c.Step)); };
+                        var plus = IconButton(Icons.Plus, "+", "Higher (+" + step + " m, Shift: 1 m; or the mouse wheel)", new Vector2(x, y), false, higher);
+                        var minus = IconButton(Icons.Minus, "-", "Lower (-" + step + " m, Shift: 1 m; or the mouse wheel)", new Vector2(x + IconSize + 3f, y), false, lower);
+                        Wheel(higher, lower, plus, minus);
                     }
                     if (item.Allowed.Count > 0 || item.HeightButtons) y += IconSize;
                     y += RowGap + 6f;
@@ -694,6 +855,27 @@ namespace RealisticRoads
                 {
                     int index = i;
                     y = Text(m => index < m.Problems.Count ? "• " + m.Problems[index] : "", ProblemColor, 0.75f, y);
+                }
+                // One click that clears a problem: two to a row.
+                float fixWidth = (Width - 2f * Pad - 6f) / 2f;
+                for (int i = 0; i < model.Fixes.Count; i++)
+                {
+                    int index = i;
+                    var button = (UIButton)(parent ?? panel).AddUIComponent(typeof(UIButton));
+                    button.size = new Vector2(fixWidth, 22f);
+                    button.relativePosition = new Vector3(Pad + (i % 2) * (fixWidth + 6f), y);
+                    button.text = model.Fixes[i];
+                    button.textScale = 0.7f;
+                    button.tooltip = "Fix: " + model.Fixes[i];
+                    button.normalBgSprite = button.focusedBgSprite = "ButtonMenu";
+                    button.hoveredBgSprite = "ButtonMenuHovered";
+                    button.pressedBgSprite = "ButtonMenuPressed";
+                    button.eventClick += (component, param) =>
+                    {
+                        if ((param.buttons & UIMouseButton.Left) != 0 && ApplyFix != null) ApplyFix(index);
+                    };
+                    dynamic.Add(button);
+                    if (i % 2 == 1 || i == model.Fixes.Count - 1) y += 22f + RowGap;
                 }
             }
             if (model.Warnings.Count > 0)
@@ -789,7 +971,22 @@ namespace RealisticRoads
             return label;
         }
 
-        private void IconButton(string icon, string letter, string tooltip, Vector2 at, bool selected, Action onClick)
+        // The mouse wheel over any of 'over': up runs 'up', down runs 'down'.
+        internal static void Wheel(Action up, Action down, params UIComponent[] over)
+        {
+            foreach (var component in over)
+            {
+                if (component == null) continue;
+                component.eventMouseWheel += (c, p) =>
+                {
+                    if (p.wheelDelta > 0f) up();
+                    else if (p.wheelDelta < 0f) down();
+                    p.Use();
+                };
+            }
+        }
+
+        private UIButton IconButton(string icon, string letter, string tooltip, Vector2 at, bool selected, Action onClick)
         {
             var button = (UIButton)(parent ?? panel).AddUIComponent(typeof(UIButton));
             button.size = new Vector2(IconSize, IconSize);
@@ -814,6 +1011,7 @@ namespace RealisticRoads
             }
             button.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0) onClick(); };
             dynamic.Add(button);
+            return button;
         }
 
         private const float ActionSize = 30f;
@@ -1165,9 +1363,24 @@ namespace RealisticRoads
             MarkStretch(from, to, kind);
         }
 
+        // The selected stretch (or the whole road) on one even slope.
+        private void Grade()
+        {
+            if (StraightGrade == null || drawnProfile == null) return;
+            float from = 0f, to = drawnProfile.Length;
+            if (HasSelection)
+            {
+                from = Mathf.Min(selectFrom, selectTo);
+                to = Mathf.Max(selectFrom, selectTo);
+            }
+            ClearSelection();
+            StraightGrade(from, to);
+        }
+
         private void UpdateShapeButtons()
         {
             bool profile = drawnProfile != null;
+            SetEnabled(gradeButton, profile);
             SetEnabled(elevatedButton, profile);
             SetEnabled(tunnelButton, profile);
             SetEnabled(autoButton, profile);

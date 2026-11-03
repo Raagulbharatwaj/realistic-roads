@@ -40,6 +40,43 @@ namespace RealisticRoads
         public List<float> NodeHeights = new List<float>();
     }
 
+    // A way to clear a problem with one click: these crossings (by Key) made
+    // this type.
+    public class QuickFix
+    {
+        public string Label;
+        public List<int> Keys = new List<int>();
+        public List<int> Numbers = new List<int>();   // the crossings' numbers (from 1, as the panel lists them)
+        public CrossingType Type;
+
+        // A fix that sets every one of these crossings to 'type', if each allows
+        // it (and it isn't one already offered).
+        public static void Offer(Plan plan, CrossingType type, params Crossing[] crossings)
+        {
+            var fix = new QuickFix { Type = type };
+            foreach (var crossing in crossings)
+            {
+                if (crossing == null || !crossing.Allows(type)) return;
+                if (crossing.Type == type) continue;
+                fix.Keys.Add(crossing.Key);
+                fix.Numbers.Add(plan.Crossings.IndexOf(crossing) + 1);
+            }
+            if (fix.Keys.Count == 0) return;
+            fix.Label = LabelFor(type, fix.Numbers, "");
+            foreach (var other in plan.Fixes) if (other.Label == fix.Label) return;
+            plan.Fixes.Add(fix);
+        }
+
+        // "Bridge at 3", "Tunnels at P2 & P3" (numbers with this prefix).
+        public static string LabelFor(CrossingType type, List<int> numbers, string prefix)
+        {
+            string what = type == CrossingType.Bridge ? "Bridge" : type == CrossingType.Tunnel ? "Tunnel" : type.ToString();
+            var shown = new List<string>();
+            foreach (int number in numbers) shown.Add(prefix + number);
+            return what + (shown.Count > 1 ? "s" : "") + " at " + string.Join(" & ", shown.ToArray());
+        }
+    }
+
     // Everything needed to build a curve: node positions and heights, what
     // each node is, the crossings and what happens at them, and any problems.
     public class Plan
@@ -64,6 +101,7 @@ namespace RealisticRoads
         public List<WaterRun> WaterRuns = new List<WaterRun>();
         public List<string> Problems = new List<string>();
         public List<string> Warnings = new List<string>();   // shown, but don't stop building
+        public List<QuickFix> Fixes = new List<QuickFix>();  // one click that clears a problem (a button under it)
         public bool[] Steep;                  // piece i (between points i-1 and i) steeper than the road allows
         public ushort StartNode, EndNode;
         // An end placed in the middle of an existing road: that road is cut
@@ -1163,6 +1201,8 @@ namespace RealisticRoads
                 {
                     plan.Problems.Add("The curve crosses the same piece of the " + first.ExistingName +
                                       " twice: use junctions, bridges or tunnels there (not overpass/underpass)");
+                    QuickFix.Offer(plan, CrossingType.Bridge, first, second);
+                    QuickFix.Offer(plan, CrossingType.Tunnel, first, second);
                     return;
                 }
             }
@@ -1295,6 +1335,11 @@ namespace RealisticRoads
                     plan.Problems.Add("Crossing " + (c + 1) + " (" + crossing.ExistingName + ") is on the piece of road the curve " +
                                       (crossing.Segment == plan.StartSegment ? "starts" : "ends") +
                                       " on: pick a bridge or tunnel there, or start the curve on another road");
+                if (changesIt && crossing.Segment != 0 && (crossing.Segment == plan.StartSegment || crossing.Segment == plan.EndSegment))
+                {
+                    QuickFix.Offer(plan, CrossingType.Bridge, crossing);
+                    QuickFix.Offer(plan, CrossingType.Tunnel, crossing);
+                }
                 // Two crossings so close together they share one node (see
                 // CurveTool.DivideAlong): passing over or under both is fine, but
                 // one node can't join (or change) two roads apart.
@@ -1307,12 +1352,21 @@ namespace RealisticRoads
                         plan.Problems.Add("Crossings " + (d + 1) + " (" + other.ExistingName + ") and " + (c + 1) + " (" + crossing.ExistingName +
                                           ") are only " + Mathf.Abs(crossing.Distance - other.Distance).ToString("F0") +
                                           " m apart: too close for a junction (or overpass, underpass) at either; pick a bridge or tunnel for both, or move the line");
+                    if (changesIt || otherChanges)
+                    {
+                        QuickFix.Offer(plan, CrossingType.Bridge, other, crossing);
+                        QuickFix.Offer(plan, CrossingType.Tunnel, other, crossing);
+                    }
                 }
                 if (changesIt) continue;
                 float gap = Mathf.Abs(plan.Points[plan.CrossingIndex[c]].y - crossing.Point.y);
                 if (gap < UnderClearance - 0.5f)
+                {
                     plan.Problems.Add("Only " + gap.ToString("F0") + " m from " + crossing.ExistingName +
                                       ": pick a bridge or tunnel for this crossing");
+                    QuickFix.Offer(plan, CrossingType.Bridge, crossing);
+                    QuickFix.Offer(plan, CrossingType.Tunnel, crossing);
+                }
             }
         }
 

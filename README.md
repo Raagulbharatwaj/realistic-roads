@@ -52,9 +52,13 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
 ## 5. Curve tool: build CS2-style curves (milestones 3 + 4)
 1. Pick a road in the vanilla **Roads** menu (e.g. Basic Road or Oneway Road), then click the **RR** button (the
    curved-road icon; also next to the game's Straight / Curved / Freeform / Upgrade buttons while its road tool is
-   open) or press **Ctrl+Shift+C**. **RR is then a mode:** every road you pick in the Roads menu opens in RR, until
-   you leave it (Esc twice, the X, the **Game tool** button, or the RR button again). The **Realistic Roads** panel
-   opens (drag its title bar to move it; the place is remembered). It shows:
+   open) or press **Ctrl+Shift+C** (change it, or remove it, in Options > Mod Settings > Curve tool key: it clashes with Intersection Marking Tool's). **RR is then a mode:** every road you pick in the Roads menu opens in RR, until
+   you leave it (Esc twice, the X, the **Game tool** button, or the RR button again). With **UnifiedUI** on, the RR
+   button is in its toolbar instead of floating on the screen. The **Realistic Roads** panel
+   opens (drag its title bar to move it; the place is remembered). Its buttons are in four tabs, by what you build:
+   **Draw** (curved or straight pieces, snapping, corners, an exact length or turn, Parallel), **Decks** (over or
+   under the roads), **Ramps & cuts** (a slip ramp, the median ramp roads, the median cuts) and **Upgrade**. Leaving
+   Ramps & cuts or Upgrade turns its mode off. The mouse wheel works on every -/+ (corner, gap, crossing heights). It shows:
    - **Road**: the road you are drawing, and the next point's height (Page Up / Page Down);
    - **Curve**: length, segments, cost, and whether it is raised or lowered anywhere;
    - **Side view**: the curve seen from the side: the road's height against the ground (and water) along it, in the
@@ -65,7 +69,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      (half-metre steps, it becomes a white square; right-click it to let it go). The road ramps to it at its grade, and
      no node is added: only nodes that are already there can be dragged (the ends, junctions and overpasses keep the
      height they need and have no dot). Drag along the view to select a stretch (or select nothing for the whole road),
-     then **Elevated** (on pillars, 9 m up,
+     then **Straight grade** (one even slope from the stretch's first node to its last; the nodes between are held on
+     it, except those a crossing or an end sets), **Elevated** (on pillars, 9 m up,
      a bridge over water), **Tunnel** (12 m down, 10 m under a river or sea bed) or **Auto** (the planner decides again,
      and the heights held in it go). The road ramps up or down to the stretch before it; crossings in it go over (or
      under) it and water in it is bridged (or tunnelled). Next to a held height (an end on a road, a junction) the
@@ -78,7 +83,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      curve's own road. For another road or track, press **2** and then pick it in the game's menu: it goes beside, and
      the curve keeps its own road (press **2** again to go back). The **direction** button says which way it runs: the
      other way (a one-way pair, the default for the same road) or the same way (a double track, or a road and the track
-     beside it). The line under the buttons says what goes beside, on which side and which way. The parallel line is
+     beside it). **Centred** (the dashed-line button): the line you draw is the middle between the two roads, each
+     half the way out to its side, instead of the curve's own line. The line under the buttons says what goes beside, on which side and which way. The parallel line is
      planned on its own (its crossings show in the list and on the map with a **P**: P1, P2...), with the curve's point
      heights and the side view's heights and stretches. Its ends join a road or node of its kind they land on.
      **Build** builds the curve, then plans the parallel line again against the roads as they are now (the curve's
@@ -89,7 +95,8 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
      round corners and through junctions, only along roads of the same kind). Every segment on the way is replaced on
      the same nodes, so the shape and the junctions stay; each keeps its version (an elevated piece becomes the new
      road's elevated version, a tunnel its tunnel; a version the new road lacks is left as it was, and the panel says
-     so). A point on the middle of a road takes in that whole segment, one on a node starts there. The panel shows how
+     so). A point on the middle of a road cuts it there, and only the part towards the other point
+     changes (within 8 m of a node it goes to the node); one on a node starts there. The panel shows how
      many segments and metres change and the cost (the new road's price less the old one's); Enter or the check mark
      upgrades, one Ctrl+Z puts the old road back. Nodes between upgraded segments become the new road too (pillars
      follow); nodes at junctions with other roads are left to them;
@@ -268,11 +275,18 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
 6. **Drawing, then planning.** While drawing, the curve follows the mouse and each click adds a point; right-click
    removes the last one. **Double-click** (or **Enter**) when done: the tool switches to **planning**. The plan then
    stays where it is, so you can work on it without it following the mouse:
-   - drag any point (the bigger circles) to move it; it snaps to roads like a new point;
+   - drag any point (the bigger circles) to move it; it snaps to roads like a new point; **Shift+click** on the curve
+     puts a point in there, **right-click** on a point takes it out (at least two stay); the mouse wheel over a
+     node's dot in the side view moves its height;
    - pick each crossing's type and heights, in the panel or on the map;
-   - **Enter** or the check mark builds it; **Esc** scraps it; **right-click** goes back to drawing, adding points at
-     the end.
-   The panel says which of the two you are in and what to do next. Esc with no points leaves the tool.
+   - **Enter** or the check mark builds it; **Esc** goes back to drawing (again: clears the points, again: leaves the
+     tool); **right-click** elsewhere goes back to drawing, adding points at the end.
+   The panel says which of the two you are in and what to do next, and the label at the cursor says what the next
+   click does (Step 1: click where the road starts, ...). On the map, a road the plan lowers under an overpass is
+   orange along the stretch that is lowered, one that gets a short bridge over an underpass is blue along the bridge,
+   and buildings the road would run through are ringed red. A problem a different crossing type clears (a crossing
+   too close to another, on the road it starts on, too near the road it passes) has buttons under it: **Bridge at 3**,
+   **Tunnel at 3**; one click sets it.
 7. **Ctrl+Z** (with the tool open) removes the last curve you built, up to 20 back.
 
 Building costs what the vanilla road tool would charge for the same pieces (shown as **Cost** in the panel); Ctrl+Z

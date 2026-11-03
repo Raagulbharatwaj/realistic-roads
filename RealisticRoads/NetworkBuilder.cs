@@ -150,7 +150,24 @@ namespace RealisticRoads
                     var s = net.m_segments.m_buffer[segment];
                     // Changed since it was planned: left alone.
                     if ((s.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || s.Info != plan.OldInfos[i]) continue;
-                    SplitSegment(segment, new float[0], new[] { plan.NewInfos[i] }, build, plan.Inverts != null ? plan.Inverts[i] : (bool?)null);
+                    // Only part of it (a point on its middle): cut there, the
+                    // part outside staying the old road (and the way it ran).
+                    float from = plan.From[i], to = plan.To[i];
+                    var cuts = new List<float>();
+                    var infos = new List<NetInfo>();
+                    if (from > 0f)
+                    {
+                        cuts.Add(from);
+                        infos.Add(plan.OldInfos[i]);
+                    }
+                    int inside = infos.Count;
+                    infos.Add(plan.NewInfos[i]);
+                    if (to < 1f)
+                    {
+                        cuts.Add(to);
+                        infos.Add(plan.OldInfos[i]);
+                    }
+                    SplitSegment(segment, cuts.ToArray(), infos.ToArray(), build, plan.Inverts != null ? plan.Inverts[i] : (bool?)null, inside);
                     changed++;
                 }
                 foreach (var pair in plan.Nodes)
@@ -1328,9 +1345,7 @@ namespace RealisticRoads
                         // Over our cutting and its banks, measured along the road crossed;
                         // at an angle that road's own edge reaches further along the
                         // cutting too (its half width x cot of the angle).
-                        float skew = Mathf.Clamp(crossing.Skew, 0.2f, 1f);
-                        float edge = crossing.ExistingHalfWidth * Mathf.Sqrt(1f - skew * skew) / skew;
-                        BridgeOver(plan, crossing, info.m_halfWidth / skew + UnderpassBridgeExtra + edge, touched, build);
+                        BridgeOver(plan, crossing, UnderpassReach(crossing, info), touched, build);
                     }
                 }
 
@@ -1509,6 +1524,17 @@ namespace RealisticRoads
             public Vector3 Target;       // SlideIn / SlideOut: where the node goes
             public Vector3 Tangent;      // and the road's direction there
             public float CutT;           // Cut: where on the crossed segment (0..1)
+        }
+
+        // How far the bridge put into the road above an underpass reaches
+        // either side of the crossing: over our cutting and its banks, measured
+        // along the road crossed; at an angle that road's own edge reaches
+        // further along the cutting too (its half width x cot of the angle).
+        public static float UnderpassReach(Crossing crossing, NetInfo info)
+        {
+            float skew = Mathf.Clamp(crossing.Skew, 0.2f, 1f);
+            float edge = crossing.ExistingHalfWidth * Mathf.Sqrt(1f - skew * skew) / skew;
+            return info.m_halfWidth / skew + UnderpassBridgeExtra + edge;
         }
 
         // The existing road above an underpass becomes a bridge for 'reach'
@@ -2007,7 +2033,7 @@ namespace RealisticRoads
         // Safe order: the new nodes are made first (a failure there leaves the
         // road untouched), and the split is in 'build' before the original is
         // removed, so a failure after that is undone by rebuilding it.
-        private static Split SplitSegment(ushort segment, float[] at, NetInfo[] pieceInfos, Build build, bool? invert = null)
+        private static Split SplitSegment(ushort segment, float[] at, NetInfo[] pieceInfos, Build build, bool? invert = null, int invertPiece = -1)
         {
             var net = NetManager.instance;
             var sim = SimulationManager.instance;
@@ -2072,7 +2098,8 @@ namespace RealisticRoads
                 NetInfo pieceInfo = pieceInfos != null ? pieceInfos[i - 1] : split.Info;
                 ushort piece;
                 if (!net.CreateSegment(out piece, ref sim.m_randomizer, pieceInfo, chain[i - 1], chain[i],
-                        startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex, invert ?? split.Invert))
+                        startDir, endDir, sim.m_currentBuildIndex, sim.m_currentBuildIndex,
+                        invert.HasValue && (invertPiece < 0 || invertPiece == i - 1) ? invert.Value : split.Invert))
                     throw new Exception("could not rebuild " + split.Info.name);
                 sim.m_currentBuildIndex++;
                 CalculateSegmentDirections(piece);
