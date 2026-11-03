@@ -409,7 +409,7 @@ namespace RealisticRoads
             public bool TriedLineStart;  // and its road was looked for where the line starts too
         }
 
-        private enum MedianStage { LeadIn, Ramp, Convert, Ground, Starts, CutTrack, CutSplit, CutConvert, CutLeadIn, CutGround, CutStarts, CutEndStarts }
+        private enum MedianStage { LeadIn, Ramp, Convert, Ground, Starts, CutTrack, CutSplit, CutConvert, CutLeadIn, CutGround, CutStarts, CutEndStarts, CutPave }
 
         private bool parallelMode;
         private float parallelGap = DefaultGap;  // metres between the two roads' edges
@@ -456,6 +456,8 @@ namespace RealisticRoads
         protected override void OnDisable()
         {
             base.OnDisable();
+            try { ForceInfoMode(InfoManager.InfoMode.None, InfoManager.SubInfoMode.Default); }
+            catch (Exception e) { Mod.LogError("Putting the view back", e); }
             ClearPoints();
             hoverValid = false;
             lock (hoverLock) simHover = new Hover();
@@ -464,6 +466,31 @@ namespace RealisticRoads
             HideButtons(0);
             foreach (var label in mapLabels) label.isVisible = false;
             if (cursorLabel != null) cursorLabel.isVisible = false;
+        }
+
+        // Main thread, every frame while the tool is active: the game's view for
+        // what is being drawn, as its own road tool picks it (the road's
+        // GetPlacementInfoMode at the height drawn): below the ground, the
+        // underground view, so the tunnel can be seen. While planning, the
+        // underground view if the plan has a tunnel in it.
+        protected override void OnToolLateUpdate()
+        {
+            base.OnToolLateUpdate();
+            var info = SelectedNetwork;
+            if (info == null || info.m_netAI == null || upgradeMode) return;
+            float elevation = deckMode && underMode ? -RoadPlanner.TunnelMinDepth - 4f : lift;
+            var division = preview;
+            if (planning && division != null && division.Plan != null && division.Plan.Kinds != null)
+                foreach (var kind in division.Plan.Kinds)
+                    if (kind == NodeKind.Tunnel)
+                    {
+                        elevation = Mathf.Min(elevation, -RoadPlanner.TunnelMinDepth - 4f);
+                        break;
+                    }
+            InfoManager.InfoMode mode;
+            InfoManager.SubInfoMode subMode;
+            info.m_netAI.GetPlacementInfoMode(out mode, out subMode, elevation);
+            ForceInfoMode(mode, subMode);
         }
 
         // Main thread, every frame while the tool is active.
@@ -1230,9 +1257,11 @@ namespace RealisticRoads
             if (e.button == 0 && aimValid)
             {
                 e.Use();
-                if (points.Count > 0 && (aimPosition - points[points.Count - 1]).sqrMagnitude < MinPointSpacing * MinPointSpacing)
+                // Double-click (or a second click on the last point): done drawing.
+                // A straight piece's point snaps to whole lengths, so it can be a few
+                // metres from where it was clicked: the double-click itself counts too.
+                if (points.Count > 0 && (e.clickCount >= 2 || (aimPosition - points[points.Count - 1]).sqrMagnitude < MinPointSpacing * MinPointSpacing))
                 {
-                    // Double-click (or a second click on the last point): done drawing.
                     StartPlanning();
                     return;
                 }

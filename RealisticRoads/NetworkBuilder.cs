@@ -322,6 +322,113 @@ namespace RealisticRoads
             });
         }
 
+        // A median cut's road, the last step: over the open cut itself
+        // ('openFrom' to 'openTo' metres along 'line', the drawn line) its gap
+        // stays open, the track's cut seen in it; before and after it (the track
+        // on its pillars over the road, or in its tunnel under it) the gap is
+        // paved, as a median ramp road's is. Each open piece near the line
+        // outside the cut becomes its paved twin on the same nodes; one across an
+        // end of the cut is cut there (unless that is within MinPart of its end:
+        // then it goes by the most of it). The nodes by a paved piece are paved
+        // too. One build in 'group'; 'done' is told how many pieces changed (-1:
+        // it failed and was put back; the cut stays as it was).
+        private const float MinPart = 6f;
+
+        public static void PaveCut(List<Vector3> line, float openFrom, float openTo, int group, Action<int> done)
+        {
+            SimulationManager.instance.AddAction(() =>
+            {
+                var build = new Build { Group = group };
+                int changed = 0;
+                try
+                {
+                    var net = NetManager.instance;
+                    var segments = net.m_segments.m_buffer;
+                    var nodes = net.m_nodes.m_buffer;
+                    float lineLength = CurveMath.Length(line);
+                    var near = new List<ushort>();
+                    var seen = new HashSet<ushort>();
+                    for (float d = 0f; ; d += 30f)
+                    {
+                        Vector3 p, tangent;
+                        CurveMath.PointAt(line, Mathf.Min(d, lineLength), out p, out tangent);
+                        foreach (ushort s in RoadPlanner.NearbySegments(p, 40f))
+                            if (seen.Add(s)) near.Add(s);
+                        if (d >= lineLength) break;
+                    }
+                    var paved = new HashSet<ushort>();   // nodes by a paved piece
+                    foreach (ushort segment in near)
+                    {
+                        if ((segments[segment].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
+                        var open = segments[segment].Info;
+                        var twin = SplitRoads.PavedTwinOf(open);
+                        if (twin == null) continue;
+                        Vector3 a, b, c, d;
+                        CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+                        float mid, atA, atD;
+                        if (OffLine(line, CurveMath.Bezier(a, b, c, d, 0.5f), out mid)) continue;
+                        OffLine(line, a, out atA);
+                        OffLine(line, d, out atD);
+                        float lo = Mathf.Min(atA, atD), hi = Mathf.Max(atA, atD);
+                        // Where along the segment (0..1, from its start) the cut's ends are, if inside it.
+                        var cuts = new List<float>();
+                        foreach (float end in new[] { openFrom, openTo })
+                        {
+                            if (end <= lo + MinPart || end >= hi - MinPart) continue;
+                            Vector3 p, tangent, onRoad;
+                            CurveMath.PointAt(line, end, out p, out tangent);
+                            cuts.Add(CrossingFinder.ClosestT(segment, p, out onRoad));
+                        }
+                        cuts.Sort();
+                        // Each piece: open if its middle is over the cut, else paved.
+                        var infos = new List<NetInfo>();
+                        bool anyPaved = false;
+                        for (int k = 0; k <= cuts.Count; k++)
+                        {
+                            float t0 = k == 0 ? 0f : cuts[k - 1], t1 = k == cuts.Count ? 1f : cuts[k];
+                            float pieceMid;
+                            OffLine(line, CurveMath.Bezier(a, b, c, d, (t0 + t1) * 0.5f), out pieceMid);
+                            bool overCut = pieceMid > openFrom && pieceMid < openTo;
+                            infos.Add(overCut ? open : twin);
+                            if (!overCut) anyPaved = true;
+                        }
+                        if (!anyPaved) continue;
+                        ushort startNode = segments[segment].m_startNode, endNode = segments[segment].m_endNode;
+                        var split = SplitSegment(segment, cuts.ToArray(), infos.ToArray(), build);
+                        changed += infos.Count;
+                        // The nodes at a paved piece's ends.
+                        var chain = new List<ushort> { startNode };
+                        if (split != null) chain.AddRange(split.Nodes);
+                        chain.Add(endNode);
+                        for (int k = 0; k < infos.Count && k + 1 < chain.Count; k++)
+                            if (infos[k] == twin)
+                            {
+                                paved.Add(chain[k]);
+                                paved.Add(chain[k + 1]);
+                            }
+                    }
+                    foreach (ushort node in paved)
+                    {
+                        if (!NodeExists(node)) continue;
+                        var twin = SplitRoads.PavedTwinOf(nodes[node].Info);
+                        if (twin == null) continue;
+                        build.NodeInfos.Add(new KeyValuePair<ushort, NetInfo>(node, nodes[node].Info));
+                        SetNodeInfo(node, twin);
+                    }
+                    if (changed > 0) Keep(build);
+                    Mod.Log("  Median cut: the gap paved outside the open cut (" + openFrom.ToString("F0") + "-" + openTo.ToString("F0") +
+                            " m along the line): " + changed + " piece(s), " + paved.Count + " node(s)");
+                }
+                catch (Exception e)
+                {
+                    Mod.LogError("Paving the median cut's gap failed; put back (the gap stays open)", e);
+                    Remove(build);
+                    changed = -1;
+                }
+                if (done != null) done(changed);
+            });
+        }
+
         // A median cut's road node at 'p': the road there (a ground road with
         // 'lanes' lanes, running along 'heading' within 30 degrees) split at it,
         // or its end node if 'p' is by one. One build in 'group'; 'done' is told
