@@ -127,6 +127,13 @@ namespace RealisticRoads
             }
         }
 
+        // One icon as its own texture (for UnifiedUI's toolbar); null if it can't load.
+        public static Texture2D Texture(string name)
+        {
+            try { return Load(typeof(Icons).Assembly, name); }
+            catch (Exception e) { Mod.LogError("Loading icon " + name + " failed", e); return null; }
+        }
+
         private static Texture2D Load(Assembly assembly, string name)
         {
             string path = null;

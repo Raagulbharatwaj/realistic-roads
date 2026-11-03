@@ -1328,9 +1328,7 @@ namespace RealisticRoads
                         // Over our cutting and its banks, measured along the road crossed;
                         // at an angle that road's own edge reaches further along the
                         // cutting too (its half width x cot of the angle).
-                        float skew = Mathf.Clamp(crossing.Skew, 0.2f, 1f);
-                        float edge = crossing.ExistingHalfWidth * Mathf.Sqrt(1f - skew * skew) / skew;
-                        BridgeOver(plan, crossing, info.m_halfWidth / skew + UnderpassBridgeExtra + edge, touched, build);
+                        BridgeOver(plan, crossing, UnderpassReach(crossing, info), touched, build);
                     }
                 }
 
@@ -1509,6 +1507,17 @@ namespace RealisticRoads
             public Vector3 Target;       // SlideIn / SlideOut: where the node goes
             public Vector3 Tangent;      // and the road's direction there
             public float CutT;           // Cut: where on the crossed segment (0..1)
+        }
+
+        // How far the bridge put into the road above an underpass reaches
+        // either side of the crossing: over our cutting and its banks, measured
+        // along the road crossed; at an angle that road's own edge reaches
+        // further along the cutting too (its half width x cot of the angle).
+        public static float UnderpassReach(Crossing crossing, NetInfo info)
+        {
+            float skew = Mathf.Clamp(crossing.Skew, 0.2f, 1f);
+            float edge = crossing.ExistingHalfWidth * Mathf.Sqrt(1f - skew * skew) / skew;
+            return info.m_halfWidth / skew + UnderpassBridgeExtra + edge;
         }
 
         // The existing road above an underpass becomes a bridge for 'reach'

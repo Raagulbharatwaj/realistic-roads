@@ -41,6 +41,11 @@ namespace RealisticRoads
 
                 curveButton = CreateButton("RealisticRoadsCurveButton", "RR",
                     "Realistic Roads" + (Mod.ToolKey != KeyCode.None ? " (" + Mod.ToolKeyName + ")" : "") + "\nPick a road in the Roads menu first, then draw it with curves", 120f, ToggleCurveTool);
+                // In UnifiedUI's toolbar instead, when that mod is on.
+                if (UnifiedUIButton.Register(curveButton.tooltip.Replace("\nRight-drag to move this button", ""), Icons.Texture(Icons.Logo),
+                        on => { if (curveTool != null && on != curveTool.IsActive) ToggleCurveTool(); },
+                        tool => curveTool != null && tool == curveTool))
+                    curveButton.isVisible = false;
                 NetworkBuilder.ClearUndo();
 
                 Mod.Log("Tools ready: RR / " + Mod.ToolKeyName + " = curve tool");
@@ -67,6 +72,7 @@ namespace RealisticRoads
                     UnityEngine.Object.Destroy(curveTool);
                 }
                 if (curveButton != null) UnityEngine.Object.Destroy(curveButton.gameObject);
+                UnifiedUIButton.Release();
                 if (modeButton != null) UnityEngine.Object.Destroy(modeButton.gameObject);
             }
             catch (Exception e)

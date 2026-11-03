@@ -1307,6 +1307,8 @@ namespace RealisticRoads
                     overlay.DrawCircle(cameraInfo, BadColor, b.m_position, size, -1f, 1280f, false, true);
                 }
 
+                DrawCrossedRoads(cameraInfo, overlay, division, info, inThreeD);
+
                 var problems = !division.Plan.Ok;
                 foreach (var crossing in division.Crossings)
                 {
@@ -1319,6 +1321,53 @@ namespace RealisticRoads
                     overlay.DrawCircle(cameraInfo, color, crossing.Point, width + 6f, low, high, false, true);
                 }
             }
+        }
+
+        // What happens to the roads crossed: orange along a road lowered under
+        // an overpass (the crossed piece and the pieces on from the nodes moved
+        // down with it), blue along the stretch of a road that becomes a short
+        // bridge over an underpass. Drawn at that road's own height.
+        private void DrawCrossedRoads(RenderManager.CameraInfo cameraInfo, OverlayEffect overlay, Division division, NetInfo info, bool inThreeD)
+        {
+            var plan = division.Plan;
+            var net = NetManager.instance;
+            var segments = net.m_segments.m_buffer;
+            var drawn = new HashSet<ushort>();
+            foreach (var pair in plan.Lowerings)
+            {
+                var lowering = pair.Value;
+                DrawCrossedSegment(cameraInfo, overlay, lowering.Segment, 0f, 1f, LowColor, drawn, inThreeD);
+                foreach (ushort node in lowering.Nodes)
+                    for (int k = 0; k < 8; k++)
+                    {
+                        ushort segment = net.m_nodes.m_buffer[node].GetSegment(k);
+                        if (segment != 0) DrawCrossedSegment(cameraInfo, overlay, segment, 0f, 1f, LowColor, drawn, inThreeD);
+                    }
+            }
+            if (info == null) return;
+            foreach (var crossing in plan.Crossings)
+            {
+                if (crossing.Type != CrossingType.Underpass || !crossing.ExistingAtGround) continue;
+                if ((segments[crossing.Segment].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
+                float length = Mathf.Max(segments[crossing.Segment].m_averageLength, 1f);
+                float reach = NetworkBuilder.UnderpassReach(crossing, info) / length;
+                DrawCrossedSegment(cameraInfo, overlay, crossing.Segment, Mathf.Clamp01(crossing.ExistingT - reach),
+                    Mathf.Clamp01(crossing.ExistingT + reach), BridgeColor, null, inThreeD);
+            }
+        }
+
+        private static void DrawCrossedSegment(RenderManager.CameraInfo cameraInfo, OverlayEffect overlay, ushort segment, float from, float to,
+            Color color, HashSet<ushort> drawn, bool inThreeD)
+        {
+            if (segment == 0 || to - from < 0.01f || (drawn != null && !drawn.Add(segment))) return;
+            var s = NetManager.instance.m_segments.m_buffer[segment];
+            if ((s.m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || s.Info == null) return;
+            Vector3 a, b, c, d;
+            CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+            var bezier = new Bezier3(a, b, c, d).Cut(from, to);
+            float low = inThreeD ? Mathf.Min(bezier.a.y, bezier.d.y) - 6f : -1f;
+            float high = inThreeD ? Mathf.Max(bezier.a.y, bezier.d.y) + 6f : 1280f;
+            overlay.DrawBezier(cameraInfo, color, bezier, s.Info.m_halfWidth * 2f + 2f, 0f, 0f, low, high, false, true);
         }
 
         // The points (handles while planning), and the next point at the mouse.
