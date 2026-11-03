@@ -907,7 +907,7 @@ namespace RealisticRoads
         private string CursorText(bool withHover)
         {
             if (!withHover) return "";
-            var lines = new List<string>();
+            var lines = new List<string> { StepPrompt() };
             if (points.Count > 0 || deckMode) lines.Add(PieceText());
             if (aimNode != 0) lines.Add("Joins the road end here");
             else if (aimSegment != 0) lines.Add("Joins this road here (T-junction)");
@@ -928,6 +928,24 @@ namespace RealisticRoads
                 else if (!plan.Ok) lines.Add("Can't build yet: see the panel");
             }
             return string.Join("\n", lines.ToArray());
+        }
+
+        // What the next click does, first at the cursor.
+        private string StepPrompt()
+        {
+            int step = points.Count + 1;
+            string next;
+            if (rampMode)
+                next = points.Count == 0 ? "click the road the ramp leaves" : "click the road it joins (or a point on the way)";
+            else if (MedianCut)
+                next = points.Count == 0 ? "click a raised track's end (down) or a tunnel's end (up)" : "click where the line goes on";
+            else if (medianRamp != 0)
+                next = points.Count == 0 ? "click on the road (up) or a deck's end (down)" : "click where the ramp goes on";
+            else
+                next = points.Count == 0 ? "click where the road starts" : "click the next point";
+            string done = points.Count >= 2 ? "   ·   Enter: plan it (or double-click the last point)"
+                        : points.Count == 1 ? "   ·   double-click: the last point" : "";
+            return "Step " + step + ": " + next + done;
         }
 
         // Follows the mouse while it is over the map.
@@ -3837,6 +3855,7 @@ namespace RealisticRoads
                 panel.PickBeside = PickBeside;
                 panel.FlipDirection = FlipDirection;
                 panel.ToggleCentred = ToggleCentred;
+                panel.ApplyFix = ApplyFix;
                 panel.ToggleUpgrade = ToggleUpgrade;
                 panel.ToggleRamp = ToggleRamp;
                 panel.PickMedianRamp = PickMedianRamp;
@@ -3869,6 +3888,40 @@ namespace RealisticRoads
         }
 
         // What the side panel shows for the current curve.
+        // The one-click fixes under the problems (each sets crossings on its
+        // line to a bridge or a tunnel), in the order the panel shows them.
+        private readonly List<KeyValuePair<Division, QuickFix>> shownFixes = new List<KeyValuePair<Division, QuickFix>>();
+
+        private void AddFixes(PanelModel model, Division division, string prefix)
+        {
+            if (division == null || division.Plan == null || division.Setup == null || division.Setup.Types == null) return;
+            // Numbered as the panel's list numbers them (water crossings in it too).
+            var items = Along(division);
+            foreach (var fix in division.Plan.Fixes)
+            {
+                var numbers = new List<int>();
+                foreach (int key in fix.Keys)
+                    for (int n = 0; n < items.Count; n++)
+                        if (items[n].Crossing != null && items[n].Crossing.Key == key)
+                        {
+                            numbers.Add(n + 1);
+                            break;
+                        }
+                shownFixes.Add(new KeyValuePair<Division, QuickFix>(division, fix));
+                model.Fixes.Add(QuickFix.LabelFor(fix.Type, numbers.Count == fix.Keys.Count ? numbers : fix.Numbers, prefix));
+            }
+        }
+
+        private void ApplyFix(int index)
+        {
+            if (index < 0 || index >= shownFixes.Count) return;
+            var division = shownFixes[index].Key;
+            var fix = shownFixes[index].Value;
+            Mod.Log("Quick fix: " + fix.Label);
+            foreach (var crossing in division.Crossings)
+                if (fix.Keys.Contains(crossing.Key)) SetType(division, crossing, fix.Type);
+        }
+
         private PanelModel Model()
         {
             var model = new PanelModel
@@ -3964,6 +4017,9 @@ namespace RealisticRoads
             }
             model.Problems.AddRange(plan.Problems);
             model.Warnings.AddRange(plan.Warnings);
+            shownFixes.Clear();
+            AddFixes(model, division, "");
+            if (parallelMode && medianRamp == 0) AddFixes(model, second, "P");
             model.CanBuild = DrawNetwork != null && division.Ok && plan.Ok;
             if (parallelMode)
             {

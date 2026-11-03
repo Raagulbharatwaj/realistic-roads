@@ -16,6 +16,7 @@ namespace RealisticRoads
         // Crossings and water bridges, in order along the road (numbered as on the map).
         public readonly List<PanelCrossing> Items = new List<PanelCrossing>();
         public readonly List<string> Problems = new List<string>();
+        public readonly List<string> Fixes = new List<string>();      // buttons under the problems that clear one
         public readonly List<string> Warnings = new List<string>();
         public bool CanBuild;
         public bool HasPoints;
@@ -164,6 +165,7 @@ namespace RealisticRoads
         public Action ToggleDeck, ToggleUnder;
         // The parallel line: on / off, the gap, which side, and what it is.
         public Action ToggleParallel, FlipSide, PickBeside, FlipDirection, ToggleCentred;
+        public Action<int> ApplyFix;
         public Action<float> ChangeGap;
         private UIButton parallelButton, sideButton, besideButton, directionButton, centredButton;
         private UILabel gapLabel;
@@ -702,6 +704,7 @@ namespace RealisticRoads
                 shape.Append(':').Append((int)crossing.Selected).Append(crossing.HeightButtons).Append(';');
             }
             shape.Append('|').Append(model.Items.Count).Append('|').Append(model.Problems.Count).Append('|').Append(model.Warnings.Count);
+            foreach (var fix in model.Fixes) shape.Append('|').Append(fix);
             return shape.ToString();
         }
 
@@ -852,6 +855,27 @@ namespace RealisticRoads
                 {
                     int index = i;
                     y = Text(m => index < m.Problems.Count ? "• " + m.Problems[index] : "", ProblemColor, 0.75f, y);
+                }
+                // One click that clears a problem: two to a row.
+                float fixWidth = (Width - 2f * Pad - 6f) / 2f;
+                for (int i = 0; i < model.Fixes.Count; i++)
+                {
+                    int index = i;
+                    var button = (UIButton)(parent ?? panel).AddUIComponent(typeof(UIButton));
+                    button.size = new Vector2(fixWidth, 22f);
+                    button.relativePosition = new Vector3(Pad + (i % 2) * (fixWidth + 6f), y);
+                    button.text = model.Fixes[i];
+                    button.textScale = 0.7f;
+                    button.tooltip = "Fix: " + model.Fixes[i];
+                    button.normalBgSprite = button.focusedBgSprite = "ButtonMenu";
+                    button.hoveredBgSprite = "ButtonMenuHovered";
+                    button.pressedBgSprite = "ButtonMenuPressed";
+                    button.eventClick += (component, param) =>
+                    {
+                        if ((param.buttons & UIMouseButton.Left) != 0 && ApplyFix != null) ApplyFix(index);
+                    };
+                    dynamic.Add(button);
+                    if (i % 2 == 1 || i == model.Fixes.Count - 1) y += 22f + RowGap;
                 }
             }
             if (model.Warnings.Count > 0)
