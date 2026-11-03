@@ -58,8 +58,63 @@ namespace RealisticRoads
             set { hideRampJunctions = value; SetSetting("RealisticRoads.HideRampJunctions", value); }
         }
 
+        // The key that opens and closes RR's curve tool (Ctrl+Shift+C at first),
+        // changed or removed in Options > Mod Settings (it clashes with other
+        // mods' keys, e.g. Intersection Marking Tool's). KeyCode.None: no key.
+        public const KeyCode DefaultToolKey = KeyCode.C;
+        private static KeyCode toolKey = DefaultToolKey;
+        private static bool toolCtrl = true, toolShift = true, toolAlt;
+
+        public static KeyCode ToolKey => toolKey;
+
+        public static void SetToolKey(KeyCode key, bool ctrl, bool shift, bool alt)
+        {
+            toolKey = key;
+            toolCtrl = ctrl;
+            toolShift = shift;
+            toolAlt = alt;
+            try
+            {
+                PlayerPrefs.SetInt("RealisticRoads.ToolKey", (int)key);
+                PlayerPrefs.SetInt("RealisticRoads.ToolKeyMods", (ctrl ? 1 : 0) | (shift ? 2 : 0) | (alt ? 4 : 0));
+                PlayerPrefs.Save();
+            }
+            catch { }
+            Log("Curve tool key: " + ToolKeyName);
+        }
+
+        // "Ctrl+Shift+C", or "none".
+        public static string ToolKeyName =>
+            toolKey == KeyCode.None ? "none" : (toolCtrl ? "Ctrl+" : "") + (toolShift ? "Shift+" : "") + (toolAlt ? "Alt+" : "") + toolKey;
+
+        // Main thread: the tool's key pressed this frame (with exactly its modifiers).
+        public static bool ToolKeyPressed()
+        {
+            if (toolKey == KeyCode.None || !Input.GetKeyDown(toolKey)) return false;
+            bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            bool alt = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt) || Input.GetKey(KeyCode.AltGr);
+            return ctrl == toolCtrl && shift == toolShift && alt == toolAlt;
+        }
+
+        private static bool IsModifier(KeyCode key) =>
+            key == KeyCode.LeftControl || key == KeyCode.RightControl || key == KeyCode.LeftShift || key == KeyCode.RightShift ||
+            key == KeyCode.LeftAlt || key == KeyCode.RightAlt || key == KeyCode.AltGr || key == KeyCode.LeftCommand || key == KeyCode.RightCommand;
+
         private static void LoadSettings()
         {
+            try
+            {
+                if (PlayerPrefs.HasKey("RealisticRoads.ToolKey"))
+                {
+                    toolKey = (KeyCode)PlayerPrefs.GetInt("RealisticRoads.ToolKey");
+                    int mods = PlayerPrefs.GetInt("RealisticRoads.ToolKeyMods");
+                    toolCtrl = (mods & 1) != 0;
+                    toolShift = (mods & 2) != 0;
+                    toolAlt = (mods & 4) != 0;
+                }
+            }
+            catch { }
             debugLogging = Setting("RealisticRoads.DebugLogging", false);
             // Off by default: the start pieces' and ramp's corner offset
             // of 0 squares them; RR's own corner override is a test now.
@@ -157,6 +212,40 @@ namespace RealisticRoads
         {
             var group = helper.AddGroup("Realistic Roads");
             group.AddCheckbox("Detailed logging (every segment the game creates)", DebugLogging, value => DebugLogging = value);
+            // The curve tool's key: click, then press the keys (Esc: keep it,
+            // Backspace or Delete: no key); or remove it, or back to Ctrl+Shift+C.
+            var keys = helper.AddGroup("Curve tool key");
+            UIButton keyButton = null;
+            bool capturing = false;
+            keyButton = keys.AddButton("Key: " + ToolKeyName + "  (click to change)", () =>
+            {
+                if (keyButton == null || capturing) return;
+                capturing = true;
+                keyButton.text = "Press the keys now (Esc: keep, Backspace: none)";
+                UIView.PushModal(keyButton);
+                keyButton.Focus();
+            }) as UIButton;
+            if (keyButton != null)
+                keyButton.eventKeyDown += (component, p) =>
+                {
+                    if (!capturing || IsModifier(p.keycode)) return;
+                    p.Use();
+                    capturing = false;
+                    UIView.PopModal();
+                    if (p.keycode == KeyCode.Backspace || p.keycode == KeyCode.Delete) SetToolKey(KeyCode.None, false, false, false);
+                    else if (p.keycode != KeyCode.Escape) SetToolKey(p.keycode, p.control, p.shift, p.alt);
+                    keyButton.text = "Key: " + ToolKeyName + "  (click to change)";
+                };
+            keys.AddButton("No key (the RR button only)", () =>
+            {
+                SetToolKey(KeyCode.None, false, false, false);
+                if (keyButton != null) keyButton.text = "Key: " + ToolKeyName + "  (click to change)";
+            });
+            keys.AddButton("Back to Ctrl+Shift+C", () =>
+            {
+                SetToolKey(DefaultToolKey, true, true, false);
+                if (keyButton != null) keyButton.text = "Key: " + ToolKeyName + "  (click to change)";
+            });
             var test = helper.AddGroup("Median ramp node tests");
             test.AddCheckbox("RR's own square ends at a median ramp's node (off: the game's corners with offset 0)", SquareRampEnds, value => SquareRampEnds = value);
             test.AddCheckbox("Ramp and start pieces draw no junction models (takes effect when a city loads)", HideRampJunctions, value => HideRampJunctions = value);
