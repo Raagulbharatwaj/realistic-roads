@@ -52,7 +52,7 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
 ## 5. Curve tool: build CS2-style curves (milestones 3 + 4)
 1. Pick a road in the vanilla **Roads** menu (e.g. Basic Road or Oneway Road), then click the **RR** button (the
    curved-road icon; also next to the game's Straight / Curved / Freeform / Upgrade buttons while its road tool is
-   open) or press **Ctrl+Shift+C**. **RR is then a mode:** every road you pick in the Roads menu opens in RR, until
+   open) or press **Ctrl+Shift+C** (change it, or remove it, in Options > Mod Settings > Curve tool key: it clashes with Intersection Marking Tool's). **RR is then a mode:** every road you pick in the Roads menu opens in RR, until
    you leave it (Esc twice, the X, the **Game tool** button, or the RR button again). The **Realistic Roads** panel
    opens (drag its title bar to move it; the place is remembered). It shows:
    - **Road**: the road you are drawing, and the next point's height (Page Up / Page Down);
