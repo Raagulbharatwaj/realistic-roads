@@ -262,6 +262,7 @@ namespace RealisticRoads
             public float GapFrom, GapTo = -1f;
             public List<ushort> Blocking = new List<ushort>();   // buildings its ground-level stretches run through (marked on the map)
             public float CutFrom = -1f, CutTo = -1f;
+            public float OpenFrom = -1f, OpenTo = -1f;   // where its road's gap stays open (the low track, the cut, the portal); paved outside
             public List<Vector3> Points;
             public List<Vector3> Tangents;      // leaving each point
             public List<Vector3> InTangents;    // arriving at it (differs at a sharp corner)
@@ -2302,9 +2303,7 @@ namespace RealisticRoads
         private PanelModel UpgradeModel(PanelModel model)
         {
             string road = SelectedNetwork != null ? Title(SelectedNetwork) : "the picked road";
-            model.Mode = "UPGRADE: click a road where the upgrade starts, then where it ends; the roads between become " + road +
-                         " (same shape, same junctions). A point on the middle of a road cuts it there: only the part between the points changes. " +
-                         "A cheaper road costs nothing and gives no refund. Check mark / Enter: upgrade. Right-click: take back a point. Upgrade button: back to drawing.";
+            model.Mode = "Upgrade to " + road + ": click where it starts, then where it ends. Enter upgrades, right-click takes back a point.";
             model.HasPoints = upgradePoints.Count > 0;
             var plan = upgradePlan;
             if (plan == null)
@@ -3382,6 +3381,8 @@ namespace RealisticRoads
                         again.GapTo = division.GapTo;
                         again.CutFrom = division.CutFrom;
                         again.CutTo = division.CutTo;
+                        again.OpenFrom = division.OpenFrom;
+                        again.OpenTo = division.OpenTo;
                         division = again;
                     }
                 }
@@ -3976,13 +3977,11 @@ namespace RealisticRoads
                 Ramp = rampMode,
                 MedianRamp = medianRamp != 0 ? MedianRampNames[medianRamp] : null,
                 MedianChoice = medianRamp,
-                Height = "Next point: " + FormatLift(lift) + "   (Page Up / Page Down, Shift: 1 m)",
+                Height = "Next point: " + FormatLift(lift) + "  ·  Page Up / Down",
                 Mode = planning
-                    ? "PLANNING: drag the points to adjust; Shift+click the curve: add a point; right-click a point: remove it; pick each crossing here or on the map. " +
-                      "Check mark / Enter: build. Right-click elsewhere or Esc: back to drawing (Esc again: clear)."
-                    : points.Count == 0 ? "DRAWING: click to place the first point. Tab: straight / curved pieces."
-                    : "DRAWING: click to add points (Tab: straight / curved; type a length or turn above for an exact point). " +
-                      "Double-click or Enter when done, to check and adjust the plan before building.",
+                    ? "Planning: drag points, Shift+click to add one. Enter builds, Esc goes back."
+                    : points.Count == 0 ? "Click on the map to start."
+                    : "Drawing: click to add points. Double-click or Enter to plan it.",
             };
             if (upgradeMode) return UpgradeModel(model);
             var division = preview;

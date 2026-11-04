@@ -330,7 +330,7 @@ namespace RealisticRoads
         // outside the cut becomes its paved twin on the same nodes; one across an
         // end of the cut is cut there (unless that is within MinPart of its end:
         // then it goes by the most of it). The nodes by a paved piece are paved
-        // too. One build in 'group'; 'done' is told how many pieces changed (-1:
+        // too (not a node by an open piece too: it stays open). One build in 'group'; 'done' is told how many pieces changed (-1:
         // it failed and was put back; the cut stays as it was).
         private const float MinPart = 6f;
 
@@ -380,15 +380,18 @@ namespace RealisticRoads
                             cuts.Add(CrossingFinder.ClosestT(segment, p, out onRoad));
                         }
                         cuts.Sort();
-                        // Each piece: open if its middle is over the cut, else paved.
+                        // Each piece: open if any of it is in the open stretch (a cut
+                        // left out for being too near an end errs open), else paved.
                         var infos = new List<NetInfo>();
                         bool anyPaved = false;
                         for (int k = 0; k <= cuts.Count; k++)
                         {
                             float t0 = k == 0 ? 0f : cuts[k - 1], t1 = k == cuts.Count ? 1f : cuts[k];
-                            float pieceMid;
-                            OffLine(line, CurveMath.Bezier(a, b, c, d, (t0 + t1) * 0.5f), out pieceMid);
-                            bool overCut = pieceMid > openFrom && pieceMid < openTo;
+                            float at0, at1;
+                            OffLine(line, CurveMath.Bezier(a, b, c, d, t0), out at0);
+                            OffLine(line, CurveMath.Bezier(a, b, c, d, t1), out at1);
+                            float pieceLo = Mathf.Min(at0, at1) + 0.5f, pieceHi = Mathf.Max(at0, at1) - 0.5f;
+                            bool overCut = pieceHi > openFrom && pieceLo < openTo;
                             infos.Add(overCut ? open : twin);
                             if (!overCut) anyPaved = true;
                         }
@@ -412,6 +415,15 @@ namespace RealisticRoads
                         if (!NodeExists(node)) continue;
                         var twin = SplitRoads.PavedTwinOf(nodes[node].Info);
                         if (twin == null) continue;
+                        // By an open piece too: it stays open (paving there could come up
+                        // through the low track or the portal).
+                        bool byOpen = false;
+                        for (int i = 0; i < 8; i++)
+                        {
+                            ushort s = nodes[node].GetSegment(i);
+                            if (s != 0 && SplitRoads.PavedTwinOf(segments[s].Info) != null) byOpen = true;
+                        }
+                        if (byOpen) continue;
                         build.NodeInfos.Add(new KeyValuePair<ushort, NetInfo>(node, nodes[node].Info));
                         SetNodeInfo(node, twin);
                     }
