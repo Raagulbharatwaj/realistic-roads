@@ -56,9 +56,12 @@ A good start looks like `Enabled, version ...`, one `Patched ...` line per patch
    you leave it (Esc twice, the X, the **Game tool** button, or the RR button again). With **UnifiedUI** on, the RR
    button is in its toolbar instead of floating on the screen. The **Realistic Roads** panel
    opens (drag its title bar to move it; the place is remembered). Its buttons are in four tabs, by what you build:
-   **Draw** (curved or straight pieces, snapping, corners, an exact length or turn, Parallel), **Decks** (over or
-   under the roads), **Ramps & cuts** (a slip ramp, the median ramp roads, the median cuts) and **Upgrade**. Leaving
-   Ramps & cuts or Upgrade turns its mode off. The mouse wheel works on every -/+ (corner, gap, crossing heights). It shows:
+   **Draw** (curved or straight pieces, snapping, corners, **Exact** for a typed length and turn, Parallel), **Decks**
+   (over or under the roads), **Ramps** (a slip ramp, the median ramp roads, the median cuts) and **Upgrade**. Leaving
+   Ramps or Upgrade turns its mode off. The mouse wheel works on every -/+ (corner, gap, crossing heights). The
+   Road, Side view, Along the road and Notes sections fold away with **Hide** (Show brings them back); the open tab,
+   Exact and the folded sections are remembered. At the bottom: a **Build** button with the cost (lit when it can be
+   built) and the keys for the open tab. It shows:
    - **Road**: the road you are drawing, and the next point's height (Page Up / Page Down);
    - **Curve**: length, segments, cost, and whether it is raised or lowered anywhere;
    - **Side view**: the curve seen from the side: the road's height against the ground (and water) along it, in the
