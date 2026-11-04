@@ -86,21 +86,28 @@ namespace RealisticRoads
             isActive = null;
         }
 
+        // The enabled UnifiedUI mod (its IUserMod is in the UnifiedUI namespace)
+        // and, among its assemblies, UnifiedUILib, which has the API. (The mod's
+        // own assembly, UnifiedUIMod, doesn't: looking there found nothing.)
         private static Type FindApi()
         {
             foreach (var plugin in PluginManager.instance.GetPluginsInfo())
             {
                 if (plugin == null || !plugin.isEnabled || plugin.userModInstance == null) continue;
-                var modAssembly = plugin.userModInstance.GetType().Assembly;
-                if (modAssembly.GetType(ApiName) == null) continue;
+                var modType = plugin.userModInstance.GetType();
+                if (modType.Namespace == null || !modType.Namespace.StartsWith("UnifiedUI")) continue;
                 foreach (var assembly in plugin.GetAssemblies())
-                    if (assembly.GetName().Name == LibName)
-                    {
-                        var api = assembly.GetType(ApiName);
-                        if (api != null) return api;
-                    }
-                return modAssembly.GetType(ApiName);
+                {
+                    if (assembly.GetName().Name != LibName) continue;
+                    var api = assembly.GetType(ApiName);
+                    if (api != null) return api;
+                }
+                var own = modType.Assembly.GetType(ApiName);
+                if (own != null) return own;
+                Mod.Log("UnifiedUI is on, but its " + LibName + " (with " + ApiName + ") wasn't found: the floating RR button is used");
+                return null;
             }
+            Mod.Log("UnifiedUI isn't on: the floating RR button is used");
             return null;
         }
     }

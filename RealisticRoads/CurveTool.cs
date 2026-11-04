@@ -2313,6 +2313,7 @@ namespace RealisticRoads
             }
             model.Summary = plan.Segments.Count + " segment(s), " + plan.Length.ToString("N0") + " m become " + road +
                             (plan.Cost > 0 ? "   ·   cost " + (plan.Cost / 100).ToString("N0") : "");
+            model.Cost = plan.Cost;
             model.Details = plan.Unchanged > 0 ? plan.Unchanged + " segment(s) on the way already are" : "";
             model.Problems.AddRange(plan.Problems);
             model.Warnings.AddRange(plan.Warnings);
@@ -3980,7 +3981,7 @@ namespace RealisticRoads
                 Height = "Next point: " + FormatLift(lift) + "  ·  Page Up / Down",
                 Mode = planning
                     ? "Planning: drag points, Shift+click to add one. Enter builds, Esc goes back."
-                    : points.Count == 0 ? "Click on the map to start."
+                    : points.Count == 0 ? ""
                     : "Drawing: click to add points. Double-click or Enter to plan it.",
             };
             if (upgradeMode) return UpgradeModel(model);
@@ -4000,6 +4001,7 @@ namespace RealisticRoads
             }
             model.Summary = division.Length.ToString("N0") + " m in " + (division.Points.Count - 1) + " segment(s)" +
                             (division.Cost > 0 ? "   ·   cost " + (division.Cost / 100).ToString("N0") : "");
+            model.Cost = division.Cost;
             var details = new List<string>();
             if (raised > 0) details.Add("raised in places");
             if (plan.OnDeck != null)
@@ -4042,6 +4044,7 @@ namespace RealisticRoads
                 AddItems(model, second, "P");
                 model.Summary += "   ·   " + (medianRamp != 0 ? "ground road " : "parallel ") + second.Length.ToString("N0") + " m" +
                                  (second.Cost > 0 ? ", cost " + (second.Cost / 100).ToString("N0") : "");
+                model.Cost += second.Cost;
             }
             model.Problems.AddRange(plan.Problems);
             model.Warnings.AddRange(plan.Warnings);

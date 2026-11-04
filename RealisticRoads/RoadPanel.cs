@@ -19,6 +19,7 @@ namespace RealisticRoads
         public readonly List<string> Fixes = new List<string>();      // buttons under the problems that clear one
         public readonly List<string> Warnings = new List<string>();
         public bool CanBuild;
+        public int Cost;                          // what building it costs (the game's money units, a hundredth of the shown)
         public bool HasPoints;
         public bool Straight;                     // the next piece is straight (else curved)
         public float Radius;                      // corners between straight pieces (0: sharp)
@@ -246,6 +247,7 @@ namespace RealisticRoads
                 "Build it (Enter, or double-click the last point)", () => { if (Build != null) Build(); });
             SetEnabled(buildButton, false);
             SetEnabled(undoButton, false);
+            LoadLayout();
             CreateDrawBar();
 
             panel.isVisible = false;
@@ -275,6 +277,7 @@ namespace RealisticRoads
             public UIComponent Component;
             public int Tab;
             public bool ParallelOnly;      // shown only while Parallel is on
+            public bool ExactOnly;         // shown only while Exact is open
         }
         private readonly List<BarItem> barItems = new List<BarItem>();
         private readonly Dictionary<UIButton, UILabel> captions = new Dictionary<UIButton, UILabel>();
@@ -291,10 +294,69 @@ namespace RealisticRoads
             "Click where the upgrade starts, then where it ends.",
         };
 
-        private void Put(UIComponent component, int tab, int row, bool parallelOnly = false)
+        private void Put(UIComponent component, int tab, int row, bool parallelOnly = false, bool exactOnly = false)
         {
             if (component == null) return;
-            barItems.Add(new BarItem { Component = component, Tab = tab, ParallelOnly = parallelOnly });
+            barItems.Add(new BarItem { Component = component, Tab = tab, ParallelOnly = parallelOnly, ExactOnly = exactOnly });
+        }
+
+        // --- remembered between sessions: the open tab, Exact, folded sections ----
+
+        private UIButton exactButton;
+        private bool exactShown;
+        private readonly HashSet<string> folded = new HashSet<string>();
+        private const string TabKey = PositionKey + ".Tab", ExactKey = PositionKey + ".Exact", FoldKey = PositionKey + ".Folded";
+
+        private void LoadLayout()
+        {
+            try
+            {
+                tab = Mathf.Clamp(PlayerPrefs.GetInt(TabKey, 0), 0, 2);   // Upgrade isn't opened by itself
+                exactShown = PlayerPrefs.GetInt(ExactKey, 0) != 0;
+                folded.Clear();
+                foreach (var name in PlayerPrefs.GetString(FoldKey, "").Split(','))
+                    if (name.Length > 0) folded.Add(name);
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Reading the panel's layout", e);
+            }
+        }
+
+        private void SaveLayout()
+        {
+            try
+            {
+                PlayerPrefs.SetInt(TabKey, tab);
+                PlayerPrefs.SetInt(ExactKey, exactShown ? 1 : 0);
+                PlayerPrefs.SetString(FoldKey, string.Join(",", new List<string>(folded).ToArray()));
+                PlayerPrefs.Save();
+            }
+            catch (Exception e)
+            {
+                Mod.LogError("Saving the panel's layout", e);
+            }
+        }
+
+        private void ToggleExact()
+        {
+            exactShown = !exactShown;
+            // Closed: what was typed goes, so it doesn't place the next point unseen.
+            if (!exactShown)
+            {
+                ClearTyped();
+                SendTyped();
+            }
+            SaveLayout();
+            if (current != null) Show(current);
+        }
+
+        private void ToggleFold(string section)
+        {
+            if (!folded.Remove(section)) folded.Add(section);
+            SaveLayout();
+            structure = null;
+            if (current != null) Show(current);
         }
 
         // A tool's button with its name under it, in a tab.
@@ -398,17 +460,29 @@ namespace RealisticRoads
             Put(radiusPlus, 0, 0);
             Put(Caption("Corner", x + SmallIcon + 26f, y + BarIcon + 2f), 0, 0);
 
-            // Draw, row 1: an exact length and turn for the next point.
+            // Draw, row 1: an exact length and turn for the next point, behind
+            // the Exact button (only needed for precise drawing).
             y = RowsTop + DrawRows[1];
-            Put(BarLabel("Length", Pad, y + 4f, 50f), 0, 1);
-            lengthField = BarField(Pad + 52f, y, 64f, "Length of the next piece in metres; Enter places the point");
-            Put(lengthField, 0, 1);
-            Put(BarLabel("m", Pad + 120f, y + 4f, 18f), 0, 1);
-            Put(BarLabel("Turn", Pad + 148f, y + 4f, 40f), 0, 1);
-            turnField = BarField(Pad + 190f, y, 56f,
+            exactButton = (UIButton)panel.AddUIComponent(typeof(UIButton));
+            exactButton.size = new Vector2(58f, 22f);
+            exactButton.relativePosition = new Vector3(Pad, y);
+            exactButton.text = "Exact";
+            exactButton.textScale = 0.75f;
+            exactButton.normalBgSprite = exactButton.focusedBgSprite = "ButtonMenu";
+            exactButton.hoveredBgSprite = "ButtonMenuHovered";
+            exactButton.pressedBgSprite = "ButtonMenuPressed";
+            exactButton.tooltip = "An exact length and turn for the next point (typed; Enter places it)";
+            exactButton.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0) ToggleExact(); };
+            Put(exactButton, 0, 1);
+            Put(BarLabel("Length", Pad + 66f, y + 4f, 46f), 0, 1, false, true);
+            lengthField = BarField(Pad + 112f, y, 56f, "Length of the next piece in metres; Enter places the point");
+            Put(lengthField, 0, 1, false, true);
+            Put(BarLabel("m", Pad + 171f, y + 4f, 16f), 0, 1, false, true);
+            Put(BarLabel("Turn", Pad + 192f, y + 4f, 36f), 0, 1, false, true);
+            turnField = BarField(Pad + 228f, y, 50f,
                 "Turn from the last piece in degrees: + right, - left (the first piece: bearing from north); Enter places the point");
-            Put(turnField, 0, 1);
-            Put(BarLabel("°", Pad + 250f, y + 4f, 20f), 0, 1);
+            Put(turnField, 0, 1, false, true);
+            Put(BarLabel("°", Pad + 281f, y + 4f, 16f), 0, 1, false, true);
 
             // Draw, row 2: Parallel, a second road beside the curve (a one-way
             // pair, or a road and a track), and its gap while it is on.
@@ -529,6 +603,7 @@ namespace RealisticRoads
                 if (picked == 3 && !model.Upgrade && ToggleUpgrade != null) ToggleUpgrade();
             }
             tab = picked;
+            SaveLayout();
             structure = null;   // the rows below move: laid out again
             if (current != null) Show(current);
         }
@@ -557,8 +632,13 @@ namespace RealisticRoads
             }
             foreach (var item in barItems)
             {
-                bool show = item.Tab == tab && (!item.ParallelOnly || model.Parallel);
+                bool show = item.Tab == tab && (!item.ParallelOnly || model.Parallel) && (!item.ExactOnly || exactShown);
                 if (item.Component.isVisible != show) item.Component.isVisible = show;
+            }
+            if (exactButton != null)
+            {
+                string bg = exactShown ? "ButtonMenuPressed" : "ButtonMenu";
+                if (exactButton.normalBgSprite != bg) exactButton.normalBgSprite = exactButton.focusedBgSprite = bg;
             }
             if (tabHint != null)
             {
@@ -663,6 +743,10 @@ namespace RealisticRoads
                     sprite.size = new Vector2(inner, inner);
                     sprite.relativePosition = new Vector3((button.size.x - inner) / 2f, (button.size.y - inner) / 2f);
                     sprite.isInteractive = false;
+                    // The game's button turns white under the mouse: RR's light icon
+                    // goes dark on it then, as the game's own icons do.
+                    button.eventMouseEnter += (component, param) => { if (sprite != null) sprite.color = new Color32(55, 60, 70, 255); };
+                    button.eventMouseLeave += (component, param) => { if (sprite != null) sprite.color = new Color32(255, 255, 255, 255); };
                 }
                 else
                 {
@@ -864,6 +948,7 @@ namespace RealisticRoads
             current = model;
             SetEnabled(buildButton, model.CanBuild);
             SetEnabled(undoButton, NetworkBuilder.UndoCount > 0);
+            UpdateBottomBuild(model);
             UpdateDrawBar(model);
             string shape = Shape(model);
             if (shape != structure)
@@ -888,7 +973,8 @@ namespace RealisticRoads
         private string Shape(PanelModel model)
         {
             var shape = new System.Text.StringBuilder();
-            shape.Append(model.HasPoints).Append(model.CanBuild).Append(model.Profile != null).Append('|').Append(page).Append('|').Append(tab).Append('|');
+            shape.Append(model.HasPoints).Append(model.CanBuild).Append(model.Profile != null).Append('|').Append(page).Append('|').Append(tab).Append('|')
+                .Append(string.Join(",", new List<string>(folded).ToArray())).Append('|');
             shape.Append(Lines(model.ProfileText, Width - 2f * Pad, 0.75f)).Append(Lines(model.Height, Width - 2f * Pad, 0.75f))
                 .Append(Lines(model.Mode, Width - 2f * Pad, 0.75f));
             // A text that wraps to more or fewer lines moves everything under it.
@@ -919,9 +1005,12 @@ namespace RealisticRoads
             parent = panel;
             float y = ContentTop;
 
-            y = Header("ROAD", y);
-            y = Text(m => m.Road, TextColor, 0.85f, y);
-            y = Text(m => m.Height, DimColor, 0.75f, y);
+            y = Header("ROAD", y, "road");
+            if (!Folded("road"))
+            {
+                y = Text(m => m.Road, TextColor, 0.85f, y);
+                y = Text(m => m.Height, DimColor, 0.75f, y);
+            }
             y = Text(m => m.Mode, DimColor, 0.75f, y);
 
             y = Header("CURVE", y);
@@ -937,7 +1026,10 @@ namespace RealisticRoads
             shapeHint = null;
             if (model.Profile != null)
             {
-                y = Header("SIDE VIEW", y);
+                y = Header("SIDE VIEW", y, "side");
+            }
+            if (model.Profile != null && !Folded("side"))
+            {
                 profileSprite = (UITextureSprite)panel.AddUIComponent(typeof(UITextureSprite));
                 profileSprite.size = new Vector2(ProfileWidth, ProfileHeight);
                 profileSprite.relativePosition = new Vector3(Pad, y);
@@ -1007,7 +1099,10 @@ namespace RealisticRoads
 
             if (model.Items.Count > 0)
             {
-                y = Header("ALONG THE ROAD", y);
+                y = Header("ALONG THE ROAD", y, "along");
+            }
+            if (model.Items.Count > 0 && !Folded("along"))
+            {
                 // A page of PageSize at a time, with arrows to go through them.
                 int pages = (model.Items.Count + PageSize - 1) / PageSize;
                 page = Mathf.Clamp(page, 0, pages - 1);
@@ -1083,7 +1178,10 @@ namespace RealisticRoads
             }
             if (model.Warnings.Count > 0)
             {
-                y = Header("NOTES", y);
+                y = Header("NOTES", y, "notes");
+            }
+            if (model.Warnings.Count > 0 && !Folded("notes"))
+            {
                 for (int i = 0; i < model.Warnings.Count; i++)
                 {
                     int index = i;
@@ -1091,7 +1189,49 @@ namespace RealisticRoads
                 }
             }
 
+            // The build button: what it builds and costs, lit when it can be built.
+            bottomBuild = null;
+            if (model.HasPoints)
+            {
+                y += 6f;
+                bottomBuild = (UIButton)(parent ?? panel).AddUIComponent(typeof(UIButton));
+                bottomBuild.size = new Vector2(Width - 2f * Pad, 34f);
+                bottomBuild.relativePosition = new Vector3(Pad, y);
+                bottomBuild.textScale = 0.95f;
+                bottomBuild.normalBgSprite = bottomBuild.focusedBgSprite = "ButtonMenu";
+                bottomBuild.hoveredBgSprite = "ButtonMenuHovered";
+                bottomBuild.pressedBgSprite = "ButtonMenuPressed";
+                bottomBuild.disabledBgSprite = "ButtonMenuDisabled";
+                bottomBuild.tooltip = "Build it (Enter)";
+                bottomBuild.eventClick += (component, param) =>
+                {
+                    if ((param.buttons & UIMouseButton.Left) != 0 && bottomBuild != null && bottomBuild.isEnabled && Build != null) Build();
+                };
+                dynamic.Add(bottomBuild);
+                UpdateBottomBuild(model);
+                y += 34f + RowGap;
+            }
+            // The keys, for the open tab.
+            y = Text(m => KeysFor(m), DimColor, 0.7f, y + 2f);
+
             panel.size = new Vector2(Width, y + Pad);
+        }
+
+        private UIButton bottomBuild;
+
+        private void UpdateBottomBuild(PanelModel model)
+        {
+            if (bottomBuild == null) return;
+            string what = model.Upgrade ? "Upgrade" : "Build";
+            string text = what + (model.Cost > 0 ? "   ·   " + (model.Cost / 100).ToString("N0") : "");
+            if (bottomBuild.text != text) bottomBuild.text = text;
+            SetEnabled(bottomBuild, model.CanBuild);
+        }
+
+        private string KeysFor(PanelModel model)
+        {
+            if (model.Upgrade) return "Enter: upgrade  ·  right-click: take back a point  ·  Esc: leave";
+            return "Enter: plan, then build  ·  Esc: back  ·  Page Up / Down: height" + (tab == 0 ? "  ·  Tab: curved / straight" : "");
         }
 
         // Heights are worked out here rather than read back from the label (the
@@ -1163,7 +1303,7 @@ namespace RealisticRoads
 
         private PanelCrossing Row(int index) => current != null && index < current.Items.Count ? current.Items[index] : null;
 
-        private float Header(string text, float y)
+        private float Header(string text, float y, string fold = null)
         {
             var label = (UILabel)(parent ?? panel).AddUIComponent(typeof(UILabel));
             label.text = text;
@@ -1172,8 +1312,26 @@ namespace RealisticRoads
             label.relativePosition = new Vector3(Pad, y + 6f);
             label.isInteractive = false;
             dynamic.Add(label);
+            if (fold != null)
+            {
+                // Hide / Show on the right: the section folds away (remembered).
+                var toggle = (UIButton)(parent ?? panel).AddUIComponent(typeof(UIButton));
+                toggle.size = new Vector2(54f, 18f);
+                toggle.relativePosition = new Vector3(Width - Pad - 54f, y + 3f);
+                toggle.text = folded.Contains(fold) ? "Show" : "Hide";
+                toggle.textScale = 0.7f;
+                toggle.textColor = DimColor;
+                toggle.hoveredTextColor = TextColor;
+                toggle.pressedTextColor = TextColor;
+                toggle.focusedTextColor = DimColor;
+                toggle.tooltip = (folded.Contains(fold) ? "Show " : "Hide ") + text.ToLower();
+                toggle.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0) ToggleFold(fold); };
+                dynamic.Add(toggle);
+            }
             return y + 6f + 16f;
         }
+
+        private bool Folded(string section) => folded.Contains(section);
 
         private float Text(Func<PanelModel, string> text, Color32 color, float scale, float y)
         {
