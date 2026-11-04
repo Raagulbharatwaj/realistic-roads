@@ -3980,7 +3980,7 @@ namespace RealisticRoads
                 Height = "Next point: " + FormatLift(lift) + "  ·  Page Up / Down",
                 Mode = planning
                     ? "Planning: drag points, Shift+click to add one. Enter builds, Esc goes back."
-                    : points.Count == 0 ? "Click on the map to start."
+                    : points.Count == 0 ? ""
                     : "Drawing: click to add points. Double-click or Enter to plan it.",
             };
             if (upgradeMode) return UpgradeModel(model);

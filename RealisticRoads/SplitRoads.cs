@@ -57,6 +57,19 @@ namespace RealisticRoads
         private static string TaperTag(string tag) =>
             tag != null && tag.StartsWith(CutTag) && tag.EndsWith(PavedTag) ? tag.Substring(0, tag.Length - PavedTag.Length) : tag;
 
+        // The half of a median cut road's open gap (0: not one, or its paved twin).
+        public static float OpenGapHalf(NetInfo info)
+        {
+            if (info == null) return 0f;
+            lock (variants)
+                foreach (var pair in variants)
+                {
+                    var match = pair.Value.Find(v => v.Info == info);
+                    if (match != null) return match.Open ? match.Cut : 0f;
+                }
+            return 0f;
+        }
+
         // A median cut road's (or its start piece's) paved twin; null for anything else.
         public static NetInfo PavedTwinOf(NetInfo open)
         {

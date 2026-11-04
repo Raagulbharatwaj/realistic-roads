@@ -46,6 +46,19 @@ namespace RealisticRoads
 
         private static readonly Dictionary<ushort, Part> walls = new Dictionary<ushort, Part>();
         private static readonly Dictionary<ushort, Part> piers = new Dictionary<ushort, Part>();
+        // A median cut road's open gap, lined: the road hides the ground under
+        // itself (its whole width, the gap too), so without this the sky shows
+        // through the gap: where the track's open cut is, through its dug floor;
+        // beside the track's portal and under the low track, through the ground.
+        // Walls down the gap's sides and a floor just under the track; where the
+        // track is over the road (or in its tunnel past the portal), a lid just
+        // under the road's surface.
+        private static readonly Dictionary<ushort, Part> liners = new Dictionary<ushort, Part>();
+        private const float LinerStep = 2f;        // metres between the lining's pieces along the gap
+        private const float UnderTrack = 0.7f;     // the floor this far under the track's rails
+        private const float LidDepth = 0.05f;      // the lid this far under the road's surface
+        private const float PastPortal = 1.5f;     // the floor runs on this far past the portal before rising to the lid
+        private const float LinerOut = 0.1f;       // the walls this far outside the gap's edge (not in the track's own walls)
         private static readonly HashSet<ushort> solid = new HashSet<ushort>();   // ramp segments drawn closed (any thread reads)
         private static int wait;
         private static bool failed;
@@ -76,8 +89,10 @@ namespace RealisticRoads
             {
                 foreach (var part in walls.Values) if (part.Mesh != null) UnityEngine.Object.Destroy(part.Mesh);
                 foreach (var part in piers.Values) if (part.Mesh != null) UnityEngine.Object.Destroy(part.Mesh);
+                foreach (var part in liners.Values) if (part.Mesh != null) UnityEngine.Object.Destroy(part.Mesh);
                 walls.Clear();
                 piers.Clear();
+                liners.Clear();
                 solid.Clear();
             }
             wait = 0;
@@ -99,6 +114,7 @@ namespace RealisticRoads
                 {
                     foreach (var part in walls.Values) DrawPart(part, cameraInfo);
                     foreach (var part in piers.Values) DrawPart(part, cameraInfo);
+                    foreach (var part in liners.Values) DrawPart(part, cameraInfo);
                 }
             }
             catch (Exception e)
@@ -125,9 +141,11 @@ namespace RealisticRoads
             var nodes = net.m_nodes.m_buffer;
             var rampSegments = new List<ushort>();
             var rampSet = new HashSet<ushort>();
+            var openCuts = new HashSet<ushort>();
             for (int i = 1; i < segments.Length; i++)
             {
                 if ((segments[i].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None) continue;
+                if (SplitRoads.IsSplit(segments[i].Info) && SplitRoads.OpenGapHalf(segments[i].Info) > 0f) openCuts.Add((ushort)i);
                 if (!SplitRoads.IsRamp(segments[i].Info)) continue;
                 rampSegments.Add((ushort)i);
                 rampSet.Add((ushort)i);
@@ -157,6 +175,7 @@ namespace RealisticRoads
                 foreach (ushort s in closed) solid.Add(s);
                 Update(walls, closed, id => WallKey(id), id => MakeWalls(id));
                 Update(piers, pierNodes, id => PierKey(id), id => MakePier(id));
+                Update(liners, openCuts, id => LinerKey(id), id => MakeLiner(id));
             }
             // The road's own pillar off nodes our walls or pillars stand at.
             foreach (ushort s in rampSegments)
@@ -338,6 +357,158 @@ namespace RealisticRoads
                     Vector3 facing = alongs[k] * toward;
                     Quad(vertices, normals, uvs, triangles, texture, new Vector3(left.x, leftFoot, left.z) - origin, new Vector3(right.x, rightFoot, right.z) - origin,
                         right - origin, left - origin, facing);
+                }
+            }
+            if (vertices.Count == 0) return null;
+            return new Part
+            {
+                Id = segment,
+                BuildIndex = s.m_buildIndex,
+                Origin = origin,
+                Pillar = pillar,
+                Mesh = DeckFrames.MakeMesh(vertices, normals, uvs, triangles),
+            };
+        }
+
+        // What a lining was made for: the road segment and the track under it.
+        private static string LinerKey(ushort segment)
+        {
+            var key = new System.Text.StringBuilder(WallKey(segment));
+            var net = NetManager.instance;
+            Vector3 a, b, c, d;
+            CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+            foreach (ushort track in TracksNear(CurveMath.Bezier(a, b, c, d, 0.5f), net.m_segments.m_buffer[segment].m_averageLength * 0.5f + 20f))
+                key.Append('|').Append(track).Append(':').Append(net.m_segments.m_buffer[track].m_buildIndex);
+            return key.ToString();
+        }
+
+        private static List<ushort> TracksNear(Vector3 p, float radius)
+        {
+            var net = NetManager.instance;
+            var found = new List<ushort>();
+            foreach (ushort s in RoadPlanner.NearbySegments(p, radius))
+            {
+                var info = net.m_segments.m_buffer[s].Info;
+                if ((net.m_segments.m_buffer[s].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || info == null || info.m_class == null) continue;
+                if (info.m_class.m_service != ItemClass.Service.PublicTransport) continue;
+                if (info.m_class.m_subService != ItemClass.SubService.PublicTransportMetro && info.m_class.m_subService != ItemClass.SubService.PublicTransportTrain) continue;
+                found.Add(s);
+            }
+            found.Sort();
+            return found;
+        }
+
+        // The floor's height at 'p' (in the gap of half 'half'): just under the
+        // track where it is down in its open cut (or just past its portal), else
+        // the lid just under the road's surface 'lid'.
+        private static float FloorAt(Vector3 p, float half, float lid, List<ushort> tracks)
+        {
+            var net = NetManager.instance;
+            var nodes = net.m_nodes.m_buffer;
+            float floor = lid;
+            foreach (ushort track in tracks)
+            {
+                var s = net.m_segments.m_buffer[track];
+                Vector3 onTrack;
+                float t = CrossingFinder.ClosestT(track, p, out onTrack);
+                if (CurveMath.FlatDistance(onTrack, p) > half) continue;
+                bool startUnder = (nodes[s.m_startNode].m_flags & NetNode.Flags.Underground) != NetNode.Flags.None;
+                bool endUnder = (nodes[s.m_endNode].m_flags & NetNode.Flags.Underground) != NetNode.Flags.None;
+                if (startUnder && endUnder)
+                {
+                    // In its tunnel: just past the portal (its end node not underground's
+                    // neighbour) the floor runs on a little, then the lid.
+                    float length = Mathf.Max(s.m_averageLength, 1f);
+                    bool nearPortal = false;
+                    foreach (ushort end in new[] { s.m_startNode, s.m_endNode })
+                    {
+                        float fromEnd = end == s.m_startNode ? t * length : (1f - t) * length;
+                        if (fromEnd > PastPortal) continue;
+                        for (int i = 0; i < 8; i++)
+                        {
+                            ushort other = nodes[end].GetSegment(i);
+                            if (other == 0 || other == track) continue;
+                            var o = net.m_segments.m_buffer[other];
+                            ushort far = o.m_startNode == end ? o.m_endNode : o.m_startNode;
+                            if ((nodes[far].m_flags & NetNode.Flags.Underground) == NetNode.Flags.None) nearPortal = true;
+                        }
+                    }
+                    if (!nearPortal) continue;
+                }
+                floor = Mathf.Min(floor, onTrack.y - UnderTrack);
+            }
+            return floor;
+        }
+
+        // The lining of an open cut road segment's gap (see 'liners').
+        private static Part MakeLiner(ushort segment)
+        {
+            var net = NetManager.instance;
+            var s = net.m_segments.m_buffer[segment];
+            var info = s.Info;
+            float half = SplitRoads.OpenGapHalf(info);
+            if (info == null || half <= 0f) return null;
+            string pillar = DeckFrames.PillarName(SplitRoads.OriginalOf(info));
+            KeyValuePair<Material, Vector4> material;
+            if (!DeckFrames.MaterialFor(pillar, out material)) return null;
+            Vector3 a, b, c, d;
+            CrossingFinder.SegmentBezier(segment, out a, out b, out c, out d);
+            Vector3 origin = CurveMath.Bezier(a, b, c, d, 0.5f);
+            int steps = Mathf.Max(1, Mathf.CeilToInt(Mathf.Max(s.m_averageLength, 1f) / LinerStep));
+            var tracks = TracksNear(origin, s.m_averageLength * 0.5f + 20f);
+            float wallHalf = half + LinerOut;
+            var left = new List<Vector3>();
+            var right = new List<Vector3>();
+            var floors = new List<float>();
+            var alongs = new List<Vector3>();
+            for (int k = 0; k <= steps; k++)
+            {
+                float t = (float)k / steps;
+                Vector3 p = CurveMath.Bezier(a, b, c, d, t);
+                Vector3 along = CurveMath.FlatNormal(CurveMath.BezierDerivative(a, b, c, d, t));
+                if (along == Vector3.zero) along = CurveMath.FlatNormal(d - a);
+                Vector3 across = CurveMath.Rotate(along, 90f);
+                float top = p.y + info.m_surfaceLevel - 0.02f;
+                Vector3 l = p + across * wallHalf, r = p - across * wallHalf;
+                l.y = r.y = top;
+                left.Add(l);
+                right.Add(r);
+                alongs.Add(along);
+                floors.Add(FloorAt(p, half, top - LidDepth, tracks));
+            }
+            var vertices = new List<Vector3>();
+            var normals = new List<Vector3>();
+            var uvs = new List<Vector2>();
+            var triangles = new List<int>();
+            var texture = material.Value;
+            for (int k = 0; k < steps; k++)
+            {
+                // A floor that jumps (the portal): the deeper one runs to the next
+                // sample, and a face rises there.
+                float f0 = floors[k], f1 = floors[k + 1];
+                bool jump = Mathf.Abs(f1 - f0) > 1f;
+                float g0 = jump ? Mathf.Min(f0, f1) : f0, g1 = jump ? Mathf.Min(f0, f1) : f1;
+                Vector3 l0 = left[k], l1 = left[k + 1], r0 = right[k], r1 = right[k + 1];
+                // The two walls, from just under the road's surface down to the floor.
+                if (l0.y - g0 > 0.05f || l1.y - g1 > 0.05f)
+                {
+                    Vector3 inward = CurveMath.Rotate(CurveMath.FlatNormal(l1 - l0), -90f);
+                    Quad(vertices, normals, uvs, triangles, texture, new Vector3(l0.x, g0, l0.z) - origin, new Vector3(l1.x, g1, l1.z) - origin, l1 - origin, l0 - origin, inward);
+                    Vector3 inwardR = CurveMath.Rotate(CurveMath.FlatNormal(r1 - r0), 90f);
+                    Quad(vertices, normals, uvs, triangles, texture, new Vector3(r0.x, g0, r0.z) - origin, new Vector3(r1.x, g1, r1.z) - origin, r1 - origin, r0 - origin, inwardR);
+                }
+                // The floor (or lid) across the gap.
+                Quad(vertices, normals, uvs, triangles, texture, new Vector3(r0.x, g0, r0.z) - origin, new Vector3(r1.x, g1, r1.z) - origin,
+                    new Vector3(l1.x, g1, l1.z) - origin, new Vector3(l0.x, g0, l0.z) - origin, Vector3.up);
+                if (jump)
+                {
+                    // The face stands where the lid begins (or ends), facing the pit.
+                    float high = Mathf.Max(f0, f1), deep = Mathf.Min(f0, f1);
+                    bool atNext = f1 > f0;
+                    Vector3 fl = atNext ? l1 : l0, fr = atNext ? r1 : r0;
+                    Vector3 facing = atNext ? -alongs[k + 1] : alongs[k];
+                    Quad(vertices, normals, uvs, triangles, texture, new Vector3(fr.x, deep, fr.z) - origin, new Vector3(fl.x, deep, fl.z) - origin,
+                        new Vector3(fl.x, high, fl.z) - origin, new Vector3(fr.x, high, fr.z) - origin, facing);
                 }
             }
             if (vertices.Count == 0) return null;

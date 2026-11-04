@@ -663,6 +663,10 @@ namespace RealisticRoads
                     sprite.size = new Vector2(inner, inner);
                     sprite.relativePosition = new Vector3((button.size.x - inner) / 2f, (button.size.y - inner) / 2f);
                     sprite.isInteractive = false;
+                    // The game's button turns white under the mouse: RR's light icon
+                    // goes dark on it then, as the game's own icons do.
+                    button.eventMouseEnter += (component, param) => { if (sprite != null) sprite.color = new Color32(55, 60, 70, 255); };
+                    button.eventMouseLeave += (component, param) => { if (sprite != null) sprite.color = new Color32(255, 255, 255, 255); };
                 }
                 else
                 {
