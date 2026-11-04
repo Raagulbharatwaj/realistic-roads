@@ -477,15 +477,28 @@ namespace RealisticRoads
         protected override void OnToolLateUpdate()
         {
             base.OnToolLateUpdate();
-            var info = SelectedNetwork;
-            if (info == null || info.m_netAI == null || upgradeMode) return;
-            float elevation = deckMode && underMode ? -RoadPlanner.TunnelMinDepth - 4f : lift;
+            // The network drawn (a median cut's track too, with no road picked);
+            // upgrading (surface roads) or nothing drawn: the normal view.
+            var info = DrawNetwork;
+            if (info == null || info.m_netAI == null || upgradeMode)
+            {
+                ForceInfoMode(InfoManager.InfoMode.None, InfoManager.SubInfoMode.Default);
+                return;
+            }
+            const float underground = -RoadPlanner.TunnelMinDepth - 4f;
+            float elevation = deckMode && underMode ? underground : lift;
+            // A median cut up out of a tunnel starts on the tunnel's end: shown
+            // while the mouse is on one.
+            if (MedianCut && points.Count == 0 && hoverValid && hoverNode != 0 &&
+                hoverPosition.y < TerrainManager.instance.SampleRawHeightSmooth(hoverPosition) - RoadPlanner.TunnelMinDepth * 0.5f)
+                elevation = underground;
+            // A tunnel in the curve (drawing or planning): shown.
             var division = preview;
-            if (planning && division != null && division.Plan != null && division.Plan.Kinds != null)
+            if (division != null && division.Plan != null && division.Plan.Kinds != null)
                 foreach (var kind in division.Plan.Kinds)
                     if (kind == NodeKind.Tunnel)
                     {
-                        elevation = Mathf.Min(elevation, -RoadPlanner.TunnelMinDepth - 4f);
+                        elevation = Mathf.Min(elevation, underground);
                         break;
                     }
             InfoManager.InfoMode mode;
@@ -3789,6 +3802,7 @@ namespace RealisticRoads
             {
                 buttons[i].isVisible = false;
                 buttonActions[i] = null;
+                if (i < buttonWheels.Count) buttonWheels[i] = null;
             }
         }
 
@@ -3925,6 +3939,7 @@ namespace RealisticRoads
             foreach (var button in buttons) if (button != null) Destroy(button.gameObject);
             buttons.Clear();
             buttonActions.Clear();
+            buttonWheels.Clear();
         }
 
         // The Bezier the game will build for piece i (between points i-1 and i).
@@ -4262,20 +4277,24 @@ namespace RealisticRoads
             float best = InsertPixels * InsertPixels, bestAlong = -1f, run = 0f;
             Vector3 bestPoint = Vector3.zero;
             int bestIndex = -1;
+            // Centred: the curve is beside the line drawn (where the handles are);
+            // a click on either counts, and the point goes on the line drawn.
+            var drawn = line.CentreShift != 0f ? CurveMath.Offset(line.Polyline, -line.CentreShift) : null;
             for (int i = 0; i < line.Polyline.Count; i++)
             {
                 if (i > 0) run += CurveMath.FlatDistance(line.Polyline[i - 1], line.Polyline[i]);
-                Vector3 screen = camera.WorldToScreenPoint(line.Polyline[i]);
-                if (screen.z <= 0f) continue;
-                float dx = screen.x - mouse.x, dy = screen.y - mouse.y;
-                if (dx * dx + dy * dy >= best) continue;
-                best = dx * dx + dy * dy;
-                bestAlong = run;
-                bestPoint = line.Polyline[i];
-                bestIndex = i;
+                foreach (var candidate in drawn != null ? new[] { line.Polyline[i], drawn[i] } : new[] { line.Polyline[i] })
+                {
+                    Vector3 screen = camera.WorldToScreenPoint(candidate);
+                    if (screen.z <= 0f) continue;
+                    float dx = screen.x - mouse.x, dy = screen.y - mouse.y;
+                    if (dx * dx + dy * dy >= best) continue;
+                    best = dx * dx + dy * dy;
+                    bestAlong = run;
+                    bestIndex = i;
+                }
             }
-            // Centred: the curve is beside the line drawn; the point goes on the line.
-            if (bestIndex >= 0 && line.CentreShift != 0f) bestPoint = CurveMath.Offset(line.Polyline, -line.CentreShift)[bestIndex];
+            if (bestIndex >= 0) bestPoint = drawn != null ? drawn[bestIndex] : line.Polyline[bestIndex];
             if (bestAlong < 0f)
             {
                 Mod.Log("Shift+click on the curve itself to put a point in there");
@@ -4320,6 +4339,7 @@ namespace RealisticRoads
         private void RemovePointAt(int index)
         {
             if (index < 0 || index >= points.Count || points.Count <= 2) return;
+            bool first = index == 0, last = index == points.Count - 1;
             points.RemoveAt(index);
             pointNodes.RemoveAt(index);
             pointMarkers.RemoveAt(index);
@@ -4331,16 +4351,34 @@ namespace RealisticRoads
             pointUnder.RemoveAt(index);
             pointRoad.RemoveAt(index);
             pointRoadT.RemoveAt(index);
-            // Placed by point: past it, one back; on its two spans, onto the one span left.
-            Func<float, float> shift = at =>
-                at >= index + 1 ? at - 1f
-                : at <= index - 1 ? at
-                : Mathf.Max(index - 1, 0) + Mathf.Clamp01((at - (index - 1)) * 0.5f);
-            foreach (var pin in heightPins) pin.At = shift(pin.At);
-            foreach (var stretch in stretches)
+            // Placed by point. The first point gone: its span goes (what was set on
+            // it with it), the rest one back. The last: its span goes. One in the
+            // middle: past it, one back; its two spans become the one left.
+            if (first)
             {
-                stretch.From = shift(stretch.From);
-                stretch.To = shift(stretch.To);
+                heightPins.RemoveAll(pin => pin.At < 1f);
+                stretches.RemoveAll(stretch => stretch.To <= 1f);
+                foreach (var pin in heightPins) pin.At -= 1f;
+                foreach (var stretch in stretches)
+                {
+                    stretch.From = Mathf.Max(stretch.From, 1f) - 1f;
+                    stretch.To -= 1f;
+                }
+                if (draggedPin != null && !heightPins.Contains(draggedPin)) draggedPin = null;
+            }
+            else if (last) ForgetShapeBeyond(points.Count - 1);
+            else
+            {
+                Func<float, float> shift = at =>
+                    at >= index + 1 ? at - 1f
+                    : at <= index - 1 ? at
+                    : (index - 1) + Mathf.Clamp01((at - (index - 1)) * 0.5f);
+                foreach (var pin in heightPins) pin.At = shift(pin.At);
+                foreach (var stretch in stretches)
+                {
+                    stretch.From = shift(stretch.From);
+                    stretch.To = shift(stretch.To);
+                }
             }
             if (dragIndex >= points.Count) dragIndex = -1;
             choicesVersion++;
