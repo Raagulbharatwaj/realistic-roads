@@ -1975,6 +1975,7 @@ namespace RealisticRoads
         // One of the three median ramp roads (1..3); picked again: off.
         private void PickMedianRamp(int choice)
         {
+            int was = medianRamp;
             medianRamp = medianRamp == choice ? 0 : choice;
             cutRoad = null;
             if (MedianCut && (CutTrack == null || MedianGroundSplit == null))
@@ -2001,6 +2002,13 @@ namespace RealisticRoads
                 rampMode = false;
                 if (upgradeMode) ToggleUpgrade();
                 deckMode = true;
+                underMode = false;
+            }
+            // Off: its deck goes with it (the Deck button is on another tab: it
+            // would stay on unseen).
+            else if (was != 0)
+            {
+                deckMode = false;
                 underMode = false;
             }
             choicesVersion++;
@@ -2130,7 +2138,12 @@ namespace RealisticRoads
         {
             rampMode = !rampMode;
             if (rampMode && upgradeMode) ToggleUpgrade();
-            if (rampMode) medianRamp = 0;
+            if (rampMode && medianRamp != 0)
+            {
+                medianRamp = 0;
+                deckMode = false;   // the median ramp's deck went with it
+                underMode = false;
+            }
             choicesVersion++;
             Mod.Log(rampMode ? "Ramp: start on the road it leaves, end on the road it joins" : "Ramp off");
         }

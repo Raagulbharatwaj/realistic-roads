@@ -56,7 +56,8 @@ namespace RealisticRoads
         private static readonly Dictionary<ushort, Part> liners = new Dictionary<ushort, Part>();
         private const float LinerStep = 2f;        // metres between the lining's pieces along the gap
         private const float UnderTrack = 0.4f;     // the trench's floor this far under the track's rails
-        private const float InTrench = 0.5f;       // a floor this far under the lid or more: a trench (less: the lid)
+        private const float InTrench = 0.5f;       // a trench at least this deep under the lid
+        private const float RailsClear = 0.25f;    // rails this high over the lid or more (a track on the ground is ~0.35): lidded under them; lower: a trench
         private const float LidDepth = 0.05f;      // the lid this far under the road's surface
         private const float LinerOut = 0.1f;       // the trench's walls this far outside the track's edge (not in its own walls)
         private static readonly HashSet<ushort> solid = new HashSet<ushort>();   // ramp segments drawn closed (any thread reads)
@@ -350,7 +351,9 @@ namespace RealisticRoads
                 foreach (int toward in new[] { 1, -1 })
                 {
                     int next = k + toward;
-                    if (next < 0 || next > steps || low[next]) continue;
+                    // Where the walls stop: higher on (open, on pillars), or the
+                    // segment's end (the next may be open: a slot over its pillar).
+                    if (next >= 0 && next <= steps && low[next]) continue;
                     Vector3 left = tops[0][k], right = tops[1][k];
                     float leftFoot = Mathf.Min(feet[0][k], left.y), rightFoot = Mathf.Min(feet[1][k], right.y);
                     if (left.y - leftFoot < MinWall && right.y - rightFoot < MinWall) continue;
@@ -417,8 +420,11 @@ namespace RealisticRoads
                 Vector3 onTrack;
                 CrossingFinder.ClosestT(track, p, out onTrack);
                 if (CurveMath.FlatDistance(onTrack, p) > half) continue;
-                if (onTrack.y - UnderTrack >= lid - InTrench) continue;
-                floor = Mathf.Min(floor, onTrack.y - UnderTrack);
+                // Rails clear of the lid (on or over the road): lidded under them.
+                // Lower (going down into the cut), a trench, however shallow, so
+                // the lid never comes up to the rails.
+                if (onTrack.y >= lid + RailsClear) continue;
+                floor = Mathf.Min(floor, Mathf.Min(onTrack.y - UnderTrack, lid - InTrench));
                 trenchHalf = Mathf.Max(trenchHalf, Mathf.Min(info.m_halfWidth + LinerOut, half + LinerOut));
                 found = true;
             }
