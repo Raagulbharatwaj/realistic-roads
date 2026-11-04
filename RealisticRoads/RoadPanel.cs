@@ -260,12 +260,14 @@ namespace RealisticRoads
         // different tabs aren't mixed by mistake: leaving the Ramps or Upgrade
         // tab turns its mode off, and opening Upgrade turns it on. The tabs use
         // the game's own sub-tab look (as its build menus' road groups); each
-        // tool is an icon with its name under it.
+        // tool is a game option button with its name under it.
         private static readonly string[] TabNames = { "Draw", "Decks", "Ramps", "Upgrade" };
         private const float TabHeight = 28f;
         private const float RowsTop = BarTop + TabHeight + 8f;
-        private const float TileStep = 40f;                       // icon and the gap to the next, its caption as wide
-        private const float TileHeight = IconSize + 15f;          // with its caption
+        private const float BarIcon = 36f;                         // the tools' buttons (the game's option buttons are this size)
+        private const float SmallIcon = 30f;                       // -/+ beside a value
+        private const float TileStep = 54f;                        // a tool and the gap to the next
+        private const float TileHeight = BarIcon + 17f;            // with its name under it
         private int tab;
         private readonly UIButton[] tabButtons = new UIButton[4];
         private class BarItem
@@ -276,14 +278,17 @@ namespace RealisticRoads
         }
         private readonly List<BarItem> barItems = new List<BarItem>();
         private readonly Dictionary<UIButton, UILabel> captions = new Dictionary<UIButton, UILabel>();
-        private static readonly float[] DrawRows = { 0f, TileHeight + 4f, TileHeight + 36f };   // the Draw tab's rows, from RowsTop
-        private UILabel tabHint;                                  // one or two lines under the open tab's tools (not on Draw)
+        // The Draw tab's rows, from RowsTop: tools; length and turn; Parallel and
+        // its gap; the parallel road's side, road, way and centring (while on).
+        private static readonly float[] DrawRows = { 0f, TileHeight + 6f, TileHeight + 40f, 2f * TileHeight + 44f };
+        private bool parallelShown;                                // the Draw tab has its fourth row
+        private UILabel tabHint;                                   // a line under the open tab's tools (not on Draw)
         private static readonly string[] TabHints =
         {
             null,
-            "Click a road to put a point over (or under) its middle; between two such points the deck follows that road.",
-            "Hover a button for how each one is drawn.",
-            "Click a road where the upgrade starts, then where it ends.",
+            "Click a road to put a point over (or under) its middle.",
+            "Hover a button to see how it is drawn.",
+            "Click where the upgrade starts, then where it ends.",
         };
 
         private void Put(UIComponent component, int tab, int row, bool parallelOnly = false)
@@ -292,37 +297,47 @@ namespace RealisticRoads
             barItems.Add(new BarItem { Component = component, Tab = tab, ParallelOnly = parallelOnly });
         }
 
-        // An icon button with its name under it, in a tab.
+        // A tool's button with its name under it, in a tab.
         private UIButton Tile(string icon, string letter, string caption, string tooltip, float x, float y, int tab, bool parallelOnly, Action onClick)
         {
             var button = BarButton(icon, letter, tooltip, x, y, onClick);
             Put(button, tab, 0, parallelOnly);
             if (caption != null)
             {
-                var label = (UILabel)panel.AddUIComponent(typeof(UILabel));
-                label.autoSize = false;
-                label.size = new Vector2(TileStep + 4f, 13f);
-                label.relativePosition = new Vector3(x + IconSize / 2f - (TileStep + 4f) / 2f, y + IconSize + 2f);
-                label.textAlignment = UIHorizontalAlignment.Center;
-                label.textScale = 0.6f;
-                label.textColor = DimColor;
-                label.isInteractive = false;
-                label.text = caption;
+                var label = Caption(caption, x + BarIcon / 2f, y + BarIcon + 2f);
                 Put(label, tab, 0, parallelOnly);
                 captions[button] = label;
             }
             return button;
         }
 
+        // A one-word name centred on 'centre' (wider than the button, so it never clips).
+        private UILabel Caption(string text, float centre, float y)
+        {
+            const float width = TileStep + 12f;
+            var label = (UILabel)panel.AddUIComponent(typeof(UILabel));
+            label.autoSize = false;
+            label.wordWrap = false;
+            label.size = new Vector2(width, 15f);
+            label.relativePosition = new Vector3(centre - width / 2f, y);
+            label.textAlignment = UIHorizontalAlignment.Center;
+            label.textScale = 0.7f;
+            label.textColor = DimColor;
+            label.isInteractive = false;
+            label.text = text;
+            return label;
+        }
+
         // The height of the open tab's tools, and where the rows below start
         // (after the line saying what is being drawn).
-        private float TabContentHeight => tab == 0 ? DrawRows[2] + TileHeight : TileHeight + 30f;
+        private float TabContentHeight => tab == 0 ? (parallelShown ? DrawRows[3] : DrawRows[2]) + TileHeight : TileHeight + 36f;
         private int toolsLines = 1;
-        private float ContentTop => RowsTop + TabContentHeight + 4f + toolsLines * 14f + 4f;
+        private float ContentTop => RowsTop + TabContentHeight + 4f + toolsLines * 16f + 6f;
 
         private void CreateDrawBar()
         {
             float tabWidth = (Width - 2f * Pad) / 4f;
+            bool gameTabs = GameHas("SubBarButtonBase", "SubBarButtonBaseHovered", "SubBarButtonBasePressed", "SubBarButtonBaseFocused");
             for (int t = 0; t < 4; t++)
             {
                 int picked = t;
@@ -335,9 +350,19 @@ namespace RealisticRoads
                 button.hoveredTextColor = TextColor;
                 button.focusedTextColor = DimColor;
                 button.pressedTextColor = TextColor;
-                button.normalBgSprite = button.focusedBgSprite = "SubBarButtonBase";
-                button.hoveredBgSprite = "SubBarButtonBaseHovered";
-                button.pressedBgSprite = "SubBarButtonBasePressed";
+                if (gameTabs)
+                {
+                    button.atlas = GameAtlas;
+                    button.normalBgSprite = button.focusedBgSprite = "SubBarButtonBase";
+                    button.hoveredBgSprite = "SubBarButtonBaseHovered";
+                    button.pressedBgSprite = "SubBarButtonBasePressed";
+                }
+                else
+                {
+                    button.normalBgSprite = button.focusedBgSprite = "ButtonMenu";
+                    button.hoveredBgSprite = "ButtonMenuHovered";
+                    button.pressedBgSprite = "ButtonMenuPressed";
+                }
                 button.tooltip = t == 0 ? "Curved or straight pieces, exact lengths, a parallel road"
                     : t == 1 ? "The next pieces over the roads below (a deck), or under them as a tunnel"
                     : t == 2 ? "A slip ramp, the median ramp roads and the metro and train median cuts"
@@ -345,6 +370,8 @@ namespace RealisticRoads
                 button.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0) PickTab(picked); };
                 tabButtons[t] = button;
             }
+            tabSelected = gameTabs ? "SubBarButtonBaseFocused" : "ButtonMenuPressed";
+            tabNormal = gameTabs ? "SubBarButtonBase" : "ButtonMenu";
 
             // Draw, row 0: curved / straight, snapping, the corner radius.
             float y = RowsTop;
@@ -355,72 +382,71 @@ namespace RealisticRoads
                 () => { if (SetStraight != null) SetStraight(true); });
             snapButton = Tile(Icons.Snap, "Sn", "Snap", "Snapping for straight pieces (on: lit)", Pad + 2f * TileStep, y, 0, false,
                 () => { if (ToggleSnap != null) ToggleSnap(); });
-            float x = Pad + 3f * TileStep + 14f;
+            float x = Pad + 3f * TileStep + 10f;
+            float sy = y + (BarIcon - SmallIcon) / 2f;
             Action tighter = () => { if (ChangeRadius != null) ChangeRadius(-CurveTool.RadiusStep); };
             Action wider = () => { if (ChangeRadius != null) ChangeRadius(CurveTool.RadiusStep); };
-            var radiusMinus = BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner; or the mouse wheel)", x, y, tighter);
-            radiusLabel = BarLabel("", x + IconSize, y + 8f, 48f);
+            var radiusMinus = BarButton(Icons.Minus, "-", "Tighter corners between straight pieces (below " + CurveTool.MinCornerRadius.ToString("0") + " m: a sharp corner; or the mouse wheel)", x, sy, tighter, SmallIcon);
+            radiusLabel = BarLabel("", x + SmallIcon, sy + 7f, 52f);
             radiusLabel.textAlignment = UIHorizontalAlignment.Center;
             radiusLabel.textColor = TextColor;
-            var radiusPlus = BarButton(Icons.Plus, "+", "Wider corners between straight pieces (or the mouse wheel)", x + IconSize + 48f, y, wider);
+            radiusLabel.textScale = 0.8f;
+            var radiusPlus = BarButton(Icons.Plus, "+", "Wider corners between straight pieces (or the mouse wheel)", x + SmallIcon + 52f, sy, wider, SmallIcon);
             Wheel(wider, tighter, radiusMinus, radiusLabel, radiusPlus);
             Put(radiusMinus, 0, 0);
             Put(radiusLabel, 0, 0);
             Put(radiusPlus, 0, 0);
-            var cornerCaption = BarLabel("Corner", x, y + IconSize + 2f, 2f * IconSize + 48f);
-            cornerCaption.textAlignment = UIHorizontalAlignment.Center;
-            cornerCaption.textScale = 0.6f;
-            Put(cornerCaption, 0, 0);
+            Put(Caption("Corner", x + SmallIcon + 26f, y + BarIcon + 2f), 0, 0);
 
             // Draw, row 1: an exact length and turn for the next point.
             y = RowsTop + DrawRows[1];
-            Put(BarLabel("Length", Pad, y + 4f, 46f), 0, 1);
-            lengthField = BarField(Pad + 48f, y, 60f, "Length of the next piece in metres; Enter places the point");
+            Put(BarLabel("Length", Pad, y + 4f, 50f), 0, 1);
+            lengthField = BarField(Pad + 52f, y, 64f, "Length of the next piece in metres; Enter places the point");
             Put(lengthField, 0, 1);
-            Put(BarLabel("m", Pad + 112f, y + 4f, 16f), 0, 1);
-            Put(BarLabel("Turn", Pad + 140f, y + 4f, 34f), 0, 1);
-            turnField = BarField(Pad + 176f, y, 52f,
+            Put(BarLabel("m", Pad + 120f, y + 4f, 18f), 0, 1);
+            Put(BarLabel("Turn", Pad + 148f, y + 4f, 40f), 0, 1);
+            turnField = BarField(Pad + 190f, y, 56f,
                 "Turn from the last piece in degrees: + right, - left (the first piece: bearing from north); Enter places the point");
             Put(turnField, 0, 1);
-            Put(BarLabel("° (+ right)", Pad + 232f, y + 4f, 90f), 0, 1);
+            Put(BarLabel("°", Pad + 250f, y + 4f, 20f), 0, 1);
 
             // Draw, row 2: Parallel, a second road beside the curve (a one-way
-            // pair, or a road and a track); its gap, side, road, direction and
-            // centring only while it is on.
+            // pair, or a road and a track), and its gap while it is on.
             y = RowsTop + DrawRows[2];
             parallelButton = Tile(Icons.Parallel, "P", "Parallel", "Parallel: build a second road beside the curve, at the gap set here.\n" +
                 "The same road runs the other way (a one-way pair); or pick a road or track for it with the Road button.\n" +
                 "Each is planned on its own (crossings, bridges, tunnels); one Build and one Ctrl+Z for both", Pad, y, 0, false,
                 () => { if (ToggleParallel != null) ToggleParallel(); });
-            float gx = Pad + TileStep + 4f;
+            float gx = Pad + TileStep + 10f;
+            sy = y + (BarIcon - SmallIcon) / 2f;
             Action narrower = () => { if (ChangeGap != null) ChangeGap(-CurveTool.GapStep); };
             Action widerGap = () => { if (ChangeGap != null) ChangeGap(CurveTool.GapStep); };
-            var gapMinus = BarButton(Icons.Minus, "-", "Narrower gap between the two roads' edges (or the mouse wheel)", gx, y, narrower);
-            gapLabel = BarLabel("", gx + IconSize, y + 8f, 40f);
+            var gapMinus = BarButton(Icons.Minus, "-", "Narrower gap between the two roads' edges (or the mouse wheel)", gx, sy, narrower, SmallIcon);
+            gapLabel = BarLabel("", gx + SmallIcon, sy + 7f, 52f);
             gapLabel.textAlignment = UIHorizontalAlignment.Center;
             gapLabel.textColor = TextColor;
+            gapLabel.textScale = 0.8f;
             var gapPlus = BarButton(Icons.Plus, "+", "Wider gap between the two roads' edges (up to " + CurveTool.MaxGap.ToString("0") + " m; or the mouse wheel)",
-                gx + IconSize + 40f, y, widerGap);
+                gx + SmallIcon + 52f, sy, widerGap, SmallIcon);
             Wheel(widerGap, narrower, gapMinus, gapLabel, gapPlus);
             Put(gapMinus, 0, 2, true);
             Put(gapLabel, 0, 2, true);
             Put(gapPlus, 0, 2, true);
-            var gapCaption = BarLabel("Gap", gx, y + IconSize + 2f, 2f * IconSize + 40f);
-            gapCaption.textAlignment = UIHorizontalAlignment.Center;
-            gapCaption.textScale = 0.6f;
-            Put(gapCaption, 0, 2, true);
-            float sx = gx + 2f * IconSize + 40f + 10f;
-            sideButton = Tile(Icons.Side, "<>", "Side", "Put the parallel road on the other side of the curve", sx, y, 0, true,
+            Put(Caption("Gap", gx + SmallIcon + 26f, y + BarIcon + 2f), 0, 2, true);
+
+            // Draw, row 3 (Parallel on): its side, road, way and centring.
+            y = RowsTop + DrawRows[3];
+            sideButton = Tile(Icons.Side, "<>", "Side", "Put the parallel road on the other side of the curve", Pad, y, 0, true,
                 () => { if (FlipSide != null) FlipSide(); });
             besideButton = Tile(Icons.Beside, "2", "Road", "Another road or track beside the curve: press this, then pick it in the game's menu " +
-                "(the curve keeps its own road).\nPress again to go back to the curve's own road", sx + TileStep, y, 0, true,
+                "(the curve keeps its own road).\nPress again to go back to the curve's own road", Pad + TileStep, y, 0, true,
                 () => { if (PickBeside != null) PickBeside(); });
             directionButton = Tile(Icons.Direction, "Dir", "Way", "Which way the parallel line runs: the other way (a one-way pair, lit) " +
-                "or the same way (a double track, a road and its tram or rail line)", sx + 2f * TileStep, y, 0, true,
+                "or the same way (a double track, a road and its tram or rail line)", Pad + 2f * TileStep, y, 0, true,
                 () => { if (FlipDirection != null) FlipDirection(); });
             centredButton = Tile(Icons.Centred, "|", "Centred", "Centred pair: the line drawn is the middle between the two roads (lit), " +
                 "each road half the way out to its side; else the line drawn is the curve's own and the parallel road goes beside it",
-                sx + 3f * TileStep, y, 0, true, () => { if (ToggleCentred != null) ToggleCentred(); });
+                Pad + 3f * TileStep, y, 0, true, () => { if (ToggleCentred != null) ToggleCentred(); });
 
             // Decks.
             y = RowsTop;
@@ -449,7 +475,7 @@ namespace RealisticRoads
             {
                 int picked = choice;
                 medianButtons[choice] = Tile(icons[choice], letters[choice], letters[choice], titles[choice] + how,
-                    Pad + choice * TileStep + 6f, y, 2, false, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
+                    Pad + choice * TileStep, y, 2, false, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
             }
             const string cutHow = "\nDown: start on the end of a raised track; it comes down at its grade (metro 5 %, train 3.5 %) into an open cut " +
                                   "in the road's middle and on into a tunnel.\nUp: start on the end of a tunnel; it comes up through the cut to the deck level " +
@@ -463,7 +489,7 @@ namespace RealisticRoads
             {
                 int picked = 4 + k;
                 medianButtons[picked] = Tile(cutIcons[k], cutLetters[k], cutCaptions[k], cutTitles[k] + cutHow,
-                    Pad + picked * TileStep + 12f, y, 2, false, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
+                    Pad + picked * TileStep, y, 2, false, () => { if (PickMedianRamp != null) PickMedianRamp(picked); });
             }
 
             // Upgrade.
@@ -473,17 +499,21 @@ namespace RealisticRoads
                 () => { if (ToggleUpgrade != null) ToggleUpgrade(); });
 
             // The open tab's hint, under its tools (not on Draw).
-            tabHint = BarLabel("", Pad, RowsTop + TileHeight + 2f, Width - 2f * Pad);
+            tabHint = BarLabel("", Pad, RowsTop + TileHeight + 4f, Width - 2f * Pad);
             tabHint.wordWrap = true;
-            tabHint.size = new Vector2(Width - 2f * Pad, 28f);
-            tabHint.textScale = 0.7f;
+            tabHint.autoHeight = true;
+            tabHint.size = new Vector2(Width - 2f * Pad, 30f);
+            tabHint.textScale = 0.75f;
 
-            // What is being drawn (and the parallel line), under the open tab's tools.
+            // What is being drawn (the parallel line), under the open tab's tools.
             toolsLabel = BarLabel("", Pad, RowsTop + TabContentHeight + 4f, Width - 2f * Pad);
             toolsLabel.textScale = 0.75f;
             toolsLabel.textColor = TextColor;
             toolsLabel.wordWrap = true;
+            toolsLabel.autoHeight = true;
         }
+
+        private string tabSelected = "ButtonMenuPressed", tabNormal = "ButtonMenu";
 
         // A tab picked: the ramp or upgrade mode of the tab left is turned off,
         // Upgrade's turned on.
@@ -511,11 +541,16 @@ namespace RealisticRoads
             if (model.Upgrade) tab = 3;
             else if (model.Ramp || model.MedianChoice > 0) tab = 2;
             else if (tab == 3) tab = 0;
+            if (parallelShown != model.Parallel)
+            {
+                parallelShown = model.Parallel;
+                structure = null;   // the Draw tab's fourth row comes or goes
+            }
             for (int t = 0; t < 4; t++)
             {
                 var button = tabButtons[t];
                 if (button == null) continue;
-                string normal = t == tab ? "SubBarButtonBaseFocused" : "SubBarButtonBase";
+                string normal = t == tab ? tabSelected : tabNormal;
                 if (button.normalBgSprite != normal) button.normalBgSprite = button.focusedBgSprite = normal;
                 Color32 text = t == tab ? TextColor : DimColor;
                 if (!button.textColor.Equals(text)) button.textColor = button.focusedTextColor = text;
@@ -536,35 +571,125 @@ namespace RealisticRoads
             {
                 var at = new Vector3(Pad, RowsTop + TabContentHeight + 4f);
                 if (toolsLabel.relativePosition != at) toolsLabel.relativePosition = at;
-                var size = new Vector2(Width - 2f * Pad, toolsLines * 14f);
-                if (!toolsLabel.size.Equals(size)) toolsLabel.size = size;
             }
         }
 
-        private UIButton BarButton(string icon, string letter, string tooltip, float x, float y, Action onClick)
+        private UIButton BarButton(string icon, string letter, string tooltip, float x, float y, Action onClick, float size = BarIcon)
         {
             var button = (UIButton)panel.AddUIComponent(typeof(UIButton));
-            button.size = new Vector2(IconSize, IconSize);
+            button.size = new Vector2(size, size);
             button.relativePosition = new Vector3(x, y);
             button.tooltip = tooltip;
-            if (Icons.Has(icon, Icons.Background, Icons.BackgroundHover, Icons.BackgroundSelected))
+            Dress(button, icon, letter, false);
+            button.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0) onClick(); };
+            return button;
+        }
+
+        // --- the buttons' look ------------------------------------------------------
+
+        // The game's own option-button look (its road tool's Straight / Curved /
+        // Upgrade buttons) when its atlas has it: the road tool's own icon where
+        // it has one, else ours drawn on the game's button. Without it, our own
+        // button look. Checked at run time, sprite by sprite.
+        private static readonly Dictionary<string, string> GameIcons = new Dictionary<string, string>
+        {
+            { Icons.Curve, "RoadOptionCurved" }, { Icons.Straight, "RoadOptionStraight" }, { Icons.Upgrade, "RoadOptionUpgrade" },
+        };
+        private readonly Dictionary<UIButton, string> native = new Dictionary<UIButton, string>();   // the game's look: its icon (or null: ours)
+
+        private static UITextureAtlas GameAtlas
+        {
+            get
+            {
+                var view = UIView.GetAView();
+                return view != null ? view.defaultAtlas : null;
+            }
+        }
+
+        private static bool GameHas(params string[] names)
+        {
+            try
+            {
+                var atlas = GameAtlas;
+                if (atlas == null) return false;
+                foreach (var name in names) if (atlas[name] == null) return false;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool? nativeLook;
+        private static bool NativeLook
+        {
+            get
+            {
+                if (nativeLook == null)
+                {
+                    nativeLook = GameHas("OptionBase", "OptionBaseHovered", "OptionBasePressed", "OptionBaseFocused");
+                    Mod.Log("Panel buttons: " + (nativeLook.Value ? "the game's own look" : "RR's own look (the game's option buttons weren't found)"));
+                }
+                return nativeLook.Value;
+            }
+        }
+
+        private void Dress(UIButton button, string icon, string letter, bool selected)
+        {
+            if (NativeLook)
+            {
+                button.atlas = GameAtlas;
+                button.normalBgSprite = button.focusedBgSprite = selected ? "OptionBaseFocused" : "OptionBase";
+                button.hoveredBgSprite = "OptionBaseHovered";
+                button.pressedBgSprite = "OptionBasePressed";
+                if (GameHas("OptionBaseDisabled")) button.disabledBgSprite = "OptionBaseDisabled";
+                string game;
+                if (icon != null && GameIcons.TryGetValue(icon, out game) && GameHas(game))
+                {
+                    button.normalFgSprite = button.focusedFgSprite = selected && GameHas(game + "Focused") ? game + "Focused" : game;
+                    button.hoveredFgSprite = GameHas(game + "Hovered") ? game + "Hovered" : game;
+                    button.pressedFgSprite = GameHas(game + "Pressed") ? game + "Pressed" : game;
+                    button.disabledFgSprite = GameHas(game + "Disabled") ? game + "Disabled" : game;
+                    native[button] = game;
+                    return;
+                }
+                if (icon != null && Icons.Has(icon))
+                {
+                    var sprite = (UISprite)button.AddUIComponent(typeof(UISprite));
+                    float inner = Mathf.Round(button.size.x * 0.82f);
+                    sprite.atlas = Icons.Atlas;
+                    sprite.spriteName = icon;
+                    sprite.size = new Vector2(inner, inner);
+                    sprite.relativePosition = new Vector3((button.size.x - inner) / 2f, (button.size.y - inner) / 2f);
+                    sprite.isInteractive = false;
+                }
+                else
+                {
+                    button.text = letter;
+                    button.textScale = 0.8f;
+                }
+                native[button] = null;
+                return;
+            }
+            if (Icons.Has(icon, Icons.Background, Icons.BackgroundHover, Icons.BackgroundSelected, Icons.BackgroundOff))
             {
                 button.atlas = Icons.Atlas;
-                button.normalFgSprite = button.hoveredFgSprite = button.pressedFgSprite = button.focusedFgSprite = icon;
-                button.normalBgSprite = button.focusedBgSprite = Icons.Background;
+                button.normalFgSprite = button.hoveredFgSprite = button.pressedFgSprite = button.focusedFgSprite = button.disabledFgSprite = icon;
+                button.normalBgSprite = button.focusedBgSprite = selected ? Icons.BackgroundSelected : Icons.Background;
                 button.hoveredBgSprite = Icons.BackgroundHover;
                 button.pressedBgSprite = Icons.BackgroundSelected;
+                button.disabledBgSprite = Icons.BackgroundOff;
             }
             else
             {
-                button.normalBgSprite = button.focusedBgSprite = "ButtonMenu";
+                button.normalBgSprite = button.focusedBgSprite = selected ? "ButtonMenuPressed" : "ButtonMenu";
                 button.hoveredBgSprite = "ButtonMenuHovered";
                 button.pressedBgSprite = "ButtonMenuPressed";
+                button.disabledBgSprite = "ButtonMenuDisabled";
                 button.text = letter;
                 button.textScale = 0.8f;
             }
-            button.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0) onClick(); };
-            return button;
         }
 
         private UILabel BarLabel(string text, float x, float y, float width)
@@ -673,6 +798,18 @@ namespace RealisticRoads
                 Color32 color = selected ? TextColor : DimColor;
                 if (!caption.textColor.Equals(color)) caption.textColor = color;
             }
+            string game;
+            if (native.TryGetValue(button, out game))
+            {
+                string bg = selected ? "OptionBaseFocused" : "OptionBase";
+                if (button.normalBgSprite != bg) button.normalBgSprite = button.focusedBgSprite = bg;
+                if (game != null)
+                {
+                    string fg = selected && GameHas(game + "Focused") ? game + "Focused" : game;
+                    if (button.normalFgSprite != fg) button.normalFgSprite = button.focusedFgSprite = fg;
+                }
+                return;
+            }
             bool icons = button.atlas == Icons.Atlas && Icons.Atlas != null;
             string normal = icons ? (selected ? Icons.BackgroundSelected : Icons.Background) : (selected ? "ButtonMenuPressed" : "ButtonMenu");
             if (button.normalBgSprite != normal) button.normalBgSprite = button.focusedBgSprite = normal;
@@ -744,6 +881,8 @@ namespace RealisticRoads
             }
             DrawProfile(model.Profile);
             UpdateShapeButtons();
+            // A text the game laid out higher than its row: laid out again next time.
+            if (CheckHeights()) structure = null;
         }
 
         private string Shape(PanelModel model)
@@ -773,6 +912,10 @@ namespace RealisticRoads
             foreach (var component in dynamic) if (component != null) UnityEngine.Object.Destroy(component.gameObject);
             dynamic.Clear();
             texts.Clear();
+            allotted.Clear();
+            var gone = new List<UIButton>();
+            foreach (var button in native.Keys) if (button == null) gone.Add(button);
+            foreach (var button in gone) native.Remove(button);
             parent = panel;
             float y = ContentTop;
 
@@ -799,7 +942,7 @@ namespace RealisticRoads
                 profileSprite.size = new Vector2(ProfileWidth, ProfileHeight);
                 profileSprite.relativePosition = new Vector3(Pad, y);
                 profileSprite.tooltip = "Drag a dot up or down to set the road's height there (or the mouse wheel over it; right-click it to let go). " +
-                                        "Drag along the view to select a stretch for the buttons below. Click to keep the mark on the map";
+                                        "Drag along the view to select a stretch for the buttons below (none: the whole road). Click to keep the mark on the map";
                 profileSprite.eventMouseMove += (component, param) =>
                 {
                     if (draggedNode < 0 && !selecting) SetCursor(MouseAlong(), false);
@@ -954,12 +1097,36 @@ namespace RealisticRoads
         // Heights are worked out here rather than read back from the label (the
         // game lays text out later): roughly how many lines the text wraps to.
         private const float LineHeight = 20f;
-        private const float CharWidth = 8.5f;
+
+        // Each text's height as the game laid it out (by text, width and size),
+        // and the height each label was given: a label the game made higher than
+        // that would have run into the next row, so the panel is laid out again
+        // with the found height (once: it is kept).
+        private readonly Dictionary<string, float> measured = new Dictionary<string, float>();
+        private readonly Dictionary<UILabel, float> allotted = new Dictionary<UILabel, float>();
+        private static string MeasureKey(string text, float width, float scale) => scale.ToString("0.00") + "|" + width.ToString("0") + "|" + text;
+
+        private bool CheckHeights()
+        {
+            bool again = false;
+            foreach (var pair in allotted)
+            {
+                var label = pair.Key;
+                if (label == null || !label.isVisible || string.IsNullOrEmpty(label.text)) continue;
+                if (label.size.y <= pair.Value + 1f) continue;
+                measured[MeasureKey(label.text, label.size.x, label.textScale)] = label.size.y;
+                again = true;
+            }
+            return again;
+        }
+        private const float CharWidth = 9.5f;
 
         private static int Lines(string text, float width, float scale)
         {
             if (string.IsNullOrEmpty(text)) return 0;
-            int perLine = Mathf.Max(8, Mathf.FloorToInt(width / (CharWidth * scale)));
+            // On the wide side: the game's font at small sizes is wider than in
+            // proportion (measured on its screen), and a line too few clips the text.
+            int perLine = Mathf.Max(8, Mathf.FloorToInt(width / (CharWidth * scale + 0.8f)));
             int lines = 0;
             // Wrapped at spaces like the label does (a word that doesn't fit goes to
             // the next line; one longer than a line is broken).
@@ -1022,8 +1189,14 @@ namespace RealisticRoads
             label.wordWrap = true;
             label.textScale = scale;
             label.textColor = color;
-            label.size = new Vector2(width, Lines(value, width, scale) * LineHeight * scale);
+            // As high as it was found to be (the game sizes it to its text:
+            // autoHeight), else the estimate; Show checks it and lays out again.
+            float height = Lines(value, width, scale) * LineHeight * scale, found;
+            if (measured.TryGetValue(MeasureKey(value, width, scale), out found)) height = Mathf.Max(height, found);
+            label.autoHeight = true;
+            label.size = new Vector2(width, height);
             label.relativePosition = new Vector3(at.x, at.y);
+            allotted[label] = height;
             label.isInteractive = false;
             label.text = value;
             dynamic.Add(label);
@@ -1052,23 +1225,7 @@ namespace RealisticRoads
             button.size = new Vector2(IconSize, IconSize);
             button.relativePosition = new Vector3(at.x, at.y);
             button.tooltip = tooltip;
-            if (Icons.Has(icon, Icons.Background, Icons.BackgroundHover, Icons.BackgroundSelected))
-            {
-                button.atlas = Icons.Atlas;
-                button.normalFgSprite = icon;
-                button.hoveredFgSprite = icon;
-                button.pressedFgSprite = icon;
-                button.normalBgSprite = selected ? Icons.BackgroundSelected : Icons.Background;
-                button.hoveredBgSprite = selected ? Icons.BackgroundSelected : Icons.BackgroundHover;
-                button.pressedBgSprite = Icons.BackgroundSelected;
-            }
-            else
-            {
-                button.normalBgSprite = selected ? "ButtonMenuPressed" : "ButtonMenu";
-                button.hoveredBgSprite = "ButtonMenuHovered";
-                button.text = letter;
-                button.textScale = 0.8f;
-            }
+            Dress(button, icon, letter, selected);
             button.eventClick += (component, param) => { if ((param.buttons & UIMouseButton.Left) != 0) onClick(); };
             dynamic.Add(button);
             return button;
@@ -1149,7 +1306,7 @@ namespace RealisticRoads
             label.relativePosition = new Vector3(x, y);
             label.isInteractive = false;
             dynamic.Add(label);
-            return x + text.Length * 6.5f + 14f;
+            return x + text.Length * 7.5f + 14f;
         }
 
         // Paints the side view: ground (and water) filled from the bottom,
@@ -1448,8 +1605,8 @@ namespace RealisticRoads
             if (shapeHint != null)
             {
                 string hint = HasSelection
-                    ? "Selected " + Mathf.Min(selectFrom, selectTo).ToString("N0") + "-" + Mathf.Max(selectFrom, selectTo).ToString("N0") + " m"
-                    : "Whole road (drag along the view to pick a stretch)";
+                    ? Mathf.Min(selectFrom, selectTo).ToString("N0") + "-" + Mathf.Max(selectFrom, selectTo).ToString("N0") + " m"
+                    : "Whole road";
                 if (shapeHint.text != hint) shapeHint.text = hint;
             }
         }
@@ -1460,24 +1617,7 @@ namespace RealisticRoads
             button.size = new Vector2(ShapeButtonSize, ShapeButtonSize);
             button.relativePosition = new Vector3(x, y);
             button.tooltip = tooltip;
-            if (Icons.Has(icon, Icons.Background, Icons.BackgroundHover, Icons.BackgroundSelected, Icons.BackgroundOff))
-            {
-                button.atlas = Icons.Atlas;
-                button.normalFgSprite = button.hoveredFgSprite = button.pressedFgSprite = button.focusedFgSprite = button.disabledFgSprite = icon;
-                button.normalBgSprite = button.focusedBgSprite = Icons.Background;
-                button.hoveredBgSprite = Icons.BackgroundHover;
-                button.pressedBgSprite = Icons.BackgroundSelected;
-                button.disabledBgSprite = Icons.BackgroundOff;
-            }
-            else
-            {
-                button.text = letter;
-                button.textScale = 0.7f;
-                button.normalBgSprite = button.focusedBgSprite = "ButtonMenu";
-                button.hoveredBgSprite = "ButtonMenuHovered";
-                button.pressedBgSprite = "ButtonMenuPressed";
-                button.disabledBgSprite = "ButtonMenuDisabled";
-            }
+            Dress(button, icon, letter, false);
             button.eventClick += (component, param) =>
             {
                 if ((param.buttons & UIMouseButton.Left) != 0 && button.isEnabled) onClick();

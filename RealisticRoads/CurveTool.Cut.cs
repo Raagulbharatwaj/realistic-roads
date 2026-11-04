@@ -20,6 +20,11 @@ namespace RealisticRoads
         // the road (its deck and a bus under it); higher, it passes over the road
         // as it is, on pillars in the median, and the lanes move out under it.
         private const float GapClearance = 7.5f;
+        // The gap is left open (not paved) from where the track's rails are this
+        // high over the road (lower, paving would come up through its deck) to
+        // PortalLength past the tunnel's mouth (the portal stands there).
+        private const float OpenAbove = 2f;
+        private const float PortalLength = 12f;
         private const float CutSample = 1f;      // metres between the profile's samples, finding the cut's ends
         private float cutFrom = -1f, cutTo = -1f;   // DivideAlong's stops for the open cut (while dividing a cut's track)
 
@@ -33,7 +38,7 @@ namespace RealisticRoads
         {
             if (medianProfile == null || division.Polyline == null) return false;
             var terrain = TerrainManager.instance;
-            float total = division.Length, surface = -1f, tunnel = -1f, low = -1f;
+            float total = division.Length, surface = -1f, tunnel = -1f, low = -1f, open = -1f;
             float deep = -(CutDepth - 0.5f);
             for (float d = 0f; d <= total; d += CutSample)
             {
@@ -43,6 +48,7 @@ namespace RealisticRoads
                 if (down)
                 {
                     if (low < 0f && elevation <= GapClearance) low = d;
+                    if (open < 0f && elevation <= OpenAbove) open = d;
                     if (surface < 0f && elevation <= 0f) surface = d;
                     if (tunnel < 0f && elevation <= deep) { tunnel = d; break; }
                 }
@@ -50,12 +56,23 @@ namespace RealisticRoads
                 {
                     if (elevation <= deep) tunnel = d;
                     if (surface < 0f && elevation >= 0f) surface = d;
+                    if (surface >= 0f && open < 0f && elevation > OpenAbove) open = d;
                     if (surface >= 0f && elevation > GapClearance) { low = d; break; }
                 }
             }
             if (surface < 0f || tunnel < 0f) return false;
             division.CutFrom = Mathf.Min(surface, tunnel);
             division.CutTo = Mathf.Max(surface, tunnel);
+            if (down)
+            {
+                division.OpenFrom = open >= 0f ? Mathf.Min(open, surface) : surface;
+                division.OpenTo = Mathf.Min(tunnel + PortalLength, total);
+            }
+            else
+            {
+                division.OpenFrom = Mathf.Max(tunnel - PortalLength, 0f);
+                division.OpenTo = open >= 0f ? Mathf.Max(open, surface) : surface;
+            }
             if (down)
             {
                 division.GapFrom = low <= MinSpacing ? 0f : low;
@@ -603,14 +620,14 @@ namespace RealisticRoads
         private void PaveCut(PendingParallel waiting)
         {
             var cut = waiting.Main;
-            if (cut.CutFrom < 0f || cut.CutTo <= cut.CutFrom || cut.Polyline == null)
+            if (cut.OpenFrom < 0f || cut.OpenTo <= cut.OpenFrom || cut.Polyline == null)
             {
                 Mod.Log("Median cut, last: all parts built (one Ctrl+Z removes it all)");
                 return;
             }
             Mod.Log("Median cut, next: the gap paved outside the open cut");
             NextMedian(waiting, MedianStage.CutPave);
-            NetworkBuilder.PaveCut(cut.Polyline, cut.CutFrom, cut.CutTo, waiting.Group, changed => waiting.State = 1);
+            NetworkBuilder.PaveCut(cut.Polyline, cut.OpenFrom, cut.OpenTo, waiting.Group, changed => waiting.State = 1);
         }
 
         // A node with only two roads: the ground road and another (the full road).
