@@ -445,6 +445,8 @@ namespace RealisticRoads
         // 'lanes' lanes, running along 'heading' within 30 degrees) split at it,
         // or its end node if 'p' is by one. One build in 'group'; 'done' is told
         // (simulation thread) the node, 0 if no such road is there.
+        private const float CutEndReach = 30f;   // a road's end this close is the median cut's road (CurveTool.CutRoadAlong)
+
         public static void RoadNodeAt(Vector3 p, Vector3 heading, int lanes, int group, Action<ushort> done)
         {
             SimulationManager.instance.AddAction(() =>
@@ -474,6 +476,26 @@ namespace RealisticRoads
                         best = s;
                         bestDistance = distance;
                         bestT = t;
+                    }
+                    if (best == 0)
+                    {
+                        // None along the line there: a road's end close by (it ends
+                        // there, or turns away), whichever way it runs; its ground road
+                        // is then built on from it.
+                        float nearest = CutEndReach;
+                        var nodes = net.m_nodes.m_buffer;
+                        foreach (ushort s in RoadPlanner.NearbySegments(p, CutEndReach + 40f))
+                        {
+                            if ((segments[s].m_flags & NetSegment.Flags.Created) == NetSegment.Flags.None || !ConvertsToGround(segments[s].Info, lanes)) continue;
+                            foreach (ushort end in new[] { segments[s].m_startNode, segments[s].m_endNode })
+                            {
+                                if (SegmentCount(end) != 1) continue;
+                                float d = CurveMath.FlatDistance(nodes[end].m_position, p);
+                                if (d >= nearest) continue;
+                                nearest = d;
+                                result = end;
+                            }
+                        }
                     }
                     if (best != 0)
                     {

@@ -55,10 +55,10 @@ namespace RealisticRoads
         // under the road's surface.
         private static readonly Dictionary<ushort, Part> liners = new Dictionary<ushort, Part>();
         private const float LinerStep = 2f;        // metres between the lining's pieces along the gap
-        private const float UnderTrack = 0.7f;     // the floor this far under the track's rails
+        private const float UnderTrack = 0.4f;     // the trench's floor this far under the track's rails
+        private const float InTrench = 0.5f;       // a floor this far under the lid or more: a trench (less: the lid)
         private const float LidDepth = 0.05f;      // the lid this far under the road's surface
-        private const float PastPortal = 1.5f;     // the floor runs on this far past the portal before rising to the lid
-        private const float LinerOut = 0.1f;       // the walls this far outside the gap's edge (not in the track's own walls)
+        private const float LinerOut = 0.1f;       // the trench's walls this far outside the track's edge (not in its own walls)
         private static readonly HashSet<ushort> solid = new HashSet<ushort>();   // ramp segments drawn closed (any thread reads)
         private static int wait;
         private static bool failed;
@@ -398,49 +398,36 @@ namespace RealisticRoads
             return found;
         }
 
-        // The floor's height at 'p' (in the gap of half 'half'): just under the
-        // track where it is down in its open cut (or just past its portal), else
-        // the lid just under the road's surface 'lid'.
-        private static float FloorAt(Vector3 p, float half, float lid, List<ushort> tracks)
+        // The open cut at 'p' (in the gap of half 'half'): where the track there
+        // is a piece the game shows (not its tunnel, which is hidden under the
+        // ground) and its rails are under the road's surface 'lid', the trench's
+        // floor (just under the rails) and half width (the track's). False
+        // elsewhere: the track over the road, at its level, or in its tunnel;
+        // then the whole gap is lidded level with the road.
+        private static bool TrenchAt(Vector3 p, float half, float lid, List<ushort> tracks, out float floor, out float trenchHalf)
         {
             var net = NetManager.instance;
-            var nodes = net.m_nodes.m_buffer;
-            float floor = lid;
+            floor = lid;
+            trenchHalf = 0f;
+            bool found = false;
             foreach (ushort track in tracks)
             {
-                var s = net.m_segments.m_buffer[track];
+                var info = net.m_segments.m_buffer[track].Info;
+                if (info == null || info.m_class == null || info.m_class.m_layer == ItemClass.Layer.MetroTunnels) continue;
                 Vector3 onTrack;
-                float t = CrossingFinder.ClosestT(track, p, out onTrack);
+                CrossingFinder.ClosestT(track, p, out onTrack);
                 if (CurveMath.FlatDistance(onTrack, p) > half) continue;
-                bool startUnder = (nodes[s.m_startNode].m_flags & NetNode.Flags.Underground) != NetNode.Flags.None;
-                bool endUnder = (nodes[s.m_endNode].m_flags & NetNode.Flags.Underground) != NetNode.Flags.None;
-                if (startUnder && endUnder)
-                {
-                    // In its tunnel: just past the portal (its end node not underground's
-                    // neighbour) the floor runs on a little, then the lid.
-                    float length = Mathf.Max(s.m_averageLength, 1f);
-                    bool nearPortal = false;
-                    foreach (ushort end in new[] { s.m_startNode, s.m_endNode })
-                    {
-                        float fromEnd = end == s.m_startNode ? t * length : (1f - t) * length;
-                        if (fromEnd > PastPortal) continue;
-                        for (int i = 0; i < 8; i++)
-                        {
-                            ushort other = nodes[end].GetSegment(i);
-                            if (other == 0 || other == track) continue;
-                            var o = net.m_segments.m_buffer[other];
-                            ushort far = o.m_startNode == end ? o.m_endNode : o.m_startNode;
-                            if ((nodes[far].m_flags & NetNode.Flags.Underground) == NetNode.Flags.None) nearPortal = true;
-                        }
-                    }
-                    if (!nearPortal) continue;
-                }
+                if (onTrack.y - UnderTrack >= lid - InTrench) continue;
                 floor = Mathf.Min(floor, onTrack.y - UnderTrack);
+                trenchHalf = Mathf.Max(trenchHalf, Mathf.Min(info.m_halfWidth + LinerOut, half + LinerOut));
+                found = true;
             }
-            return floor;
+            return found;
         }
 
-        // The lining of an open cut road segment's gap (see 'liners').
+        // The lining of an open cut road segment's gap (see 'liners'): level
+        // with the road all across, but over the trench, which has walls down
+        // its sides (just outside the track's own) and a floor under the rails.
         private static Part MakeLiner(ushort segment)
         {
             var net = NetManager.instance;
@@ -456,59 +443,70 @@ namespace RealisticRoads
             Vector3 origin = CurveMath.Bezier(a, b, c, d, 0.5f);
             int steps = Mathf.Max(1, Mathf.CeilToInt(Mathf.Max(s.m_averageLength, 1f) / LinerStep));
             var tracks = TracksNear(origin, s.m_averageLength * 0.5f + 20f);
-            float wallHalf = half + LinerOut;
-            var left = new List<Vector3>();
-            var right = new List<Vector3>();
+            float gapHalf = half + LinerOut;
+            var centres = new List<Vector3>();
+            var acrosses = new List<Vector3>();
+            var lids = new List<float>();
             var floors = new List<float>();
-            var alongs = new List<Vector3>();
+            var trenches = new List<float>();
             for (int k = 0; k <= steps; k++)
             {
                 float t = (float)k / steps;
                 Vector3 p = CurveMath.Bezier(a, b, c, d, t);
                 Vector3 along = CurveMath.FlatNormal(CurveMath.BezierDerivative(a, b, c, d, t));
                 if (along == Vector3.zero) along = CurveMath.FlatNormal(d - a);
-                Vector3 across = CurveMath.Rotate(along, 90f);
-                float top = p.y + info.m_surfaceLevel - 0.02f;
-                Vector3 l = p + across * wallHalf, r = p - across * wallHalf;
-                l.y = r.y = top;
-                left.Add(l);
-                right.Add(r);
-                alongs.Add(along);
-                floors.Add(FloorAt(p, half, top - LidDepth, tracks));
+                float lid = p.y + info.m_surfaceLevel - LidDepth;
+                float floor, trench;
+                TrenchAt(p, half, lid, tracks, out floor, out trench);
+                centres.Add(p);
+                acrosses.Add(CurveMath.Rotate(along, 90f));
+                lids.Add(lid);
+                floors.Add(floor);
+                trenches.Add(trench);
             }
             var vertices = new List<Vector3>();
             var normals = new List<Vector3>();
             var uvs = new List<Vector2>();
             var triangles = new List<int>();
             var texture = material.Value;
+            Func<int, float, float, Vector3> at = (k, offset, y) =>
+            {
+                Vector3 q = centres[k] + acrosses[k] * offset;
+                return new Vector3(q.x, y, q.z) - origin;
+            };
             for (int k = 0; k < steps; k++)
             {
-                // A floor that jumps (the portal): the deeper one runs to the next
-                // sample, and a face rises there.
-                float f0 = floors[k], f1 = floors[k + 1];
-                bool jump = Mathf.Abs(f1 - f0) > 1f;
-                float g0 = jump ? Mathf.Min(f0, f1) : f0, g1 = jump ? Mathf.Min(f0, f1) : f1;
-                Vector3 l0 = left[k], l1 = left[k + 1], r0 = right[k], r1 = right[k + 1];
-                // The two walls, from just under the road's surface down to the floor.
-                if (l0.y - g0 > 0.05f || l1.y - g1 > 0.05f)
+                float tw = Mathf.Max(trenches[k], trenches[k + 1]);
+                float l0 = lids[k], l1 = lids[k + 1];
+                if (tw <= 0f)
                 {
-                    Vector3 inward = CurveMath.Rotate(CurveMath.FlatNormal(l1 - l0), -90f);
-                    Quad(vertices, normals, uvs, triangles, texture, new Vector3(l0.x, g0, l0.z) - origin, new Vector3(l1.x, g1, l1.z) - origin, l1 - origin, l0 - origin, inward);
-                    Vector3 inwardR = CurveMath.Rotate(CurveMath.FlatNormal(r1 - r0), 90f);
-                    Quad(vertices, normals, uvs, triangles, texture, new Vector3(r0.x, g0, r0.z) - origin, new Vector3(r1.x, g1, r1.z) - origin, r1 - origin, r0 - origin, inwardR);
+                    // No trench: one lid across the gap.
+                    Quad(vertices, normals, uvs, triangles, texture, at(k, -gapHalf, l0), at(k + 1, -gapHalf, l1), at(k + 1, gapHalf, l1), at(k, gapHalf, l0), Vector3.up);
+                    continue;
                 }
-                // The floor (or lid) across the gap.
-                Quad(vertices, normals, uvs, triangles, texture, new Vector3(r0.x, g0, r0.z) - origin, new Vector3(r1.x, g1, r1.z) - origin,
-                    new Vector3(l1.x, g1, l1.z) - origin, new Vector3(l0.x, g0, l0.z) - origin, Vector3.up);
-                if (jump)
+                // The trench's floor; where it starts or ends (one side has none)
+                // the deeper floor runs to the other sample and a face closes it.
+                float f0 = floors[k], f1 = floors[k + 1];
+                bool open0 = trenches[k] > 0f, open1 = trenches[k + 1] > 0f;
+                float g0 = open0 && open1 ? f0 : Mathf.Min(f0, f1), g1 = open0 && open1 ? f1 : Mathf.Min(f0, f1);
+                Quad(vertices, normals, uvs, triangles, texture, at(k, -tw, g0), at(k + 1, -tw, g1), at(k + 1, tw, g1), at(k, tw, g0), Vector3.up);
+                // Its walls, from the lid down to the floor.
+                Vector3 inLeft = -acrosses[k], inRight = acrosses[k];
+                Quad(vertices, normals, uvs, triangles, texture, at(k, tw, g0), at(k + 1, tw, g1), at(k + 1, tw, l1), at(k, tw, l0), inLeft);
+                Quad(vertices, normals, uvs, triangles, texture, at(k, -tw, g0), at(k + 1, -tw, g1), at(k + 1, -tw, l1), at(k, -tw, l0), inRight);
+                // The lid beside it, out to the gap's edges.
+                if (gapHalf - tw > 0.05f)
                 {
-                    // The face stands where the lid begins (or ends), facing the pit.
-                    float high = Mathf.Max(f0, f1), deep = Mathf.Min(f0, f1);
-                    bool atNext = f1 > f0;
-                    Vector3 fl = atNext ? l1 : l0, fr = atNext ? r1 : r0;
-                    Vector3 facing = atNext ? -alongs[k + 1] : alongs[k];
-                    Quad(vertices, normals, uvs, triangles, texture, new Vector3(fr.x, deep, fr.z) - origin, new Vector3(fl.x, deep, fl.z) - origin,
-                        new Vector3(fl.x, high, fl.z) - origin, new Vector3(fr.x, high, fr.z) - origin, facing);
+                    Quad(vertices, normals, uvs, triangles, texture, at(k, tw, l0), at(k + 1, tw, l1), at(k + 1, gapHalf, l1), at(k, gapHalf, l0), Vector3.up);
+                    Quad(vertices, normals, uvs, triangles, texture, at(k, -gapHalf, l0), at(k + 1, -gapHalf, l1), at(k + 1, -tw, l1), at(k, -tw, l0), Vector3.up);
+                }
+                if (open0 != open1)
+                {
+                    // The trench's end: a face across it where the lid begins.
+                    int e = open1 ? k : k + 1;
+                    float deep = Mathf.Min(f0, f1), high = lids[e];
+                    Vector3 facing = CurveMath.FlatNormal(centres[open1 ? k + 1 : k] - centres[e]);
+                    Quad(vertices, normals, uvs, triangles, texture, at(e, -tw, deep), at(e, tw, deep), at(e, tw, high), at(e, -tw, high), facing);
                 }
             }
             if (vertices.Count == 0) return null;

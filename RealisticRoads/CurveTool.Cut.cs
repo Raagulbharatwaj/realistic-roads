@@ -173,6 +173,54 @@ namespace RealisticRoads
             return found;
         }
 
+        // The road a line drawn along runs along, looked for every CutAlongStep
+        // along it (its end too); null if none.
+        private const float CutAlongStep = 10f;
+
+        private static NetInfo CutRoadAlong(List<Vector3> controls)
+        {
+            if (controls == null || controls.Count < 2) return null;
+            var along = CutRoadAlongLine(controls);
+            if (along != null) return along;
+            // None along it: the road whose end is by the line's start (it ends
+            // there, or turns away), whichever way it runs: its ground road is
+            // built on from that end (not a six-lane road on open ground across it).
+            var net = NetManager.instance;
+            var segments = net.m_segments.m_buffer;
+            NetInfo nearest = null;
+            float best = CutEndReach;
+            foreach (ushort s in RoadPlanner.NearbySegments(controls[0], CutEndReach + 40f))
+            {
+                var info = BaseRoad(segments[s].Info);
+                if (info == null || SplitRoads.WidestCut(info) <= 0f) continue;
+                foreach (ushort node in new[] { segments[s].m_startNode, segments[s].m_endNode })
+                {
+                    float d = CurveMath.FlatDistance(net.m_nodes.m_buffer[node].m_position, controls[0]);
+                    if (d >= best) continue;
+                    best = d;
+                    nearest = info;
+                }
+            }
+            return nearest;
+        }
+
+        private const float CutEndReach = 30f;   // a road's end this close to the line's start is the cut's road
+
+        private static NetInfo CutRoadAlongLine(List<Vector3> controls)
+        {
+            float total = CurveMath.Length(controls);
+            for (float d = CutAlongStep; d <= total + 0.01f; d += CutAlongStep)
+            {
+                Vector3 p, tangent;
+                CurveMath.PointAt(controls, Mathf.Min(d, total), out p, out tangent);
+                ushort segment;
+                float t;
+                var found = CutRoadUnder(p, tangent, out segment, out t);
+                if (found != null) return found;
+            }
+            return null;
+        }
+
         // A two-way road on the ground with three or two lanes each way: the
         // Six-Lane or Four-Lane Road (its median cut roads are made from those);
         // the road itself if it has cut roads of its own; else null.

@@ -1058,14 +1058,30 @@ namespace RealisticRoads
 
         // Simulation thread. A node under the mouse, or the end of the road
         // under the mouse when the mouse is near that end. Otherwise 0, with
-        // the road under the mouse (if any) in 'segmentHit'.
+        // the road under the mouse (if any) in 'segmentHit'. Drawing under the
+        // ground (the next point set at least half a tunnel's depth down; not
+        // Under, whose clicks are points under a road's middle), tunnels (the
+        // game's tunnel layer) are looked for first, at whatever depth they
+        // are, as the game's own tool does in its underground view: the point
+        // joins the tunnel at its depth. A median cut looks through them too
+        // (its track's end may be in one).
+        private bool DrawingUnderground => !deckMode && lift <= -RoadPlanner.TunnelMinDepth * 0.5f;
+
         private ushort FindSnapNode(out ushort segmentHit, out Vector3 hit)
+        {
+            if (DrawingUnderground && !MedianCut)
+            {
+                ushort tunnelNode = RaySnap(ItemClass.Layer.MetroTunnels, out segmentHit, out hit);
+                if (tunnelNode != 0 || segmentHit != 0) return tunnelNode;
+            }
+            var layers = MedianCut ? ItemClass.Layer.Default | ItemClass.Layer.MetroTunnels : ItemClass.Layer.Default;
+            return RaySnap(layers, out segmentHit, out hit);
+        }
+
+        private ushort RaySnap(ItemClass.Layer layers, out ushort segmentHit, out Vector3 hit)
         {
             segmentHit = 0;
             hit = Vector3.zero;
-            // A median cut starts (or ends) on a track's end, which may be in a
-            // tunnel: the metro (and train) tunnels' layer is looked through too.
-            var layers = MedianCut ? ItemClass.Layer.Default | ItemClass.Layer.MetroTunnels : ItemClass.Layer.Default;
             var input = new RaycastInput(simRay, simRayLength);
             input.m_netService = new RaycastService { m_itemLayers = layers };
             input.m_ignoreTerrain = true;
@@ -3269,6 +3285,10 @@ namespace RealisticRoads
                 cutRoad = CutRoadUnder(controls[0], controls[1] - controls[0], out startRoad, out startRoadT);
                 roads[0] = startRoad;
                 roadTs[0] = startRoadT;
+                // Its start off the road (a track's or tunnel's end beside it): the
+                // road the line runs along is found further on, so the cut is made in
+                // that road (not a six-lane road built on open ground over it).
+                if (cutRoad == null) cutRoad = CutRoadAlong(controls);
                 ushort underEnd;
                 float underEndT;
                 if (CutRoadUnder(controls[n], controls[n] - controls[n - 1], out underEnd, out underEndT) != null)
