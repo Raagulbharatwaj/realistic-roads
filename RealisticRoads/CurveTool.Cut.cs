@@ -173,6 +173,26 @@ namespace RealisticRoads
             return found;
         }
 
+        // The road a line drawn along runs along, looked for every CutAlongStep
+        // along it (its end too); null if none.
+        private const float CutAlongStep = 10f;
+
+        private static NetInfo CutRoadAlong(List<Vector3> controls)
+        {
+            if (controls == null || controls.Count < 2) return null;
+            float total = CurveMath.Length(controls);
+            for (float d = CutAlongStep; d <= total + 0.01f; d += CutAlongStep)
+            {
+                Vector3 p, tangent;
+                CurveMath.PointAt(controls, Mathf.Min(d, total), out p, out tangent);
+                ushort segment;
+                float t;
+                var found = CutRoadUnder(p, tangent, out segment, out t);
+                if (found != null) return found;
+            }
+            return null;
+        }
+
         // A two-way road on the ground with three or two lanes each way: the
         // Six-Lane or Four-Lane Road (its median cut roads are made from those);
         // the road itself if it has cut roads of its own; else null.
