@@ -595,12 +595,40 @@ namespace RealisticRoads
         {
             if (picked == tab) return;
             var model = current;
+            // The tool's model is made again only next frame: the one shown is
+            // changed here to what the toggles did, so the tab isn't put back
+            // (LayOutBar follows the modes) on the way.
             if (model != null)
             {
-                if (tab == 3 && model.Upgrade && ToggleUpgrade != null) ToggleUpgrade();
-                if (tab == 2 && model.Ramp && ToggleRamp != null) ToggleRamp();
-                if (tab == 2 && model.MedianChoice > 0 && PickMedianRamp != null) PickMedianRamp(model.MedianChoice);
-                if (picked == 3 && !model.Upgrade && ToggleUpgrade != null) ToggleUpgrade();
+                if (tab == 3 && model.Upgrade && ToggleUpgrade != null)
+                {
+                    ToggleUpgrade();
+                    model.Upgrade = false;
+                }
+                if (tab == 2 && model.Ramp && ToggleRamp != null)
+                {
+                    ToggleRamp();
+                    model.Ramp = false;
+                }
+                if (tab == 2 && model.MedianChoice > 0 && PickMedianRamp != null)
+                {
+                    PickMedianRamp(model.MedianChoice);
+                    model.MedianChoice = 0;
+                    model.MedianRamp = null;
+                    model.Deck = model.Under = false;
+                }
+                // Leaving Decks: Over / Under off (their buttons are only there).
+                if (tab == 1 && model.Deck)
+                {
+                    if (model.Under && ToggleUnder != null) ToggleUnder();
+                    else if (!model.Under && ToggleDeck != null) ToggleDeck();
+                    model.Deck = model.Under = false;
+                }
+                if (picked == 3 && !model.Upgrade && ToggleUpgrade != null)
+                {
+                    ToggleUpgrade();
+                    model.Upgrade = true;
+                }
             }
             tab = picked;
             SaveLayout();

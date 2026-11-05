@@ -1434,6 +1434,12 @@ namespace RealisticRoads
             // and a road model has few along its length, so the slide's S-curve needs them.
             var rows = SliceAlong(mesh, TaperRows);
             var sliced = SliceAcross(rows ?? mesh, lines.ToArray());
+            // The rows were only for this: not kept while the city is loaded.
+            if (rows != null)
+            {
+                lock (madeMeshes) madeMeshes.Remove(rows);
+                UnityEngine.Object.Destroy(rows);
+            }
             if (sliced == null) return null;
             var vertices = sliced.Vertices;
             float zMin = float.MaxValue, zMax = float.MinValue;
